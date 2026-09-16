@@ -17,13 +17,13 @@ stub — see "Generate, don't hand-write" in [../ROADMAP.md](../ROADMAP.md).
 
 | Method | Status | Electron wiring |
 | --- | --- | --- |
-| `platform()` | ✅ returns `"linux"` | Return real `process.platform` (`darwin`/`win32` shortcuts differ in the frontend) |
+| `platform()` | ✅ real `"mac"`/`"windows"`/`"linux"` (was hardcoded `"linux"`) | — |
 | `loadCompleted()` | ✅ no-op | fine |
-| `bringToFront()` / `closeWindow()` | ✅ log-only | 🔧 `BrowserWindow.focus()/close()` |
+| `bringToFront()` / `closeWindow()` | ✅ `BrowserWindow.focus()/close()` via IPC | — |
 | `setIsDocked(docked, cb)` | ✅ | No docking concept; keep no-op + `cb()` |
 | `setInspectedPageBounds(bounds)` | ✅ | no-op (no attached browser viewport) |
-| `zoomFactor()/zoomIn()/zoomOut()/resetZoom()` | ✅ `1`/no-ops | 🔧 `webContents.setZoomFactor` — real frontend zoom for free |
-| `showContextMenuAtPoint(x, y, items, doc)` | ✅ no-op | 🔧 convert `ContextMenuDescriptor[]` → Electron `Menu.popup()`; reply via ⛔ `contextMenuItemSelected` |
+| `zoomFactor()/zoomIn()/zoomOut()/resetZoom()` | ✅ real `webFrame` zoom | — |
+| `showContextMenuAtPoint(x, y, items, doc)` | ✅ native Electron `Menu.popup()`; replies `contextMenuItemSelected`/`contextMenuCleared` via dispatch channel | — |
 | `setUseSoftMenu`/`setOpenNewWindowForPopups`/`setWhitelistedShortcuts` | ✅/🟡 | keybinding registry doable; shortcuts otherwise ignored |
 | `setEyeDropperActive(active)` | ✅ no-op | 🔧 Chromium `EyeDropper` API (available in modern Electron), else screenshot picker; result via ⛔ `eyeDropperPickedColor` |
 | `enterInspectElementMode` (event) | ⛔ | dispatch channel |
@@ -40,7 +40,7 @@ stub — see "Generate, don't hand-write" in [../ROADMAP.md](../ROADMAP.md).
 
 | Method | Status | Electron wiring |
 | --- | --- | --- |
-| `registerPreference` / `get{,All}Preference(s)` / `setPreference` / `removePreference` / `clearPreferences` | ✅ empty stubs | 🔧 back with `electron-store` — **do this first**: preferences drive frontend behavior (theme, experiments, panel sizing). Currently the frontend "forgets" everything |
+| `registerPreference` / `get{,All}Preference(s)` / `setPreference` / `removePreference` / `clearPreferences` | ✅ persisted in `electron-store` (`frontend-preferences.json`), host-side defaults from `registerPreference` honored | — |
 | `getSyncInformation(cb)` | ✅ reports no-sync | fine — no Chrome Sync exists |
 | `getHostConfig(cb)` | ✅ `{}` | 🔧 feed `experiments`, `disableAutosave`, etc. |
 | `save/append/close(url, content…)` | ✅ anchor-download hack | 🔧 Electron `dialog.showSaveDialog` + fs; report via ⛔ `savedURL` |
@@ -52,8 +52,8 @@ stub — see "Generate, don't hand-write" in [../ROADMAP.md](../ROADMAP.md).
 | Method | Status | Electron wiring |
 | --- | --- | --- |
 | `setInjectedScriptForOrigin(origin, script)` | ✅ repurposed as the **extension-API injection channel** | keep, but make async and scoped (see [../LIMITATIONS.md](../LIMITATIONS.md)) |
-| `sendMessageToBackend(message)` | ✅ no-op | 🔌 **important**: the frontend→backend CDP escape hatch. Wiring it to the RN CDP socket is the honest way to build `devtools.network`/`inspectedWindow` ([features](../features/README.md)) |
-| ⛔ `events` EventTarget + `InspectorFrontendAPI` dispatcher (`dispatchMessage`, `dispatchMessageChunk`, `showPanel`, `setInspectedTabId`, `contextMenuItemSelected`, `savedURL`, `revealSourceLine`, `keyEventUnhandled`, `colorThemeChanged`, `reloadInspectedPage`, …) | ⛔ `events: null` | **The biggest architectural gap** → [features/DISPATCH-CHANNEL.md](../features/DISPATCH-CHANNEL.md) |
+| `sendMessageToBackend(message)` | ✅ no-op | 🔌 **important**: the frontend→backend CDP escape hatch. Dispatch channel is ready to carry the replies — remaining blocker is pinning the fork's response contract, then wiring the CDP socket ([features/DISPATCH-CHANNEL.md](../features/DISPATCH-CHANNEL.md)) |
+| `events` + `InspectorFrontendAPI` dispatcher (`dispatchMessage`, `dispatchMessageChunk`, `showPanel`, `setInspectedTabId`, `contextMenuItemSelected`, `savedURL`, `revealSourceLine`, `keyEventUnhandled`, `colorThemeChanged`, `reloadInspectedPage`, …) | 🟨 dispatch channel **live**: main dispatches to `window.InspectorFrontendAPI[name]` (upstream impl forwards onto the events EventTarget). First consumer: context menus | remaining producers/consumers (`showPanel`, `dispatchMessage`, …) come with the APIs that need them → [features/DISPATCH-CHANNEL.md](../features/DISPATCH-CHANNEL.md) |
 | `inspectedURLChanged(url)` | ✅ sets title | fine |
 | `inspectElementCompleted()` | ✅ | fine |
 

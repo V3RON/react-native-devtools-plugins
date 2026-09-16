@@ -2,7 +2,7 @@
 
 | | |
 | --- | --- |
-| **Status** | ❌ missing — the biggest architectural gap |
+| **Status** | 🟨 partial — channel live; backend messaging pending |
 | **Tier** | 1 (infrastructure; unblocks most of Tier 1/2) |
 | **Blocks** | devtools-network, panels events/theme/context menus, webRequest, save flow, eye-dropper, device discovery |
 
@@ -19,27 +19,48 @@ hatch on the other side.
 
 ## Current state here
 
-`preload.js` sets `events: null` and implements only the call direction.
-`sendMessageToBackend` is a no-op. The host can therefore **never** tell the frontend
-anything — no menu selections, no panel switching, no theme changes, no backend message
-proxying. All synthetic extension data today flows through an ad-hoc `Events`
-postMessage hack that only carries two fake network events.
+**The channel is live** (`src/main/dispatch.js` → `HOST_EVENT` IPC → main-frame
+preload → `window.InspectorFrontendAPI[name](...args)` in the frontend's main
+world). Main process calls `dispatchToFrontend(eventName, args)`; the preload
+warns-and-drops events raised before the frontend defined its API object
+(same as Chrome, which only dispatches once the frontend is up).
+
+First round-trip consumer: **context menus**. `showContextMenuAtPoint` builds a
+native Electron `Menu` from the `ContextMenuDescriptor[]` (pure mapping in
+`src/main/context-menu.js`, unit-tested) and pops it; the selection returns as
+`contextMenuItemSelected(id)` and close as `contextMenuCleared`.
+
+Also landed with it: async-only IPC for everything new (`invoke`/`handle` —
+`src/shared/ipc.js` house rule), and preferences/zoom/window ops now REAL.
+
+Still missing:
+
+- `sendMessageToBackend` remains a labeled no-op — the response contract
+  (`dispatchMessage`/`dispatchMessageChunk` wrapping) is fork-specific and must
+  be verified against the real "rozenite" frontend before wiring a CDP bridge.
+- The `Events` postMessage hack still carries the two synthetic network events;
+  its consumers (devtools-network/webRequest) should move onto this channel.
+- No producer yet for `showPanel`/`colorThemeChanged`/etc. — they only become
+  meaningful as extension APIs grow.
 
 ## Plan
 
-1. Preload listens on IPC and calls `InspectorFrontendAPI.<event>(...)` — the frontend
-   always defines this global; upstream `EventDescriptors`
-   (`front_end/core/host/InspectorFrontendHostAPI.ts`) is the authoritative event list.
-2. Wire `sendMessageToBackend` → the CDP socket the frontend owns (or proxy via main),
-   including `dispatchMessage`/`dispatchMessageChunk` for host-originated messages.
-3. Replace the `Events` postMessage bridge: network events for
+1. ~~Preload listens on IPC and calls `InspectorFrontendAPI.<event>(...)~~ ✅ done.
+2. ~~Async-only IPC for new channels~~ ✅ done (injected-script `sendSync` kept
+   deliberately — it must run before page scripts; see `src/shared/ipc.js`).
+3. Wire `sendMessageToBackend` → the CDP socket the frontend owns (or proxy via
+   main), including `dispatchMessage`/`dispatchMessageChunk` — **needs the real
+   fork to pin down semantics**.
+4. Replace the `Events` postMessage bridge: network events for
    [devtools-network](DEVTOOLS-NETWORK.md)/[webRequest](WEBREQUEST.md) become a consumer
    of this channel, not a parallel transport.
-4. Async-only IPC everywhere (kill `sendSync` usage — see
-   [../LIMITATIONS.md](../LIMITATIONS.md)).
 
 ## Definition of done
 
 Frontend dispatches `showPanel` and `contextMenuItemSelected` round-trips through the
 host; a real CDP command from an extension reaches the RN backend through
 `sendMessageToBackend` and its reply comes back.
+
+*Progress:* `contextMenuItemSelected` round-trip implemented (awaiting manual
+verification against the running fork); `showPanel` producer and the
+`sendMessageToBackend` round-trip remain.

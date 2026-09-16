@@ -40,7 +40,11 @@
   false`, sandbox off: any extension folder has full Node/Electron privileges. No
   isolation or permission gating.
 - Injected scripts: in-memory `Map` (lost on restart), origin-keyed, evaluated via
-  `new Function`, delivered over **synchronous** IPC — fragile and blocking by design.
+  `new Function`, delivered over synchronous IPC. The sync delivery is a deliberate
+  exception (the script must exist before extension page scripts run — Chrome injects
+  synchronously for the same reason); everything else follows the async-IPC house rule
+  in `src/shared/ipc.js`. `new Function` on a host-stored script is the remaining
+  hazard to replace with a validated per-extension IPC layer.
 
 **Bottom line:** the proof-of-concept shows the hosting + storage + panel plumbing works
 with real GraphQL tooling, but is far from a product: no lifecycle/permission model,

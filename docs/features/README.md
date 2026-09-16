@@ -13,7 +13,7 @@ needed. Legend and tiers: [../README.md](../README.md). Last reviewed: 2026-09-1
 | [Inspected window](INSPECTED-WINDOW.md) (`chrome.devtools.inspectedWindow`) | ❌ | 1 | — |
 | [Runtime messaging](RUNTIME-MESSAGING.md) (`chrome.runtime`, Ports, event contract) | 🟡 no-op stubs | 1 | — |
 | [Storage & i18n](STORAGE-AND-I18N.md) (`chrome.storage`, `chrome.i18n`) | 🟨 storage real (local/sync); session/managed/i18n missing | 1 | — |
-| [Host→frontend dispatch channel](DISPATCH-CHANNEL.md) (`InspectorFrontendAPI` / `events` / `sendMessageToBackend`) | ❌ | 1 (infrastructure) | — |
+| [Host→frontend dispatch channel](DISPATCH-CHANNEL.md) (`InspectorFrontendAPI` / `events` / `sendMessageToBackend`) | 🟨 channel live (context-menu round-trip); backend messaging pending | 1 (infrastructure) | — |
 
 ## Tier 2 — real extensions ask for these
 

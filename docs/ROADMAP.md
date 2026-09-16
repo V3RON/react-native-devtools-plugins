@@ -22,11 +22,13 @@ browser; no for things that do — and that's a product decision, not a technica
 
 ## Implementation buckets
 
-1. **Free (Electron primitives, hours each):** preferences→`electron-store`, save→dialog,
-   clipboard, zoom, `shell.openExternal/showItemInFolder`, notifications,
-   `dispatchHttpRequest`, context menus (selected-item callback needs bucket 2).
-2. **Dispatch channel — the prerequisite (days):** host→frontend events
-   (`InspectorFrontendAPI` + `events` via IPC) + `sendMessageToBackend`→CDP socket →
+1. **Free (Electron primitives, hours each):** ~~preferences→`electron-store`,
+   clipboard, zoom, context menus~~ ✅ done; remaining: save→dialog,
+   `shell.openExternal/showItemInFolder`, notifications,
+   `dispatchHttpRequest`.
+2. **Dispatch channel — the prerequisite (days):** ~~host→frontend events
+   (`InspectorFrontendAPI` via IPC)~~ ✅ live; remaining:
+   `sendMessageToBackend`→CDP socket →
    [features/DISPATCH-CHANNEL.md](features/DISPATCH-CHANNEL.md). Unblocks menus,
    eye-dropper, panel events, workspace, real `devtools.network`, `webRequest`.
    **Highest-leverage item in the project.**
@@ -52,8 +54,9 @@ browser; no for things that do — and that's a product decision, not a technica
 9. panels.elements sidebars, sources, device discovery, save/workspace, i18n polish
 ```
 
-Independent of order, fix first: **preferences persistence** (frontend "forgets"
-everything today) and the **security substrate** (below).
+Independent of order, fix first: ~~**preferences persistence**~~ ✅ done
+(`frontend-preferences` via `electron-store`) and the **security substrate**
+(below — partially improved: async-IPC house rule in `src/shared/ipc.js`).
 
 ## Engineering guardrails
 
