@@ -1,0 +1,70 @@
+# Roadmap
+
+## Definition of done — "which extensions should work"
+
+Increasing difficulty; each level is a release-worthy milestone:
+
+1. **UI-only extensions** (custom panel + own logic, `storage`, `runtime` messaging):
+   Redux-DevTools-style panels, Altair's client tab. → Tier 1.
+2. **`eval`-based inspectors** (reach into app globals via `inspectedWindow.eval`): state
+   debuggers, `__DEV__` tooling, Hermes-attached profilers. → Tier 1 + faithful eval.
+3. **Network inspectors** (GraphQL/Apollo/REST): end-to-end *when* the runtime surfaces
+   traffic to CDP; honest degradation when it doesn't. → Tier 1 + RN network quality.
+4. **Extensions assuming the DOM/page model** (element sidebars, resource maps,
+   content-script round-trips): partial via Tier-2 shims; accept degradation.
+5. **Browser-controlling extensions** (ad blockers, request rewriters, scrapers):
+   explicitly out of scope → [features/TIER3-OMITTED.md](features/TIER3-OMITTED.md).
+
+## Can we wire *everything* as Chrome expects?
+
+**Shape coverage: yes, 100%. Semantic coverage: yes for everything that doesn't assume a
+browser; no for things that do — and that's a product decision, not a technical wall.**
+
+## Implementation buckets
+
+1. **Free (Electron primitives, hours each):** preferences→`electron-store`, save→dialog,
+   clipboard, zoom, `shell.openExternal/showItemInFolder`, notifications,
+   `dispatchHttpRequest`, context menus (selected-item callback needs bucket 2).
+2. **Dispatch channel — the prerequisite (days):** host→frontend events
+   (`InspectorFrontendAPI` + `events` via IPC) + `sendMessageToBackend`→CDP socket →
+   [features/DISPATCH-CHANNEL.md](features/DISPATCH-CHANNEL.md). Unblocks menus,
+   eye-dropper, panel events, workspace, real `devtools.network`, `webRequest`.
+   **Highest-leverage item in the project.**
+3. **RN/CDP-dependent (weeks; fidelity capped by the backend):** `inspectedWindow.eval`
+   (excellent), `network`/`webRequest` observability (as good as RN network inspection),
+   element sidebar panes, **device discovery** (genuinely *better than Chrome* for RN:
+   enumerate emulators/devices via the same feed), Sources mapping.
+4. **Fundamentally browser-shaped — deliberately don't fake:** DOM content scripts,
+   request *blocking* (no CDP `Fetch`), Chrome Sync, `identity` OAuth, Web Store update
+   flows, omnibox/toolbar, Recorder. No-op shells + documented divergence.
+
+## Recommended order
+
+```
+1. dispatch-channel            (bucket 2; unblocks everything)
+2. runtime-messaging + contract rules (promise/callback, lastError, Events, Ports)
+3. extension-management        (manifest parse, ids, enumerate to frontend)
+4. devtools-network            (real requests/bodies → GraphQL inspector is real)
+5. inspected-window.eval       (state-debugger extensions work)
+6. storage session + i18n + small-shims   (crash → degrade for many extensions)
+7. background-worker           (unlocks webRequest consumers, alarms, notifications)
+8. content-bridge runner       (app-facing extensions with zero app-code changes)
+9. panels.elements sidebars, sources, device discovery, save/workspace, i18n polish
+```
+
+Independent of order, fix first: **preferences persistence** (frontend "forgets"
+everything today) and the **security substrate** (below).
+
+## Engineering guardrails
+
+- **Generate, don't hand-write:** derive the `InspectorFrontendHost` object from upstream's
+  `InspectorFrontendHostStub` (or its `EventDescriptors`/API type) so the surface can
+  never drift from the frontend build; override only what's implemented (upstream
+  auto-fills missing methods with stubs, so a curated subset is safe by design).
+- **Version pinning:** this surface changes slowly but constantly (`dispatchHttpRequest`,
+  AIDA, new-badge telemetry were all added recently). Pin the frontend fork; regenerate
+  the coverage matrix in CI (`test/api` in devtools-frontend is the conformance reference).
+- **Security debt — fix before growing the surface:** replace `sendSync` + `new Function`
+  + exposed `ipcRenderer` + `webSecurity:false` with an async, per-extension,
+  message-validated IPC layer and per-extension CSP. Every API added onto the current
+  trust-free substrate multiplies the blast radius of any installed extension.

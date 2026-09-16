@@ -1,13 +1,61 @@
+# Dependencies
+node_modules/
+# npm is the package manager for this PoC — block the other lockfiles from sneaking in
+yarn.lock
+pnpm-lock.yaml
+
+# OS files
+.DS_Store
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+desktop.ini
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+logs/
+
+# Build / release output (electron-builder etc.)
+dist/
+out/
+build/
+.cache/
+*.dmg
+*.AppImage
+*.snap
+*.exe
+*.blockmap
+*.zip
+
+# Editors / IDEs
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Environment / secrets
+.env
+.env.*
+
+# Test / coverage
+coverage/
+.nyc_output/
+
+# Local-only overrides
+*.local
+
+# Yarn (zero-installs config, keep pnp exclusions from original file)
 .yarn/*
 !.yarn/patches
 !.yarn/plugins
 !.yarn/releases
 !.yarn/sdks
 !.yarn/versions
-
-# Swap the comments on the following lines if you wish to use zero-installs
-# In that case, don't forget to run `yarn config set enableGlobalCache false`!
-# Documentation here: https://yarnpkg.com/features/caching#zero-installs
-
 #!.yarn/cache
 .pnp.*

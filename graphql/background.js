@@ -1,0 +1,1 @@
+chrome.runtime.onInstalled.addListener((function(e){"install"===e.reason&&chrome.tabs.create({url:"https://www.overstacked.io/?install=true"})}));

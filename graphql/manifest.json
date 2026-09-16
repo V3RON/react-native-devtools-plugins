@@ -1,0 +1,33 @@
+{
+"update_url": "https://clients2.google.com/service/update2/crx",
+
+  "name": "GraphQL Network Inspector",
+  "version": "2.23.1",
+  "description": "Simple and clean network inspector for GraphQL",
+  "icons": {
+    "128": "icon.png"
+  },
+  "manifest_version": 3,
+  "permissions": [
+    "webRequest",
+    "storage"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "devtools_page": "devtools/devtools.html",
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.graphdev.app/draft?*"
+      ],
+      "js": [
+        "contentScript_export.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "background": {
+    "service_worker": "background.js"
+  }
+}

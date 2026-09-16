@@ -1,0 +1,4 @@
+
+        AltairGraphQL.init({
+});
+    

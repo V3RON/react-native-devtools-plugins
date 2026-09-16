@@ -1,0 +1,53 @@
+{
+"update_url": "https://clients2.google.com/service/update2/crx",
+
+  "manifest_version": 3,
+  "name": "Altair GraphQL Client",
+  "short_name": "Altair",
+  "description": "A beautiful feature-rich GraphQL Client for all platforms.",
+  "version": "8.2.7",
+  "version_name": "8.2.7",
+  "icons": {
+    "16": "icon.png",
+    "48": "icon.png",
+    "128": "icon.png"
+  },
+  "action": {
+    "default_icon": "icon.png"
+  },
+  "permissions": [
+    "storage",
+    "tabs",
+    "notifications"
+  ],
+  "host_permissions": [
+    "https://*/*",
+    "http://*/*"
+  ],
+  "background": {
+    "scripts": [
+      "assets/background.js"
+    ],
+    "service_worker": "assets/background.js",
+    "type": "module"
+  },
+  "options_ui": {
+    "page": "src/options.html",
+    "open_in_tab": false
+  },
+  "devtools_page": "src/devtools/devtools.html",
+  "offline_enabled": true,
+  "content_security_policy": {},
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "*.css",
+        "*.woff",
+        "*.woff2"
+      ],
+      "matches": [
+        "<all_urls>"
+      ]
+    }
+  ]
+}
