@@ -18,11 +18,31 @@ const { default: Store } = require("electron-store");
 const {
   createChromeNamespace,
   createExtensionStorage,
+  createMemoryBackend,
   createNetworkBridge,
 } = require("../chrome-shim");
-const { GET_INJECTED_SCRIPT, EVENTS } = require("../shared/ipc");
+const {
+  GET_INJECTED_SCRIPT,
+  RUNTIME_GET_MANIFEST,
+  EVENTS,
+} = require("../shared/ipc");
 
 const extensionId = window.location.hostname; // id == hostname: load-bearing
+
+// chrome.runtime.getPlatformInfo vocabulary.
+const CHROME_OS = { darwin: "mac", win32: "win", linux: "linux" };
+const CHROME_ARCH = { x64: "x86-64", arm64: "arm64", ia32: "x86-32" };
+
+// chrome.runtime.getManifest: loaded from the host (id derived main-side
+// from this frame's URL). Resolves well before any extension code runs;
+// degrade to {} meanwhile.
+let manifestCache = {};
+ipcRenderer
+  .invoke(RUNTIME_GET_MANIFEST)
+  .then((manifest) => {
+    manifestCache = manifest || {};
+  })
+  .catch(() => {});
 
 // [FAKE] placeholder response body so network-inspector extensions have
 // something to render. Replaced by real Network.getResponseBody via the
@@ -43,7 +63,9 @@ const storeBackend = (store) => ({
 
 const storage = createExtensionStorage({
   createBackend: (areaName) =>
-    storeBackend(new Store({ name: `extension-${extensionId}-${areaName}` })),
+    areaName === "session"
+      ? createMemoryBackend() // deviation: per-frame, not extension-wide
+      : storeBackend(new Store({ name: `extension-${extensionId}-${areaName}` })),
 });
 
 const networkBridge = createNetworkBridge({
@@ -58,7 +80,16 @@ window.addEventListener("message", ({ data }) => {
   }
 });
 
-const chrome = createChromeNamespace({ storage, networkBridge });
+const chrome = createChromeNamespace({
+  extensionId,
+  getManifest: () => manifestCache,
+  platform: {
+    os: CHROME_OS[process.platform] || "linux",
+    arch: CHROME_ARCH[process.arch] || "unknown",
+  },
+  storage,
+  networkBridge,
+});
 
 // 1. Injected script for this origin (may not exist yet for some frames).
 const script = ipcRenderer.sendSync(GET_INJECTED_SCRIPT, window.location.origin);
@@ -68,14 +99,21 @@ if (script) {
   });
 }
 
-// 2. chrome.* namespace.
+// 2. chrome.* namespace. The merge runs in the main world: keep any
+// chrome.* the injected frontend script defined (chrome.devtools.*), deep-
+// merge runtime, and re-establish `lastError` as a LIVE getter — contextBridge
+// cloning evaluates getters only once (chrome-shim/runtime.js).
 contextBridge.exposeInMainWorld("chromeElectron", chrome);
 contextBridge.executeInMainWorld({
   func: () => {
-    window.chrome = {
-      ...window.chrome,
-      ...window.chromeElectron,
-    };
+    const bridge = window.chromeElectron;
+    const merged = { ...window.chrome, ...bridge };
+    merged.runtime = { ...(window.chrome && window.chrome.runtime), ...bridge.runtime };
+    Object.defineProperty(merged.runtime, "lastError", {
+      get: () => bridge.runtime._getLastLastError(),
+    });
+    delete merged.runtime._getLastLastError; // internal helper stays shim-side
+    window.chrome = merged;
   },
 });
 

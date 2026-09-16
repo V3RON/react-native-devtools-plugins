@@ -4,6 +4,7 @@ const injectedScripts = require("./injected-scripts");
 const preferences = require("./preferences");
 const windowOps = require("./window");
 const { showContextMenu } = require("./context-menu");
+const extensionServer = require("./extension-server");
 const {
   STORE_INJECTED_SCRIPT,
   GET_INJECTED_SCRIPT,
@@ -16,6 +17,7 @@ const {
   PREF_CLEAR,
   WINDOW_BRING_TO_FRONT,
   WINDOW_CLOSE,
+  RUNTIME_GET_MANIFEST,
 } = require("../shared/ipc");
 
 const registerIpcHandlers = () => {
@@ -53,6 +55,17 @@ const registerIpcHandlers = () => {
 
   ipcMain.handle(WINDOW_BRING_TO_FRONT, () => windowOps.bringToFront());
   ipcMain.handle(WINDOW_CLOSE, () => windowOps.closeWindow());
+
+  // chrome.runtime.getManifest: the extension id is taken from the calling
+  // frame's URL — never from message arguments (trust boundary).
+  ipcMain.handle(RUNTIME_GET_MANIFEST, (event) => {
+    try {
+      const { hostname } = new URL(event.senderFrame.url);
+      return extensionServer.loadManifest(hostname);
+    } catch {
+      return {};
+    }
+  });
 };
 
 module.exports = { registerIpcHandlers };

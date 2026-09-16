@@ -4,6 +4,7 @@
 // Security: both the extension id and the inner path derive from an
 // untrusted URL, so resolution is guarded against path traversal — a
 // request can never escape its own extension directory.
+const fs = require("fs");
 const path = require("path");
 const { protocol } = require("electron");
 const config = require("./config");
@@ -44,6 +45,21 @@ const registerExtensionSchemePrivileges = () => {
   ]);
 };
 
+// Read + parse an extension's manifest.json (host-side, for chrome.runtime.
+// getManifest). Anything unreadable/invalid degrades to {} — same net effect
+// as the pre-runtime-shim behavior.
+const loadManifest = (extensionId) => {
+  const filePath = resolveExtensionFile(extensionId, "manifest.json");
+  if (!filePath) {
+    return {};
+  }
+  try {
+    return JSON.parse(fs.readFileSync(filePath, "utf8"));
+  } catch {
+    return {};
+  }
+};
+
 // Must run after app ready.
 const registerExtensionProtocol = () => {
   protocol.registerFileProtocol(EXTENSION_SCHEME, (request, callback) => {
@@ -60,6 +76,7 @@ const registerExtensionProtocol = () => {
 
 module.exports = {
   resolveExtensionFile,
+  loadManifest,
   registerExtensionSchemePrivileges,
   registerExtensionProtocol,
 };

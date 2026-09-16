@@ -31,4 +31,8 @@ module.exports = {
   // ── window ops ───────────────────────────────────────────────────────────
   WINDOW_BRING_TO_FRONT: "window-bring-to-front",
   WINDOW_CLOSE: "window-close",
+
+  // ── chrome.runtime (docs/features/RUNTIME-MESSAGING.md) ──────────────────
+  /** () -> manifest of the calling frame's extension (id from frame URL). */
+  RUNTIME_GET_MANIFEST: "runtime-get-manifest",
 };

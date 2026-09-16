@@ -11,15 +11,32 @@
 // NOTE: per-frame backend instances writing the same file race with each
 // other (docs/LIMITATIONS.md). The fix is to inject a main-process-backed
 // backend later — no changes needed in this file.
-const { EventEmitter } = require("events");
+const { createEvent } = require("./event");
 
 const QUOTA_BYTES = { local: 10485760, sync: 102400 }; // 10MB / 100KB
+// Chrome exposes the session quota as MAX_SESSION_STORAGE_QUOTA (1 MiB).
+const SESSION_MAX_BYTES = 1048576;
+
+// In-memory backend: chrome.storage.session semantics (per-context, not
+// persisted). Deviation: Chrome shares session storage across an extension's
+// contexts; here it is per-frame until the router owns storage.
+const createMemoryBackend = () => {
+  const map = new Map();
+  return {
+    getAll: () => Object.fromEntries(map),
+    get: (key) => map.get(key),
+    set: (items) => Object.entries(items).forEach(([k, v]) => map.set(k, v)),
+    delete: (key) => map.delete(key),
+    clear: () => map.clear(),
+  };
+};
 
 const createStorageArea = (backend, areaName) => {
-  const eventEmitter = new EventEmitter();
+  const onChanged = createEvent();
 
   return {
-    QUOTA_BYTES: QUOTA_BYTES[areaName],
+    QUOTA_BYTES: areaName === "session" ? undefined : QUOTA_BYTES[areaName],
+    ...(areaName === "session" ? { MAX_SESSION_STORAGE_QUOTA: SESSION_MAX_BYTES } : {}),
 
     get: (keys, callback) => {
       const executeGet = () => {
@@ -77,7 +94,7 @@ const createStorageArea = (backend, areaName) => {
         });
 
         if (Object.keys(changedItems).length > 0) {
-          eventEmitter.emit("changed", changedItems, areaName);
+          onChanged._fire(changedItems, areaName);
         }
       };
 
@@ -114,7 +131,7 @@ const createStorageArea = (backend, areaName) => {
         });
 
         if (Object.keys(changedItems).length > 0) {
-          eventEmitter.emit("changed", changedItems, areaName);
+          onChanged._fire(changedItems, areaName);
         }
       };
 
@@ -141,7 +158,7 @@ const createStorageArea = (backend, areaName) => {
         });
 
         if (Object.keys(changedItems).length > 0) {
-          eventEmitter.emit("changed", changedItems, areaName);
+          onChanged._fire(changedItems, areaName);
         }
       };
 
@@ -214,21 +231,22 @@ const createStorageArea = (backend, areaName) => {
       }
     },
 
-    onChanged: {
-      addListener: (callback) => eventEmitter.on("changed", callback),
-      removeListener: (callback) => eventEmitter.removeListener("changed", callback),
-      hasListener: (callback) => eventEmitter.listenerCount("changed") > 0,
-    },
+    onChanged,
   };
 };
 
 /**
- * Build the local+sync areas for one extension, backends created via
+ * Build the local+sync+session areas for one extension, backends created via
  * `createBackend(areaName)`.
  */
 const createExtensionStorage = ({ createBackend }) => ({
   local: createStorageArea(createBackend("local"), "local"),
   sync: createStorageArea(createBackend("sync"), "sync"),
+  session: createStorageArea(createBackend("session"), "session"),
 });
 
-module.exports = { createStorageArea, createExtensionStorage };
+module.exports = {
+  createStorageArea,
+  createExtensionStorage,
+  createMemoryBackend,
+};
