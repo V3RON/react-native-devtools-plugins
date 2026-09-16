@@ -1,6 +1,9 @@
-// BrowserWindow creation for the DevTools frontend.
+// BrowserWindow creation and window-level ops for the DevTools frontend.
 const { BrowserWindow } = require("electron");
 const config = require("./config");
+const { setFrontendWebContents } = require("./dispatch");
+
+let currentWindow = null;
 
 const createWindow = () => {
   const win = new BrowserWindow({
@@ -16,7 +19,30 @@ const createWindow = () => {
   });
 
   win.loadURL(config.frontendURL);
+  currentWindow = win;
+  setFrontendWebContents(win.webContents);
+
+  win.on("closed", () => {
+    if (currentWindow === win) {
+      currentWindow = null;
+    }
+  });
+
   return win;
 };
 
-module.exports = { createWindow };
+const getCurrentWindow = () => currentWindow;
+
+const bringToFront = () => {
+  if (currentWindow && !currentWindow.isDestroyed()) {
+    currentWindow.focus();
+  }
+};
+
+const closeWindow = () => {
+  if (currentWindow && !currentWindow.isDestroyed()) {
+    currentWindow.close();
+  }
+};
+
+module.exports = { createWindow, getCurrentWindow, bringToFront, closeWindow };

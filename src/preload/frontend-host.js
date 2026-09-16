@@ -7,19 +7,57 @@
 //   [FAKE]  synthetic/simplified behavior — looks real, is not (docs/LIMITATIONS.md)
 //   [STUB]  intentionally inert (upstream auto-stub semantics; safe to keep)
 //
-// Not implemented at all: the host -> frontend dispatch channel
-// (`events` + InspectorFrontendAPI) — docs/features/DISPATCH-CHANNEL.md.
+// The host -> frontend dispatch channel is LIVE (docs/features/DISPATCH-CHANNEL.md):
+// main process events arrive over HOST_EVENT and are invoked on the frontend's
+// own window.InspectorFrontendAPI. Context menus are the first round-trip
+// consumer (contextMenuItemSelected / contextMenuCleared).
+// `sendMessageToBackend` remains a stub: its response contract is fork-specific.
 
-const { contextBridge, ipcRenderer } = require("electron");
-const { STORE_INJECTED_SCRIPT } = require("../shared/ipc");
+const { contextBridge, ipcRenderer, webFrame } = require("electron");
+const {
+  STORE_INJECTED_SCRIPT,
+  HOST_EVENT,
+  SHOW_CONTEXT_MENU,
+  PREF_REGISTER,
+  PREF_GET,
+  PREF_GET_ALL,
+  PREF_SET,
+  PREF_REMOVE,
+  PREF_CLEAR,
+  WINDOW_BRING_TO_FRONT,
+  WINDOW_CLOSE,
+} = require("../shared/ipc");
+
+// ── dispatch channel receiver ───────────────────────────────────────────────
+// main -> HOST_EVENT -> window.InspectorFrontendAPI[name](...args).
+// InspectorFrontendAPI is defined by the frontend itself and only exists
+// after module init; events fired earlier are dropped (same as Chrome —
+// the host only raises events once the frontend is up).
+ipcRenderer.on(HOST_EVENT, (_event, { name, args }) => {
+  contextBridge.executeInMainWorld({
+    func: (eventName, eventArgs) => {
+      const api = window.InspectorFrontendAPI;
+      const method = api && api[eventName];
+      if (typeof method !== "function") {
+        console.warn(`[Preload] InspectorFrontendAPI.${eventName} not ready`);
+        return;
+      }
+      method.apply(api, eventArgs);
+    },
+    arguments: [name, args || []],
+  });
+});
 
 const InspectorFrontendHost = {
-  // ⛔ host -> frontend event dispatch channel; see docs/features/DISPATCH-CHANNEL.md
+  // Dispatch channel is live: see the HOST_EVENT listener above
+  // (docs/features/DISPATCH-CHANNEL.md).
   events: null,
 
-  // ── [FAKE] platform identity ────────────────────────────────────────────
+  // ── platform identity ────────────────────────────────────────────────────
   platform() {
-    // [FAKE] should report the real process.platform
+    // [REAL] "windows" | "linux" | "mac" (Chrome's contract)
+    if (process.platform === "darwin") return "mac";
+    if (process.platform === "win32") return "windows";
     return "linux";
   },
   isHostedMode() {
@@ -30,12 +68,12 @@ const InspectorFrontendHost = {
   // ── [REAL] frontend lifecycle ────────────────────────────────────────────
   loadCompleted() {},
   bringToFront() {
-    // [STUB] could focus the real BrowserWindow
-    console.log("bringToFront");
+    // [REAL] focuses the DevTools BrowserWindow via main
+    ipcRenderer.invoke(WINDOW_BRING_TO_FRONT);
   },
   closeWindow() {
-    // [STUB] could close the real BrowserWindow
-    console.log("closeWindow");
+    // [REAL] closes the DevTools BrowserWindow via main
+    ipcRenderer.invoke(WINDOW_CLOSE);
   },
   inspectedURLChanged(url) {
     // [REAL]
@@ -86,17 +124,31 @@ const InspectorFrontendHost = {
   close(url) {},
   showItemInFolder(fileSystemPath) {},
 
-  // ── [STUB] preferences (frontend "forgets" everything; first roadmap win) ─
-  registerPreference(name, options) {},
+  // ── [REAL] preferences (persisted via electron-store) ───────────────────
+  // Frontend state (theme, experiments, panel sizing) survives restarts.
+  // Async IPC; callbacks fire on resolution (Chrome's async contract).
+  registerPreference(name, options) {
+    ipcRenderer.invoke(PREF_REGISTER, name, options === undefined ? null : options);
+  },
   getPreferences(callback) {
-    if (callback) callback({});
+    ipcRenderer.invoke(PREF_GET_ALL).then((all) => {
+      if (callback) callback(all);
+    });
   },
   getPreference(name, callback) {
-    if (callback) callback("");
+    ipcRenderer.invoke(PREF_GET, name).then((value) => {
+      if (callback) callback(value);
+    });
   },
-  setPreference(name, value) {},
-  removePreference(name) {},
-  clearPreferences() {},
+  setPreference(name, value) {
+    ipcRenderer.invoke(PREF_SET, name, value);
+  },
+  removePreference(name) {
+    ipcRenderer.invoke(PREF_REMOVE, name);
+  },
+  clearPreferences() {
+    ipcRenderer.invoke(PREF_CLEAR);
+  },
   getSyncInformation(callback) {
     // [REAL] honest: there is no Chrome Sync here
     if (callback)
@@ -135,14 +187,30 @@ const InspectorFrontendHost = {
   openSearchResultsInNewTab(query) {},
   showCertificateViewer(certChain) {},
   zoomFactor() {
-    return 1;
+    // [REAL] actual Electron webFrame zoom
+    return webFrame.getZoomFactor();
   },
-  zoomIn() {},
-  zoomOut() {},
-  resetZoom() {},
+  zoomIn() {
+    webFrame.setZoomFactor(Math.min(webFrame.getZoomFactor() + 0.5, 5));
+  },
+  zoomOut() {
+    webFrame.setZoomFactor(Math.max(webFrame.getZoomFactor() - 0.5, 0.25));
+  },
+  resetZoom() {
+    webFrame.setZoomFactor(1);
+  },
   setWhitelistedShortcuts(shortcuts) {},
   setEyeDropperActive(active) {},
-  showContextMenuAtPoint(x, y, items, document) {},
+  showContextMenuAtPoint(x, y, items) {
+    // [REAL] native Electron menu; selection comes back through the
+    // dispatch channel as contextMenuItemSelected(id) / contextMenuCleared.
+    // JSON-clone: items must be a plain serializable ContextMenuDescriptor[].
+    ipcRenderer.invoke(SHOW_CONTEXT_MENU, {
+      x,
+      y,
+      items: JSON.parse(JSON.stringify(items || [])),
+    });
+  },
   setOpenNewWindowForPopups(value) {},
   setAddExtensionCallback(callback) {},
 
