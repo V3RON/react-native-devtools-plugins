@@ -17,5 +17,5 @@ module.exports = {
   // (Step 5 of docs/REFACTORING.md moves this to <repoRoot>/extensions.)
   extensionsDir: process.env.DEVTOOLS_EXTENSIONS_DIR || repoRoot,
 
-  preloadPath: path.join(repoRoot, "preload.js"),
+  preloadPath: path.join(repoRoot, "src/preload/index.js"),
 };

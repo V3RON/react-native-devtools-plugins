@@ -1,6 +1,6 @@
 {
   "name": "devtools-electron",
-  "main": "main.js",
+  "main": "src/main/index.js",
   "devDependencies": {
     "electron": "^38.0.0"
   },

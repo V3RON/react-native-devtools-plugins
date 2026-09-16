@@ -1,11 +1,11 @@
 const { contextBridge, ipcRenderer } = require("electron");
-const { getChromeNamespace } = require("./chrome-runtime.js");
-const { EXTENSION_SCHEME } = require("./src/shared/protocol");
+const { getChromeNamespace } = require("../../chrome-runtime.js");
+const { EXTENSION_SCHEME } = require("../shared/protocol");
 const {
   STORE_INJECTED_SCRIPT,
   GET_INJECTED_SCRIPT,
   EVENTS,
-} = require("./src/shared/ipc");
+} = require("../shared/ipc");
 
 if (process.isMainFrame) {
   const InspectorFrontendHost = {
