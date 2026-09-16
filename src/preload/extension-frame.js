@@ -24,6 +24,13 @@ const {
 const {
   GET_INJECTED_SCRIPT,
   RUNTIME_GET_MANIFEST,
+  RUNTIME_REGISTER,
+  RUNTIME_SEND_MESSAGE,
+  RUNTIME_SEND_RESPONSE,
+  RUNTIME_CONNECT,
+  RUNTIME_PORT_POST,
+  RUNTIME_PORT_CLOSE,
+  RUNTIME_DELIVER,
   EVENTS,
 } = require("../shared/ipc");
 
@@ -72,6 +79,27 @@ const networkBridge = createNetworkBridge({
   getContentBase64: () => FAKE_RESPONSE_BODY_BASE64,
 });
 
+// chrome.runtime messaging transport over IPC (docs/features/RUNTIME-MESSAGING.md).
+// Registration gates all traffic: until it resolves the frame is unknown to
+// the router (methods below still call it, so pending sends simply queue on
+// the promise).
+const registered = ipcRenderer.invoke(RUNTIME_REGISTER).catch(() => ({ ok: false }));
+
+const transport = {
+  sendMessage: ({ message }) =>
+    registered.then((r) => (r.ok ? ipcRenderer.invoke(RUNTIME_SEND_MESSAGE, { message }) : undefined)),
+  respond: ({ requestId, response }) =>
+    registered.then(() => ipcRenderer.invoke(RUNTIME_SEND_RESPONSE, { requestId, response })),
+  connect: ({ name }) =>
+    registered.then((r) =>
+      r.ok ? ipcRenderer.invoke(RUNTIME_CONNECT, { name }) : { ok: false, error: "Could not establish connection." }
+    ),
+  portPost: ({ portId, message }) =>
+    registered.then(() => ipcRenderer.invoke(RUNTIME_PORT_POST, { portId, message })),
+  portClose: ({ portId }) =>
+    registered.then(() => ipcRenderer.invoke(RUNTIME_PORT_CLOSE, { portId })),
+};
+
 // [FAKE] transport: the frontend broadcasts RequestStarted/RequestFinished
 // via postMessage (frontend-host "Events"); feed the pure bridge.
 window.addEventListener("message", ({ data }) => {
@@ -89,7 +117,11 @@ const chrome = createChromeNamespace({
   },
   storage,
   networkBridge,
+  transport,
 });
+
+// Router -> frame deliveries (messages, ports).
+ipcRenderer.on(RUNTIME_DELIVER, (_event, delivery) => chrome.handleDelivery(delivery));
 
 // 1. Injected script for this origin (may not exist yet for some frames).
 const script = ipcRenderer.sendSync(GET_INJECTED_SCRIPT, window.location.origin);

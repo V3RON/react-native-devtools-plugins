@@ -1,6 +1,86 @@
 <html>
-  <head></head>
+  <head>
+    <title>Basic devtools panel</title>
+  </head>
   <body>
     <h1>Basic devtools panel</h1>
+    <ul id="results"></ul>
+    <!-- same-extension frame: the runtime-messaging responder -->
+    <iframe src="/ping.html" style="display: none"></iframe>
+    <script>
+      // Live checks for chrome.runtime messaging against the host router
+      // (docs/features/RUNTIME-MESSAGING.md). Results log to this panel's
+      // console and to the list; green = passing.
+      const results = document.getElementById("results");
+      const check = async (name, fn) => {
+        try {
+          await fn();
+          console.log(`[messaging] PASS ${name}`);
+          const li = document.createElement("li");
+          li.textContent = "PASS " + name;
+          li.style.color = "green";
+          results.appendChild(li);
+        } catch (e) {
+          console.error(`[messaging] FAIL ${name}:`, e);
+          const li = document.createElement("li");
+          li.textContent = "FAIL " + name + ": " + e.message;
+          li.style.color = "red";
+          results.appendChild(li);
+        }
+      };
+      const assert = (cond, msg) => {
+        if (!cond) throw new Error(msg || "assertion failed");
+      };
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+      (async () => {
+        await check("runtime identity", () => {
+          assert(chrome.runtime.id === location.hostname, "id === hostname");
+          assert(
+            chrome.runtime.getURL("panel.html").startsWith("rozenite://" + chrome.runtime.id + "/"),
+            "getURL shape"
+          );
+          assert(chrome.runtime.getManifest().name, "manifest loaded");
+        });
+
+        await sleep(300); // let the peer frame register
+
+        await check("sendMessage round-trip (promise)", async () => {
+          const response = await chrome.runtime.sendMessage({ type: "ping" });
+          assert(response && response.type === "pong", JSON.stringify(response));
+        });
+
+        await check("sendMessage round-trip (callback)", () =>
+          new Promise((resolve, reject) =>
+            chrome.runtime.sendMessage({ type: "ping" }, (response) => {
+              try {
+                assert(response && response.type === "pong");
+                assert(!chrome.runtime.lastError, "no lastError");
+                resolve();
+              } catch (e) {
+                reject(e);
+              }
+            })
+          )
+        );
+
+        await check("async sendResponse (return true)", async () => {
+          const response = await chrome.runtime.sendMessage({ type: "async-ping" });
+          assert(response && response.type === "async-pong");
+        });
+
+        await check("Port round-trip", async () => {
+          const port = chrome.runtime.connect({ name: "demo" });
+          const pong = await new Promise((resolve, reject) => {
+            port.onMessage.addListener(resolve);
+            port.onDisconnect.addListener(() => reject(new Error(port.lastError && port.lastError.message)));
+            setTimeout(() => reject(new Error("timeout")), 2000);
+            port.postMessage("ping");
+          });
+          assert(pong === "port-pong:ping", String(pong));
+          port.disconnect();
+        });
+      })();
+    </script>
   </body>
 </html>

@@ -6,11 +6,15 @@
 //   platform       — {os, arch} in Chrome's vocabulary
 //   storage        — from ./storage createExtensionStorage({ createBackend })
 //   networkBridge  — from ./network-bridge createNetworkBridge({ ... })
+//   transport      — optional host transport for runtime messaging
+//                    (see ./messaging); when absent, runtime messaging
+//                    degrades to the previous no-op state.
 //
 // Transports and concrete backends are wired by the caller (the
 // extension-frame preload). Status per namespace: docs/api/CHROME-EXTENSION-APIS.md.
 const { createEvent } = require("./event");
 const { createRuntime } = require("./runtime");
+const { createMessagingClient } = require("./messaging");
 
 const createChromeNamespace = ({
   extensionId,
@@ -18,13 +22,25 @@ const createChromeNamespace = ({
   platform = { os: "linux", arch: "unknown" },
   storage,
   networkBridge,
+  transport,
 }) => {
   // Shared mutable lastError holder — runtime exposes it as a live getter;
-  // the messaging client (docs/features/RUNTIME-MESSAGING.md) sets/clears it
-  // around callback/listener invocations.
+  // the messaging client sets/clears it around callback invocations.
   const lastError = { value: null };
 
   const runtime = createRuntime({ extensionId, getManifest, platform, lastError });
+
+  let handleDelivery = () => {};
+  if (transport) {
+    const messaging = createMessagingClient({
+      extensionId,
+      transport,
+      runtimeEvents: runtime.events,
+      lastError,
+    });
+    Object.assign(runtime.namespace, messaging.namespace);
+    handleDelivery = messaging.handleDelivery;
+  }
 
   const onChanged = createEvent();
   for (const area of ["local", "sync", "session"]) {
@@ -33,7 +49,7 @@ const createChromeNamespace = ({
     );
   }
 
-  return {
+  const chrome = {
     runtime: runtime.namespace,
 
     // [FAKE transport] observe-only, synthetic feed
@@ -48,6 +64,15 @@ const createChromeNamespace = ({
       onChanged,
     },
   };
+
+  // Host -> frame delivery entry point (non-enumerable: not part of the
+  // exposed chrome namespace). The preload wires it to RUNTIME_DELIVER IPC.
+  Object.defineProperty(chrome, "handleDelivery", {
+    value: handleDelivery,
+    enumerable: false,
+  });
+
+  return chrome;
 };
 
 module.exports = {

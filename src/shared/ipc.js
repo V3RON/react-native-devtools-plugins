@@ -35,4 +35,19 @@ module.exports = {
   // ── chrome.runtime (docs/features/RUNTIME-MESSAGING.md) ──────────────────
   /** () -> manifest of the calling frame's extension (id from frame URL). */
   RUNTIME_GET_MANIFEST: "runtime-get-manifest",
+  /** () -> registers the calling frame with the message router (identity
+   *  taken from the frame itself, never from message args). */
+  RUNTIME_REGISTER: "runtime-register",
+  /** ({message}) -> host-relayed sendMessage; resolves {response}. */
+  RUNTIME_SEND_MESSAGE: "runtime-send-message",
+  /** ({messageId, response}) -> completes one delivery leg. */
+  RUNTIME_SEND_RESPONSE: "runtime-send-response",
+  /** ({name}) -> host-relayed Port connect; resolves {ok, portId}|{ok,error}. */
+  RUNTIME_CONNECT: "runtime-connect",
+  /** ({portId, message}) -> Port postMessage relay. */
+  RUNTIME_PORT_POST: "runtime-port-post",
+  /** ({portId}) -> Port close relay. */
+  RUNTIME_PORT_CLOSE: "runtime-port-close",
+  /** main -> frame push: {kind: message|connect|port-message|port-disconnect}. */
+  RUNTIME_DELIVER: "runtime-deliver",
 };
