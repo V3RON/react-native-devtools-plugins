@@ -40,6 +40,10 @@ Layering rule (imports point downward only): `shared` ← `chrome-shim` ← `mai
   folder into `extensions/`.**
 - `injected-scripts.js` + `ipc.js` — in-memory per-origin "injected script" store
   exchanged over synchronous IPC.
+- `message-router.js` — the runtime-messaging relay: registry of live extension frames
+  (identity derived main-side from the frame itself), `sendMessage` fan-out with
+  Chrome response-settling, Port lifecycle. `dispatch.js` + `context-menu.js` — the
+  host→frontend dispatch channel and its first consumer.
 - Window settings deliberately relaxed: `webSecurity: false`, `sandbox: false`,
   `nodeIntegrationInSubFrames: true`.
 
@@ -78,8 +82,11 @@ Pure modules; `index.js` assembles the namespace from injected deps:
 - `network-bridge.js` — maps inbound `RequestStarted`/`RequestFinished` events
   ([FAKE] synthetic feed from the frontend) onto `chrome.webRequest` listeners;
   finished requests get a **hardcoded base64 stub body** via an injected dep.
-- `chrome.runtime.onMessage` — no-op [STUB]. Full gap analysis:
-  [api/CHROME-EXTENSION-APIS.md](api/CHROME-EXTENSION-APIS.md).
+- `runtime.js` + `messaging.js` — identity (`id`/`getURL`/`getManifest`/platform) and
+  real `sendMessage`/Ports, relayed by the host message router
+  ([REAL, extension-scoped]; lifecycle events await the background host).
+  `event.js` provides Chrome-semantics Event objects shared across the shim.
+  Full gap analysis: [api/CHROME-EXTENSION-APIS.md](api/CHROME-EXTENSION-APIS.md).
 
 ### `src/tools/fake-cdp.js` — dev convenience (`npm run fake-cdp`)
 

@@ -11,7 +11,7 @@ needed. Legend and tiers: [../README.md](../README.md). Last reviewed: 2026-09-1
 | [DevTools panels](DEVTOOLS-PANELS.md) (`chrome.devtools.panels`) | 🟨 create works; theme/events/sidebars missing | 1 | dispatch channel |
 | [DevTools network](DEVTOOLS-NETWORK.md) (`chrome.devtools.network`) | 🟡 synthetic events + fake bodies | 1 | dispatch channel, RN network inspection |
 | [Inspected window](INSPECTED-WINDOW.md) (`chrome.devtools.inspectedWindow`) | ❌ | 1 | — |
-| [Runtime messaging](RUNTIME-MESSAGING.md) (`chrome.runtime`, Ports, event contract) | 🟡 no-op stubs | 1 | — |
+| [Runtime messaging](RUNTIME-MESSAGING.md) (`chrome.runtime`, Ports, event contract) | 🟨 surface + sendMessage + Ports real; background/lifecycle pending | 1 | — |
 | [Storage & i18n](STORAGE-AND-I18N.md) (`chrome.storage`, `chrome.i18n`) | 🟨 storage real (local/sync); session/managed/i18n missing | 1 | — |
 | [Host→frontend dispatch channel](DISPATCH-CHANNEL.md) (`InspectorFrontendAPI` / `events` / `sendMessageToBackend`) | 🟨 channel live (context-menu round-trip); backend messaging pending | 1 (infrastructure) | — |
 

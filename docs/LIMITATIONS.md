@@ -19,10 +19,12 @@
   emitted. Most listeners are empty `addListener`s.
 - Response bodies are a **fake hardcoded stub** — extensions that inspect payloads only
   *appear* to work.
-- `chrome.runtime.onMessage` is a no-op → extension messaging is broken. Altair calls
-  `chrome.tabs.*` / `chrome.storage.session` / `chrome.runtime.getURL`, which the shim
-  lacks (the bundled Altair copy has local patches, e.g. `tabs.js` derives the extension
-  id by regex-parsing `runtime.getURL`).
+- `chrome.tabs.*` is absent (the bundled Altair copy has local patches, e.g. `tabs.js`
+  derives the extension id by regex-parsing `runtime.getURL` — now provided; `tabs.*`
+  calls in Altair's background still fail). The background worker itself does not run
+  yet, so `runtime.onInstalled` has no producer ([features/BACKGROUND-WORKER.md](features/BACKGROUND-WORKER.md)).
+  `runtime.sendMessage`/Ports between extension frames DO work now
+  ([features/RUNTIME-MESSAGING.md](features/RUNTIME-MESSAGING.md)).
 - `chrome.devtools.inspectedWindow.eval`, `devtools.network.getHAR`, etc. are absent
   (partially depends on the frontend fork's injected script).
 

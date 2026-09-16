@@ -2,7 +2,7 @@
 
 | | |
 | --- | --- |
-| **Status** | 🟨 storage real for local/sync; i18n missing |
+| **Status** | 🟨 storage real for local/sync/session (session: per-frame in-memory); i18n missing |
 | **Tier** | 1 |
 | **Blocked by** | — |
 
@@ -19,7 +19,7 @@ Remaining gaps:
 | --- | --- | --- |
 | `local` | ✅ | — |
 | `sync` | 🟨 | keep as alias of local (no Chrome Sync exists); document divergence |
-| `session` | ❌ | in-memory Map + same contract — Altair's `tabs.js` uses `storage.session` |
+| `session` | ✅ per-frame in-memory (deviation: Chrome shares it extension-wide) | revisit once the background host exists — Altair's `tabs.js` uses `storage.session` |
 | `managed` | ❌ | read-only empty object (optional) |
 | `StorageArea.getKeys` | ✅ (ahead of Chrome) | — |
 | cross-frame `onChanged` | ❌ | today change events fire in the writing frame only; broadcast via the messaging router ([RUNTIME-MESSAGING.md](RUNTIME-MESSAGING.md)) |
