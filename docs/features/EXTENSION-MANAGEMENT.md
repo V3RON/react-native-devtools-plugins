@@ -2,7 +2,7 @@
 
 | | |
 | --- | --- |
-| **Status** | 🟡 stub — "extension = folder at repo root" |
+| **Status** | 🟡 stub — "extension = folder in `extensions/`" |
 | **Tier** | 1 |
 | **Blocked by** | — |
 
@@ -15,7 +15,8 @@ exposes them at `chrome-extension://<id>/`, and drives each declared execution c
 ## Current state here
 
 - No manifest parsing at all. The `rozenite://` protocol blindly maps
-  `rozenite://<dir-name>/<path>` → repo-root folder (`main.js`).
+  `rozenite://<dir-name>/<path>` → `extensions/<dir-name>` (with a path-traversal
+  guard; see `src/main/extension-server.js`).
 - The installed set is implicit (which folders exist) and the frontend fork must know the
   ids; no install/uninstall/reload UI.
 - Extension id == directory name (works, and `runtime.getURL` consumers like Altair's

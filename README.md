@@ -12,11 +12,11 @@ npm start          # opens a window loading the RN DevTools frontend from Metro 
 
 - The frontend itself is a patched RN DevTools fork served from a Metro dev server —
   it is not part of this repo.
-- "Installed" extensions are unpacked extension folders at the repo root, served under
+- "Installed" extensions are unpacked extension folders in `extensions/`, served under
   the custom `rozenite://<extension-id>/...` protocol:
-  - `sample-extension/` — minimal panel test case
-  - `graphql/` — GraphQL Network Inspector (unpacked Chrome Web Store build)
-  - `altair/` — Altair GraphQL Client (unpacked Chrome Web Store build)
+  - `extensions/sample-extension/` — minimal panel test case
+  - `extensions/graphql/` — GraphQL Network Inspector (unpacked Chrome Web Store build)
+  - `extensions/altair/` — Altair GraphQL Client (unpacked Chrome Web Store build)
 - `fake-cdp.js` — standalone CDP proxy that points the frontend at a real Chrome tab
   instead of an RN app (`node fake-cdp.js`, needs Chrome with `--remote-debugging-port=9222`).
 

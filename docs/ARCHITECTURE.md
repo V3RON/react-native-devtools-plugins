@@ -20,8 +20,8 @@ Electron provides all three.
   patched RN DevTools fork (codename "rozenite") that renders extension panels as iframes;
   it is **not** in this repo.
 - Registers a privileged custom scheme **`rozenite://`** mapping
-  `rozenite://<extension-id>/<path>` → `<repo-root>/<extension-id>/<path>`.
-  **Installing an extension = dropping its unpacked folder at the repo root**
+  `rozenite://<extension-id>/<path>` → `extensions/<extension-id>/<path>`.
+  **Installing an extension = dropping its unpacked folder into `extensions/`**
   (`sample-extension/`, `graphql/`, `altair/`).
 - Keeps an in-memory `Map` of per-origin "injected scripts" (see below), exchanged over
   synchronous IPC.

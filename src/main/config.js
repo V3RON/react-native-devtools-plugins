@@ -14,8 +14,8 @@ module.exports = {
     "http://127.0.0.1:8081/rozenite/rn_fusebox.html?ws=localhost:9223",
 
   // Root folder holding the unpacked extensions ("installed extensions").
-  // (Step 5 of docs/REFACTORING.md moves this to <repoRoot>/extensions.)
-  extensionsDir: process.env.DEVTOOLS_EXTENSIONS_DIR || repoRoot,
+  extensionsDir: process.env.DEVTOOLS_EXTENSIONS_DIR ||
+    path.join(repoRoot, "extensions"),
 
   preloadPath: path.join(repoRoot, "src/preload/index.js"),
 };

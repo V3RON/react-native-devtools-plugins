@@ -3,7 +3,7 @@
 **Extension model**
 
 - No extension management: no manifest parsing, install/uninstall, enumeration, or reload.
-  Folders must live at the repo root, and the frontend fork must know about them (the
+  Folders must live in `extensions/`, and the frontend fork must know about them (the
   extension list is effectively hardcoded into the fork).
 - No extension lifecycle beyond iframe hosting: **no background service workers**
   (GraphQL's and Altair's `background.js` never run), no content-script injection, no
