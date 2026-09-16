@@ -31,8 +31,8 @@
 - Depends on a **private patched RN DevTools fork** served from a Metro dev server at a
   hardcoded URL/port; nothing is packaged. Stock RN DevTools + this shell = no extension
   support.
-- CDP connection fixed at `ws=localhost:9223`; `fake-cdp.js` hardcodes one Chrome URL —
-  no multi-target/device support.
+- CDP connection fixed at `ws=localhost:9223`; `src/tools/fake-cdp.js` proxies exactly one
+  Chrome tab — no multi-target/device support.
 
 **Security & robustness**
 
@@ -41,8 +41,6 @@
   isolation or permission gating.
 - Injected scripts: in-memory `Map` (lost on restart), origin-keyed, evaluated via
   `new Function`, delivered over **synchronous** IPC — fragile and blocking by design.
-- Leftover experimental code (`will-frame-navigate` injecting `console.log('hello')`,
-  unused `index.html`/`renderer.js` boilerplate, DevTools open by default).
 
 **Bottom line:** the proof-of-concept shows the hosting + storage + panel plumbing works
 with real GraphQL tooling, but is far from a product: no lifecycle/permission model,

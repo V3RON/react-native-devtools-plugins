@@ -18,7 +18,7 @@
 
 ## Current state here
 
-`chrome-runtime.js` emits `onBeforeRequest` + `onBeforeSendHeaders` from synthetic
+`src/chrome-shim` emits `onBeforeRequest` + `onBeforeSendHeaders` from synthetic
 frontend postMessages; the other listeners are empty `addListener`s. Nothing blocking,
 no filters honored, bodies fake.
 

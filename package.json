@@ -5,7 +5,8 @@
     "electron": "^38.0.0"
   },
   "scripts": {
-    "start": "electron ."
+    "start": "electron .",
+    "fake-cdp": "node src/tools/fake-cdp.js"
   },
   "dependencies": {
     "electron-store": "^10.1.0",

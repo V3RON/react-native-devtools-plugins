@@ -1,6 +1,6 @@
 # `chrome.*` gap analysis
 
-Extension-API surface in real Chrome vs. this shim (`chrome-runtime.js` + injected
+Extension-API surface in real Chrome vs. this shim (`src/chrome-shim` + injected
 scripts). Status legend: [../README.md](../README.md) + [README.md](README.md).
 Per-namespace plans live in [../features/README.md](../features/README.md).
 

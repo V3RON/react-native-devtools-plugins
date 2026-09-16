@@ -14,7 +14,8 @@ docs/
 │                                          • "inspected window"/"network" → RN mapping table
 │                                          • scope rules (stubbing rule of thumb)
 ├── ARCHITECTURE.md                        How the current prototype works:
-│                                          • main.js, preloads, chrome-runtime.js, fake-cdp.js
+│                                          • src/ layout and layering rule
+│                                          • main services, preloads, chrome-shim, fake-cdp
 │                                          • rozenite:// protocol, injected-script channel
 │                                          • data-flow diagram
 ├── LIMITATIONS.md                         What the prototype is NOT (extension model, API

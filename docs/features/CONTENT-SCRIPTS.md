@@ -77,7 +77,7 @@ Key properties:
    convention.
 5. **Degradations**: `css` (no-op), `run_at` granularity (≈ "on attach/first context"),
    `all_frames` / `match_about_blank` (no frames). For **web** targets (e.g. the
-   `fake-cdp.js` path or future web support), Species A could run nearly for real since a
+   `src/tools/fake-cdp.js` path or future web support), Species A could run nearly for real since a
    DOM exists there.
 
 ## Known hard limits

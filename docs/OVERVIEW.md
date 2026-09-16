@@ -51,7 +51,7 @@ Altair, Lighthouse, Wiztree…) actually rely on, in rough order of importance:
   persistent.
 - A mechanism (repurposed `setInjectedScriptForOrigin` + per-origin re-injection) for the
   frontend to inject its devtools-API implementation into extension frames.
-- A CDP man-in-the-middle (`fake-cdp.js`) to test the stack against web targets.
+- A CDP man-in-the-middle (`src/tools/fake-cdp.js`) to test the stack against web targets.
 
 See [LIMITATIONS.md](LIMITATIONS.md) for what this prototype is *not*.
 

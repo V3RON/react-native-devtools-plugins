@@ -19,7 +19,7 @@ GraphQL Network Inspector and Altair exist as DevTools extensions.
 
 ## Current state here
 
-`chrome-runtime.js` fabricates `RequestFinished` from `postMessage` events the frontend
+`src/chrome-shim` fabricates `RequestFinished` from `postMessage` events the frontend
 broadcasts, and `getContent()` returns a **hardcoded base64 Rick & Morty payload** —
 extensions only *appear* to work. `getHAR`/`getResponseBody`/`onNavigated` absent.
 

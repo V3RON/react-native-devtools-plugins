@@ -8,7 +8,7 @@
 
 ## `chrome.storage` — the success story ✅ (mostly)
 
-`chrome-runtime.js` implements the StorageArea contract backed by `electron-store` (one
+`src/chrome-shim` implements the StorageArea contract backed by `electron-store` (one
 JSON file per extension per area): `get/set/remove/clear/getBytesInUse/getKeys`,
 `QUOTA_BYTES`, `onChanged` with proper `{oldValue, newValue}` semantics, promise **and**
 callback styles. This is why GraphQL Network Inspector's settings persist.

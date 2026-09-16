@@ -24,7 +24,7 @@ messaging, extensions are islands.
 
 ## Current state here
 
-`chrome-runtime.js`: `runtime.onMessage.addListener: () => {}`, `lastError: null`. No
+`src/chrome-shim`: `runtime.onMessage.addListener: () => {}`, `lastError: null`. No
 `id`, no `getURL`, no `sendMessage`, no `connect`. (The only cross-frame plumbing is the
 ad-hoc `Events` postMessage bridge used for fake network events.)
 

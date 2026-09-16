@@ -17,8 +17,21 @@ npm start          # opens a window loading the RN DevTools frontend from Metro 
   - `extensions/sample-extension/` — minimal panel test case
   - `extensions/graphql/` — GraphQL Network Inspector (unpacked Chrome Web Store build)
   - `extensions/altair/` — Altair GraphQL Client (unpacked Chrome Web Store build)
-- `fake-cdp.js` — standalone CDP proxy that points the frontend at a real Chrome tab
-  instead of an RN app (`node fake-cdp.js`, needs Chrome with `--remote-debugging-port=9222`).
+- `src/tools/fake-cdp.js` — standalone CDP proxy that points the frontend at a real Chrome tab
+  instead of an RN app (`npm run fake-cdp`, needs Chrome with `--remote-debugging-port=9222`).
+
+## Repository layout
+
+```
+src/
+├── shared/     cross-realm contracts (IPC channels, rozenite:// scheme + URL helpers)
+├── chrome-shim pure chrome.* logic (storage areas, network bridge; deps injected)
+├── main/       Electron main process (window, config, extension-server, IPC, state)
+├── preload/    frontend-host (InspectorFrontendHost) / extension-frame (chrome.* install)
+└── tools/      dev tools (fake-cdp)
+extensions/     "installed extensions" — unpacked extension folders
+docs/           documentation — start at docs/README.md or docs/STRUCTURE.md
+```
 
 ## Documentation
 
