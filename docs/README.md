@@ -6,6 +6,7 @@
 | [OVERVIEW.md](OVERVIEW.md) | The idea, how MV3 DevTools extensions work, what was achieved, what "inspected window" and "network" mean for React Native |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | How the current prototype works (Electron shell, preloads, `rozenite://` protocol, injected-script channel, fake CDP) |
 | [LIMITATIONS.md](LIMITATIONS.md) | Limitations of the current prototype |
+| [REFACTORING.md](REFACTORING.md) | Code-structure refactoring plan: target layout, layering, migration order |
 | [features/README.md](features/README.md) | **Master status matrix** — one page per functionality, with status, tier, and blockers |
 | [api/README.md](api/README.md) | Real Chrome host surfaces (`InspectorFrontendHost.*`, `chrome.*`) vs. this shim |
 | [ROADMAP.md](ROADMAP.md) | Definition of done, implementation buckets, recommended order |

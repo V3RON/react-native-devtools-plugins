@@ -19,6 +19,8 @@ docs/
 │                                          • data-flow diagram
 ├── LIMITATIONS.md                         What the prototype is NOT (extension model, API
 │                                          fidelity, frontend coupling, security)
+├── REFACTORING.md                         Code-structure plan: target src/ layout, layering
+│                                          rule, behavior-preserving migration steps
 ├── ROADMAP.md                             Definition of done (5 levels), 4 implementation
 │                                          buckets, recommended build order, guardrails
 ├── features/
