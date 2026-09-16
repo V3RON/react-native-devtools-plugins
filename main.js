@@ -1,13 +1,16 @@
-const {
-  app,
-  BrowserWindow,
-  protocol,
-  session,
-  ipcMain,
-  webContents,
-} = require("electron/main");
+const { app, BrowserWindow, protocol, ipcMain } = require("electron/main");
 const path = require("path");
 const { default: Store } = require("electron-store");
+const config = require("./src/main/config");
+const {
+  EXTENSION_SCHEME,
+  parseExtensionURL,
+} = require("./src/shared/protocol");
+const {
+  STORE_INJECTED_SCRIPT,
+  GET_INJECTED_SCRIPT,
+} = require("./src/shared/ipc");
+
 Store.initRenderer();
 
 // Store injected scripts by origin
@@ -18,7 +21,7 @@ const createWindow = () => {
     width: 800,
     height: 600,
     webPreferences: {
-      preload: path.join(__dirname, "preload.js"),
+      preload: config.preloadPath,
       webSecurity: false, // Allow custom protocols in iframes
       allowRunningInsecureContent: true, // Allow custom protocol content
       nodeIntegrationInSubFrames: true,
@@ -26,64 +29,37 @@ const createWindow = () => {
     },
   });
 
-  win.webContents.openDevTools();
-  win.webContents.on("will-frame-navigate", (event) => {
-    if (event.isMainFrame) {
-      return;
-    }
-
-    console.log(event);
-    event.frame.on("dom-ready", () => {
-      event.frame.executeJavaScript("console.log('hello')");
-    });
-    // frame.executeJavaScript("document.body.innerHTML = 'elo'");
-  });
-
-  win.loadURL(
-    "http://127.0.0.1:8081/rozenite/rn_fusebox.html?ws=localhost:9223"
-  );
+  win.loadURL(config.frontendURL);
 };
 
 protocol.registerSchemesAsPrivileged([
   {
-    scheme: "rozenite",
+    scheme: EXTENSION_SCHEME,
     privileges: { standard: true, supportFetchAPI: true, bypassCSP: true },
   },
 ]);
 
 app.whenReady().then(() => {
-  // Handle storing injected scripts
-  ipcMain.on("store-injected-script", (event, origin, script) => {
-    console.log(`[Main] Storing injected script for origin: ${origin}`);
+  // Injected-script store (frontend -> host -> extension frames).
+  ipcMain.on(STORE_INJECTED_SCRIPT, (event, origin, script) => {
     injectedScripts.set(origin, script);
     event.returnValue = true;
   });
 
-  ipcMain.on("get-injected-script", (event, origin) => {
-    console.log(`[Main] Getting injected script for origin: ${origin}`);
-    console.log(injectedScripts.get(origin));
+  ipcMain.on(GET_INJECTED_SCRIPT, (event, origin) => {
     event.returnValue = injectedScripts.get(origin);
   });
 
-  // Register the custom protocol handler
-  protocol.registerFileProtocol("rozenite", (request, callback) => {
-    console.log("[Protocol Handler] Received request:", request.url);
-
-    // rozenite://<extension-id>/<path>
-    const requestUrlParts = request.url.split("/");
-    const extensionId = requestUrlParts[2];
-    const innerPath = requestUrlParts.slice(3).join("/");
-
-    console.log(
-      "[Protocol Handler] Extension ID:",
-      extensionId,
-      "Inner Path:",
-      innerPath
-    );
-
-    const filePath = path.join(__dirname, extensionId, innerPath);
-    console.log(filePath);
-    callback({ path: filePath });
+  // Serve extension files: rozenite://<extension-id>/<path>
+  protocol.registerFileProtocol(EXTENSION_SCHEME, (request, callback) => {
+    const parsed = parseExtensionURL(request.url);
+    if (!parsed) {
+      callback({ error: -6 }); // net::ERR_FILE_NOT_FOUND
+      return;
+    }
+    callback({
+      path: path.join(config.extensionsDir, parsed.extensionId, parsed.innerPath),
+    });
   });
 
   createWindow();

@@ -1,5 +1,11 @@
-const { contextBridge, ipcRenderer, clipboard, shell } = require("electron");
+const { contextBridge, ipcRenderer } = require("electron");
 const { getChromeNamespace } = require("./chrome-runtime.js");
+const { EXTENSION_SCHEME } = require("./src/shared/protocol");
+const {
+  STORE_INJECTED_SCRIPT,
+  GET_INJECTED_SCRIPT,
+  EVENTS,
+} = require("./src/shared/ipc");
 
 if (process.isMainFrame) {
   const InspectorFrontendHost = {
@@ -27,14 +33,13 @@ if (process.isMainFrame) {
     setInspectedPageBounds(bounds) {},
     inspectElementCompleted() {},
     async setInjectedScriptForOrigin(origin, script) {
-      // console.log("setInjectedScriptForOrigin", origin, script);
-
-      // Store the script in the main process
+      // Store the script in the main process (see docs/ARCHITECTURE.md:
+      // this is the channel the frontend uses to inject chrome.devtools.*
+      // implementations into extension frames).
       try {
-        ipcRenderer.sendSync("store-injected-script", origin, script);
-        console.log(`[Preload] Stored script for origin: ${origin}`);
+        ipcRenderer.sendSync(STORE_INJECTED_SCRIPT, origin, script);
       } catch (error) {
-        console.error("[Preload] Failed to store script:", error);
+        console.error("[Preload] Failed to store injected script:", error);
       }
     },
     inspectedURLChanged(url) {
@@ -159,35 +164,6 @@ if (process.isMainFrame) {
       console.log("performActionOnRemotePage", { action, browserId, targetId });
       if (callback) callback({ error: "Not implemented" });
     },
-    // Add any other methods as needed
-
-    // Debug utilities
-    async getAllStoredScripts() {
-      try {
-        return await ipcRenderer.invoke("get-all-injected-scripts");
-      } catch (error) {
-        console.error("[Preload] Failed to get all stored scripts:", error);
-        return {};
-      }
-    },
-
-    async getAllStoredOrigins() {
-      try {
-        return await ipcRenderer.invoke("get-all-origins");
-      } catch (error) {
-        console.error("[Preload] Failed to get all stored origins:", error);
-        return [];
-      }
-    },
-
-    async clearAllStoredScripts() {
-      try {
-        return await ipcRenderer.invoke("clear-injected-scripts");
-      } catch (error) {
-        console.error("[Preload] Failed to clear stored scripts:", error);
-        return false;
-      }
-    },
   };
 
   contextBridge.exposeInMainWorld(
@@ -219,27 +195,21 @@ if (process.isMainFrame) {
 const protocol = window.location.protocol;
 const extensionId = window.location.hostname;
 
-if (protocol !== "rozenite:") {
+if (protocol !== `${EXTENSION_SCHEME}:`) {
   return;
 }
 
-console.log("extensionId", extensionId);
 const chrome = getChromeNamespace(extensionId);
 
-const script = ipcRenderer.sendSync(
-  "get-injected-script",
-  window.location.origin
-);
+const script = ipcRenderer.sendSync(GET_INJECTED_SCRIPT, window.location.origin);
 
 if (script) {
-  console.log("script", script);
   contextBridge.executeInMainWorld({
     func: new Function(`${script}(0)`),
   });
 }
 
 contextBridge.exposeInMainWorld("chromeElectron", chrome);
-contextBridge.exposeInMainWorld("hello", "world");
 contextBridge.executeInMainWorld({
   func: () => {
     window.chrome = {
@@ -249,9 +219,9 @@ contextBridge.executeInMainWorld({
   },
 });
 contextBridge.exposeInMainWorld("ipcRenderer", ipcRenderer);
-contextBridge.exposeInMainWorld("Events", {
+contextBridge.exposeInMainWorld(EVENTS, {
   addListener: (event, callback) => {
-    ipcRenderer.on("Events", (receivedEvent, data) => {
+    ipcRenderer.on(EVENTS, (receivedEvent, data) => {
       if (event !== receivedEvent) {
         return;
       }
@@ -260,8 +230,6 @@ contextBridge.exposeInMainWorld("Events", {
     });
   },
   removeListener: (event, callback) => {
-    ipcRenderer.removeListener("Events", callback);
+    ipcRenderer.removeListener(EVENTS, callback);
   },
 });
-
-console.log("preload.js with events loaded");
