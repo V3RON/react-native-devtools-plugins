@@ -9,12 +9,16 @@
 //   transport      — optional host transport for runtime messaging
 //                    (see ./messaging); when absent, runtime messaging
 //                    degrades to the previous no-op state.
+//   onPanelCreated — optional (docs/features/DEVTOOLS-PANELS.md): host hook
+//                    behind chrome.devtools.panels.create; absent = inert.
 //
 // Transports and concrete backends are wired by the caller (the
 // extension-frame preload). Status per namespace: docs/api/CHROME-EXTENSION-APIS.md.
 const { createEvent } = require("./event");
 const { createRuntime } = require("./runtime");
 const { createMessagingClient } = require("./messaging");
+const { createDevtools } = require("./devtools");
+const { createTabs } = require("./tabs");
 
 const createChromeNamespace = ({
   extensionId,
@@ -23,6 +27,7 @@ const createChromeNamespace = ({
   storage,
   networkBridge,
   transport,
+  onPanelCreated,
 }) => {
   // Shared mutable lastError holder — runtime exposes it as a live getter;
   // the messaging client sets/clears it around callback invocations.
@@ -56,6 +61,14 @@ const createChromeNamespace = ({
     // (docs/features/WEBREQUEST.md)
     webRequest: networkBridge.webRequest,
 
+    // [REAL storage; Tier-1 devtools] chrome.devtools.* — installed for every
+    // extension frame, matching Chrome (devtools page + panel pages alike);
+    // panels.create is host-driven (docs/features/DEVTOOLS-PANELS.md)
+    devtools: createDevtools({ extensionId, onPanelCreated }).namespace,
+
+    // [STUB] inert host shell: no browser tab model here (docs/LIMITATIONS.md)
+    tabs: createTabs(),
+
     // [REAL] persistent per-extension storage (session area: per-frame
     // in-memory, see storage.js deviation note)
     // (docs/features/STORAGE-AND-I18N.md)
@@ -81,4 +94,6 @@ module.exports = {
   createExtensionStorage: require("./storage").createExtensionStorage,
   createMemoryBackend: require("./storage").createMemoryBackend,
   createNetworkBridge: require("./network-bridge").createNetworkBridge,
+  createDevtools: require("./devtools").createDevtools,
+  createTabs: require("./tabs").createTabs,
 };

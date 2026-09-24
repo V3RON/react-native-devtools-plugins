@@ -2,6 +2,7 @@
 const { BrowserWindow } = require("electron");
 const config = require("./config");
 const { setFrontendWebContents } = require("./dispatch");
+const panelHost = require("./panel-host");
 
 let currentWindow = null;
 
@@ -21,6 +22,7 @@ const createWindow = () => {
   win.loadURL(config.frontendURL);
   currentWindow = win;
   setFrontendWebContents(win.webContents);
+  panelHost.attach(win.webContents); // shell-driven extensions (panel-bridge)
 
   win.on("closed", () => {
     if (currentWindow === win) {

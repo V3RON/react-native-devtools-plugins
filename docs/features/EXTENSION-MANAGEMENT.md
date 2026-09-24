@@ -2,7 +2,7 @@
 
 | | |
 | --- | --- |
-| **Status** | 🟡 stub — "extension = folder in `extensions/`" |
+| **Status** | 🟨 partial — scan + manifest parse + panel hosting in the shell; no lifecycle UI |
 | **Tier** | 1 |
 | **Blocked by** | — |
 
@@ -14,19 +14,20 @@ exposes them at `chrome-extension://<id>/`, and drives each declared execution c
 
 ## Current state here
 
-- No manifest parsing at all. The `rozenite://` protocol blindly maps
+- Manifest loading (`extension-server.loadManifest`) + scan/enumeration
+  (`src/main/extensions.js`): folders with `devtools_page` get a hidden devtools page
+  and their `panels.create` calls become real tabs — no fork knowledge anywhere
+  ([DEVTOOLS-PANELS.md](DEVTOOLS-PANELS.md)).
+- "Install" = drop the folder in `extensions/`; the frontend picks it up on (re)load.
+  The `rozenite://` protocol blindly maps
   `rozenite://<dir-name>/<path>` → `extensions/<dir-name>` (with a path-traversal
   guard; see `src/main/extension-server.js`).
-- The installed set is implicit (which folders exist) and the frontend fork must know the
-  ids; no install/uninstall/reload UI.
 - Extension id == directory name (works, and `runtime.getURL` consumers like Altair's
   `tabs.js` depend on hostname == id — keep it).
 
 ## Needed
 
-- Manifest loader: parse + validate MV3, synthesize a stable id, registry with
-  install/uninstall/reload (watch folder for dev ergonomics).
-- Enumerate extensions to the frontend (replacing hardcoded fork knowledge).
+- Install/uninstall/reload: folder watcher for dev ergonomics + lifecycle UI.
 - Per-extension CSP enforcement on the `rozenite:` frames (today: security fully off).
 
 ## Manifest key support matrix

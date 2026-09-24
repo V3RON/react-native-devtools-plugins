@@ -50,4 +50,8 @@ module.exports = {
   RUNTIME_PORT_CLOSE: "runtime-port-close",
   /** main -> frame push: {kind: message|connect|port-message|port-disconnect}. */
   RUNTIME_DELIVER: "runtime-deliver",
+
+  // ── shell-driven extension hosting (docs/features/DEVTOOLS-PANELS.md) ────
+  /** ({title, pagePath}) from a devtools frame -> registers a frontend panel. */
+  EXT_PANEL_CREATE: "ext-panel-create",
 };

@@ -32,6 +32,7 @@ const {
   RUNTIME_PORT_CLOSE,
   RUNTIME_DELIVER,
   EVENTS,
+  EXT_PANEL_CREATE,
 } = require("../shared/ipc");
 
 const extensionId = window.location.hostname; // id == hostname: load-bearing
@@ -118,6 +119,11 @@ const chrome = createChromeNamespace({
   storage,
   networkBridge,
   transport,
+  // chrome.devtools.panels.create -> host -> real frontend tab
+  // (docs/features/DEVTOOLS-PANELS.md, src/main/panel-host.js).
+  onPanelCreated: ({ title, pagePath }) => {
+    ipcRenderer.invoke(EXT_PANEL_CREATE, { title, pagePath }).catch(() => {});
+  },
 });
 
 // Router -> frame deliveries (messages, ports).
@@ -133,14 +139,15 @@ if (script) {
 
 // 2. chrome.* namespace. The merge runs in the main world: keep any
 // chrome.* the injected frontend script defined (chrome.devtools.*), deep-
-// merge runtime, and re-establish `lastError` as a LIVE getter — contextBridge
-// cloning evaluates getters only once (chrome-shim/runtime.js).
+// merge runtime and devtools, and re-establish `lastError` as a LIVE getter —
+// contextBridge cloning evaluates getters only once (chrome-shim/runtime.js).
 contextBridge.exposeInMainWorld("chromeElectron", chrome);
 contextBridge.executeInMainWorld({
   func: () => {
     const bridge = window.chromeElectron;
     const merged = { ...window.chrome, ...bridge };
     merged.runtime = { ...(window.chrome && window.chrome.runtime), ...bridge.runtime };
+    merged.devtools = { ...(window.chrome && window.chrome.devtools), ...bridge.devtools };
     Object.defineProperty(merged.runtime, "lastError", {
       get: () => bridge.runtime._getLastLastError(),
     });

@@ -5,6 +5,7 @@ const preferences = require("./preferences");
 const windowOps = require("./window");
 const { showContextMenu } = require("./context-menu");
 const extensionServer = require("./extension-server");
+const panelHost = require("./panel-host");
 const { createMessageRouter } = require("./message-router");
 const {
   STORE_INJECTED_SCRIPT,
@@ -26,6 +27,7 @@ const {
   RUNTIME_PORT_POST,
   RUNTIME_PORT_CLOSE,
   RUNTIME_DELIVER,
+  EXT_PANEL_CREATE,
 } = require("../shared/ipc");
 
 // ── runtime messaging router wiring ─────────────────────────────────────────
@@ -168,6 +170,29 @@ const registerIpcHandlers = () => {
   registeredHandle(RUNTIME_PORT_CLOSE, (fromKey, { portId }) =>
     router.portDisconnect({ fromKey, portId })
   );
+
+  // ── shell-driven extension hosting (docs/features/DEVTOOLS-PANELS.md) ────
+  // chrome.devtools.panels.create from an extension frame. Identity from the
+  // calling frame (must be a registered router frame); never from payload.
+  ipcMain.handle(EXT_PANEL_CREATE, (event, { title, pagePath } = {}) => {
+    if (!resolveFrameKey(event)) {
+      return { ok: false };
+    }
+    let extensionId;
+    try {
+      extensionId = new URL(event.senderFrame.url).hostname;
+    } catch {
+      return { ok: false };
+    }
+    if (
+      typeof title !== "string" ||
+      typeof pagePath !== "string" ||
+      !extensionServer.resolveExtensionFile(extensionId, "")
+    ) {
+      return { ok: false };
+    }
+    return { ok: panelHost.addPanel({ extensionId, title, pagePath }) };
+  });
 };
 
 module.exports = { registerIpcHandlers };
