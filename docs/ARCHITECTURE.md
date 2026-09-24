@@ -19,12 +19,15 @@ src/
 ├── chrome-shim/     pure chrome.* logic; backends & transports injected by the caller
 ├── main/            Electron main process: state + services
 ├── preload/         thin transport layer (frontend-host / extension-frame)
-└── tools/           dev-only tools (fake-cdp)
+├── frontend/        code evaluated into the frontend's main world (panel-bridge)
+└── tools/           dev-only tools (fake-cdp, rn-cdp)
 extensions/          "installed extensions": sample-extension/, graphql/, altair/
 ```
 
 Layering rule (imports point downward only): `shared` ← `chrome-shim` ← `main/*` ←
 `preload/*`. Preloads contain no policy; the shim never touches `window`/`ipcRenderer`.
+`frontend/` is off this graph: its files are plain expressions `executeJavaScript`-ed
+into the frontend's main world, never `require`d at runtime.
 
 ## Components
 
@@ -86,13 +89,37 @@ Pure modules; `index.js` assembles the namespace from injected deps:
   real `sendMessage`/Ports, relayed by the host message router
   ([REAL, extension-scoped]; lifecycle events await the background host).
   `event.js` provides Chrome-semantics Event objects shared across the shim.
-  Full gap analysis: [api/CHROME-EXTENSION-APIS.md](api/CHROME-EXTENSION-APIS.md).
+  `devtools.js` — `chrome.devtools.*`: real `panels.create` (host-driven tabs),
+  degraded `inspectedWindow.eval`, inert network/panels events
+  ([features/DEVTOOLS-PANELS.md](features/DEVTOOLS-PANELS.md)); `tabs.js` — inert
+  `chrome.tabs` shell. Full gap analysis: [api/CHROME-EXTENSION-APIS.md](api/CHROME-EXTENSION-APIS.md).
+
+### Shell-driven extension hosting (`src/main/extensions.js`, `src/main/panel-host.js`, `src/frontend/panel-bridge.js`)
+
+Replaces hardcoded fork knowledge end-to-end
+([features/DEVTOOLS-PANELS.md](features/DEVTOOLS-PANELS.md)): `extensions.js` scans
+`extensionsDir` and parses manifests; `panel-host.js` evaluates the bridge into the
+frontend on every load (after `.main-tabbed-pane` appears) and owns the live panel
+registry; the bridge imports the frontend's own `ui/legacy/legacy.js` (same module
+instance, same `InspectorView` singleton), spawns hidden devtools-page iframes, and
+turns `chrome.devtools.panels.create` IPCs into real tabs (`SimpleView` + iframe).
+Devtools-side API surface lives in `chrome-shim/devtools.js` (panels/inspectedWindow/
+network per the stubbing rule) plus the inert `chrome-shim/tabs.js` shell.
 
 ### `src/tools/fake-cdp.js` — dev convenience (`npm run fake-cdp`)
 
 WebSocket proxy: RN DevTools frontend (expects `ws://localhost:9223`) ⇄ real Chrome tab's
 CDP endpoint (port 9222, `--target-url` selects the tab). Lets extension behavior be
 developed against a web app.
+
+### `src/tools/rn-cdp.js` — dev convenience (`npm run rn-cdp`)
+
+The RN sibling: polls Metro's `/json/list`, pairs each frontend connection with a real RN
+app's CDP session (`/inspector/debug?device=…&page=…` on Metro's dev server), and
+re-attaches across app reloads/reconnects. Filters: `--metro-host/--metro-port`,
+`--app`, `--device`. This is what runs the shell against a live app (e.g. `../expo56`,
+whose `@rozenite/metro` serves the patched frontend this repo's `config.js` expects —
+start Metro there with `WITH_ROZENITE=true`).
 
 ## Data flows (current)
 

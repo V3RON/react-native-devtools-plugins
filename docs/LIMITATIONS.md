@@ -2,9 +2,12 @@
 
 **Extension model**
 
-- No extension management: no manifest parsing, install/uninstall, enumeration, or reload.
-  Folders must live in `extensions/`, and the frontend fork must know about them (the
-  extension list is effectively hardcoded into the fork).
+- No extension lifecycle UI: no install/uninstall/reload or permissions model. Manifest
+  parsing + enumeration are the shell's job now (`src/main/extensions.js` scans
+  `extensions/`, hosts devtools pages and panels — see
+  [features/DEVTOOLS-PANELS.md](features/DEVTOOLS-PANELS.md)), so the frontend needs no
+  hardcoded extension list. Dropping a folder in `extensions/` and (re)loading the
+  frontend installs an extension; there is no watcher or UI.
 - No extension lifecycle beyond iframe hosting: **no background service workers**
   (GraphQL's and Altair's `background.js` never run), no content-script injection, no
   `action`/popup, options UI, `tabs`, `notifications`, or permission system, even though
@@ -19,14 +22,15 @@
   emitted. Most listeners are empty `addListener`s.
 - Response bodies are a **fake hardcoded stub** — extensions that inspect payloads only
   *appear* to work.
-- `chrome.tabs.*` is absent (the bundled Altair copy has local patches, e.g. `tabs.js`
-  derives the extension id by regex-parsing `runtime.getURL` — now provided; `tabs.*`
-  calls in Altair's background still fail). The background worker itself does not run
+- `chrome.tabs.*` is an **inert shell** (`query()` → `[]`, events never fire —
+  `src/chrome-shim/tabs.js`), enough for Altair's `tabs.query` consumers to render its
+  monitor panel. The background worker itself does not run
   yet, so `runtime.onInstalled` has no producer ([features/BACKGROUND-WORKER.md](features/BACKGROUND-WORKER.md)).
   `runtime.sendMessage`/Ports between extension frames DO work now
   ([features/RUNTIME-MESSAGING.md](features/RUNTIME-MESSAGING.md)).
-- `chrome.devtools.inspectedWindow.eval`, `devtools.network.getHAR`, etc. are absent
-  (partially depends on the frontend fork's injected script).
+- `chrome.devtools.panels.create` is real and shell-driven
+  ([features/DEVTOOLS-PANELS.md](features/DEVTOOLS-PANELS.md)); `devtools.inspectedWindow.eval`,
+  `devtools.network.getHAR` etc. are inert stubs awaiting the dispatch channel.
 
 **Host/frontend coupling**
 
@@ -34,7 +38,8 @@
   hardcoded URL/port; nothing is packaged. Stock RN DevTools + this shell = no extension
   support.
 - CDP connection fixed at `ws=localhost:9223`; `src/tools/fake-cdp.js` proxies exactly one
-  Chrome tab — no multi-target/device support.
+  Chrome tab and `src/tools/rn-cdp.js` exactly one RN app target — no multi-target/device
+  multiplexing.
 
 **Security & robustness**
 
