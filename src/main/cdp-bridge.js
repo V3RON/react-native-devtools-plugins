@@ -309,7 +309,17 @@ const createCdpBridge = (options = {}) => {
   };
 
   // ── frontend clients ─────────────────────────────────────────────────────
+  // Last connection wins. A CDP session cannot be shared: two frontend pages
+  // would both allocate ids from 1 and both see the other's replies and events,
+  // so the second connection replaces the first (same rule Chrome applies when a
+  // second DevTools attaches to one target). A reconnect is safe — the discarded
+  // socket is the one being replaced anyway.
   const handleClient = (client) => {
+    for (const previous of clients) {
+      log("info", "CDP bridge: replacing the previous frontend connection");
+      previous.close(1000, "replaced by a new frontend connection");
+    }
+    clients.clear();
     clients.add(client);
     log("info", `CDP bridge: frontend connected (${clients.size} client(s))`);
     client.on("message", (raw) => upstreamSend(String(raw)));

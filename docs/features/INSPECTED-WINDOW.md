@@ -28,6 +28,9 @@ main/ipc.js  ── frame-gated ──►  main/inspected-window.js
 main/cdp-bridge.js  ── host-range message ids ──►  Metro /inspector/debug  ──►  app
 ```
 
+`reload()` follows the same chain over `DEVTOOLS_RELOAD` and ends in
+`sendCommand("Page.reload", …)`.
+
 The bridge multiplexes by message id, so **host commands ride the frontend's own
 debugger session** and the app never sees a second debugger (`>= HOST_ID_BASE` is
 host territory; the frontend allocates 1,2,3,…). Replies with a host id are consumed

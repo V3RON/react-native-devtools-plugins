@@ -498,6 +498,27 @@ test("stopping while detached stays stopped — no late upstream attach", async 
   );
 });
 
+test("a second frontend connection replaces the first (one CDP session, one owner)", async (t) => {
+  const { bridge, listenPort } = await makeWorld(t, {});
+  const first = connectFrontend(listenPort);
+  await first.open();
+  await waitFor(() => bridge.isAttached());
+
+  const second = connectFrontend(listenPort);
+  await second.open();
+
+  // Two frontends cannot share one CDP session (both allocate ids from 1), so the
+  // newer one owns it and the discarded socket is closed.
+  await waitFor(() => bridge.status().clients === 1);
+  await waitFor(() => first.socket.readyState === first.socket.CLOSED);
+  second.send({ id: 7, method: "Runtime.enable" });
+  assert.deepStrictEqual(await second.next((m) => m.id === 7), {
+    id: 7,
+    result: { echo: "Runtime.enable" },
+  });
+  await second.close();
+});
+
 test("external relay mode binds nothing and refuses host commands", async (t) => {
   const { bridge, listenPort } = await makeWorld(t, { bridge: { enabled: false } });
   await assert.rejects(
