@@ -81,16 +81,26 @@
           port.disconnect();
         });
 
-        // inspectedWindow.eval needs a live RN app on the shell's CDP bridge, so
-        // these fail (loudly, with the host's reason) until one is attached —
-        // never silently, and never with invented data.
+        // inspectedWindow.eval needs a live RN app on the shell's CDP bridge. Until
+        // the bridge has a session, eval answers isError with the host's reason
+        // (never invented data), so the first check retries for a while instead of
+        // reporting a false FAIL for a panel that simply loaded before the app did.
         // (docs/features/INSPECTED-WINDOW.md, README "Quick start".)
+        const evalUntilAttached = async (expression, attempts = 40) => {
+          let pair = await chrome.devtools.inspectedWindow.eval(expression);
+          while (attempts-- > 1 && pair && pair[1] && pair[1].isError) {
+            await sleep(500);
+            pair = await chrome.devtools.inspectedWindow.eval(expression);
+          }
+          return pair;
+        };
+
         await check("inspectedWindow.eval returns real app globals", async () => {
-          const pair = await chrome.devtools.inspectedWindow.eval(
+          const pair = await evalUntilAttached(
             'JSON.stringify({dev: globalThis.__DEV__, platform: globalThis.platform, window: typeof globalThis.window})'
           );
           const [value, info] = pair || [];
-          assert(!info, "no exceptionInfo: " + JSON.stringify(info));
+          assert(!info, "no exceptionInfo (host said: " + JSON.stringify(info) + ")");
           const parsed = JSON.parse(value);
           assert(typeof parsed.dev === "boolean", "__DEV__ is a boolean: " + value);
           assert(typeof parsed.platform === "string", "platform is a string: " + value);
@@ -100,7 +110,9 @@
 
         await check("inspectedWindow.eval reports page exceptions (callback style)", () =>
           new Promise((resolve, reject) =>
-            chrome.devtools.inspectedWindow.eval("globalThis.__no_such_global__", (value, info) => {
+            // A bare undeclared identifier throws ReferenceError; note this is NOT
+            // the same as `globalThis.__nope`, which evaluates to undefined.
+            chrome.devtools.inspectedWindow.eval("__no_such_global_at_all__", (value, info) => {
               try {
                 assert(value === undefined, "no value for a thrown exception");
                 assert(info && info.isException === true, JSON.stringify(info));

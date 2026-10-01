@@ -2,7 +2,7 @@
 
 | | |
 | --- | --- |
-| **Status** | 🟨 partial — `eval` is real (CDP `Runtime.evaluate` over the shell's own bridge); `reload` / `getResources` / `getSelectedNode` are inert |
+| **Status** | 🟨 partial — `eval` and `reload` are real (CDP `Runtime.evaluate` / `Page.reload` over the shell's own bridge); `getResources` / `getSelectedNode` are inert |
 | **Tier** | 1 |
 | **Blocked by** | — (needs the CDP bridge, now in the shell: [src/main/cdp-bridge.js](../../src/main/cdp-bridge.js)) |
 
@@ -34,9 +34,16 @@ host territory; the frontend allocates 1,2,3,…). Replies with a host id are co
 in main and never forwarded to the frontend.
 
 Everything else is deliberately inert: `tabId` is a stable synthetic int per
-extension; `reload` does nothing (RN's backend has no `Page.reload` handler we can
-lean on — claiming success would be a lie); `getResources` answers `[]`;
-`getSelectedNode` answers `null`.
+extension; `getResources` answers `[]`; `getSelectedNode` answers `null`.
+
+`reload()` is real: it maps onto CDP `Page.reload`, which RN's backend implements
+(`HostAgent.cpp` -> `targetController_.getDelegate().onReload({ignoreCache,
+scriptToEvaluateOnLoad})`), so it really reloads the JS bundle. Chrome's
+`options.injectedScript` is the same idea as CDP's `scriptToEvaluateOnLoad` and is
+mapped rather than dropped. Chrome's `reload()` has no callback and no promise, so
+there is no API surface to report failure through: a rejected `Page.reload` (no
+session, external-relay mode) is logged in the extension frame's console instead of
+being swallowed.
 
 ## RN mapping and fidelity
 
@@ -46,7 +53,7 @@ lean on — claiming success would be a lie); `getResources` answers `[]`;
 | `eval` | `Runtime.evaluate` (`returnByValue`, `awaitPromise`) | High for JSON-serializable values |
 | `eval` + `frameURL` / `useContentScriptContext` / `scriptExecutionContext` | accepted, **ignored** | documented degradation: RN has no frames and no isolated content-script worlds — the app's global context is the only context, and RN aliases `global.window = global` (`Libraries/Core/setUpGlobals.js`), which is what state-debugger extensions need |
 | `eval` timeout | **our own option** (Chrome has none) | bounds the wait; forwarded to `Runtime.evaluate` best-effort, reply deadline sits slack behind it |
-| `reload` | no backend support | ❌ inert |
+| `reload` | `Page.reload` (`ignoreCache`, `injectedScript` → `scriptToEvaluateOnLoad`) | High for the JS bundle; RN reloads the bundle, not a DOM page. No callback in Chrome's API, so failures surface in the frame console |
 | `getResources` / `getResourceContent` | `Debugger.getScriptParsed` + script source | not implemented (Tier 2) |
 
 ### Result mapping (implemented in `src/main/inspected-window.js`)
@@ -72,7 +79,8 @@ Nothing is fabricated: when the backend cannot answer, `eval` says so in
    ([cdp-bridge.js](../../src/main/cdp-bridge.js)); see
    [DISPATCH-CHANNEL.md](DISPATCH-CHANNEL.md).
 2. ~~Map exceptionInfo into Chrome's `{value, exceptionInfo}` callback shape~~ ✅.
-3. ~~`tabId` constant~~ ✅. `reload` / resources: still open (Tier 2).
+3. ~~`tabId` constant~~ ✅. ~~`reload`~~ ✅ (`Page.reload`). Resources
+   (`getResources` / `getResourceContent`) and `getSelectedNode`: still open (Tier 2).
 
 ## Definition of done
 

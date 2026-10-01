@@ -59,4 +59,7 @@ module.exports = {
   /** ({expression, options}) from an extension frame -> Chrome's
    *  [value, exceptionInfo] pair, answered from the CDP bridge. */
   DEVTOOLS_EVAL: "devtools-eval",
+
+  /** ({options}) from an extension frame -> CDP Page.reload on the bridge. */
+  DEVTOOLS_RELOAD: "devtools-reload",
 };

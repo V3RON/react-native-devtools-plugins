@@ -42,6 +42,11 @@ const createDevtools = ({
   // src/main/inspected-window.js; absent = honest isError, like Chrome's
   // "cannot access" answer rather than a silently empty success.
   evalInPage,
+  // chrome.devtools.inspectedWindow.reload: injected host dependency
+  // (options) => Promise<{ok, error?}>, mapped onto CDP Page.reload. Chrome's API
+  // reports nothing, so a failed reload surfaces through `logger` instead.
+  reloadInPage = () => Promise.resolve(),
+  logger = console,
 }) => {
   const createPanel = (title, pagePath) => ({
     onShown: createEvent(), // deviation: never fires until panel events land
@@ -151,9 +156,18 @@ const createDevtools = ({
     getSelectedNode: (cb) => callAsync(cb, null),
     // [STUB] would map to Debugger.getScriptParsed (Tier 2, same doc).
     getResources: (cb) => callAsync(cb, []),
-    // [STUB] Page.reload is not implemented by RN's inspector backend; reporting
-    // success would be a lie, so this stays inert and documented.
-    reload: () => {},
+    // Chrome's `reload()` takes `{ignoreCache, injectedScript}` and returns
+    // nothing. Mapped onto CDP `Page.reload`, which RN's backend implements
+    // (HostAgent.cpp -> onReload), so this really reloads the JS bundle. Chrome's
+    // API has no callback, so the only honest place to report a failed reload is
+    // the frame's console — the one place an extension author is already looking.
+    reload(options) {
+      Promise.resolve(reloadInPage(options || {})).then((reply) => {
+        if (reply && reply.ok === false) {
+          logger.warn(`[devtools.inspectedWindow.reload] ${reply.error}`);
+        }
+      });
+    },
   };
 
   const network = {

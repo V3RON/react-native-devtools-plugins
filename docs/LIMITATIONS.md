@@ -29,16 +29,18 @@
   `runtime.sendMessage`/Ports between extension frames DO work now
   ([features/RUNTIME-MESSAGING.md](features/RUNTIME-MESSAGING.md)).
 - `chrome.devtools.panels.create` is real and shell-driven
-  ([features/DEVTOOLS-PANELS.md](features/DEVTOOLS-PANELS.md)), and so is
-  `devtools.inspectedWindow.eval` (CDP `Runtime.evaluate` over the shell's CDP bridge —
-  see [features/INSPECTED-WINDOW.md](features/INSPECTED-WINDOW.md) for the fidelity and
-  the honest-degradation table). `devtools.network.getHAR` and the rest of
-  `devtools.network` are still inert stubs, and `inspectedWindow.reload` /
-  `getResources` / `getSelectedNode` answer with documented no-data.
+  ([features/DEVTOOLS-PANELS.md](features/DEVTOOLS-PANELS.md)), and so are
+  `devtools.inspectedWindow.eval` and `.reload` (CDP `Runtime.evaluate` / `Page.reload`
+  over the shell's CDP bridge — see
+  [features/INSPECTED-WINDOW.md](features/INSPECTED-WINDOW.md) for the fidelity and the
+  honest-degradation table). `devtools.network.getHAR` and the rest of
+  `devtools.network` are still inert stubs, and `inspectedWindow.getResources` /
+  `getSelectedNode` answer with documented no-data.
 - `inspectedWindow.eval` only answers when the shell's CDP bridge actually has a session:
   no Metro, no debuggable app, or `DEVTOOLS_CDP_BRIDGE=off` without an external relay all
   surface as `exceptionInfo.isError` with the host's reason. Nothing is answered from
-  cache or invented.
+  cache or invented. `inspectedWindow.reload` has no callback in Chrome's API, so the
+  same failure shows up as a console warning in the extension frame.
 
 **Host/frontend coupling**
 

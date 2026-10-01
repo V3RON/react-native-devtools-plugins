@@ -9,12 +9,14 @@ const assert = require("node:assert");
 
 const { createDevtools, tabIdFor } = require("../src/chrome-shim/devtools");
 const { createEvalInPage } = require("../src/main/inspected-window");
-const makeDevtools = ({ evalInPage } = {}) => {
+const makeDevtools = ({ evalInPage, reloadInPage, logger } = {}) => {
   const created = [];
   const { namespace } = createDevtools({
     extensionId: "my-ext",
     onPanelCreated: (p) => created.push(p),
     evalInPage,
+    reloadInPage,
+    logger,
   });
   return { devtools: namespace, created };
 };
@@ -185,6 +187,32 @@ test("inspectedWindow.eval: evaluate-time failures settle as isError", async () 
   );
   assert.strictEqual(viaCallback[0], undefined);
   assert.strictEqual(viaCallback[1].isError, true);
+});
+
+test("inspectedWindow.reload reaches the host with Chrome's options", async () => {
+  const seen = [];
+  const { devtools } = makeDevtools({
+    reloadInPage: async (options) => {
+      seen.push(options);
+      return { ok: true };
+    },
+  });
+  assert.strictEqual(devtools.inspectedWindow.reload(), undefined, "Chrome returns nothing");
+  assert.strictEqual(devtools.inspectedWindow.reload({ ignoreCache: true }), undefined);
+  await tick();
+  assert.deepStrictEqual(seen, [{}, { ignoreCache: true }]);
+});
+
+test("inspectedWindow.reload reports a failed reload instead of hiding it", async () => {
+  const warnings = [];
+  const { devtools } = makeDevtools({
+    reloadInPage: async () => ({ ok: false, error: "Page.reload: no CDP session is attached" }),
+    logger: { warn: (message) => warnings.push(message) },
+  });
+  devtools.inspectedWindow.reload();
+  await tick();
+  assert.strictEqual(warnings.length, 1);
+  assert.match(warnings[0], /no CDP session is attached/);
 });
 
 test("inspectedWindow.eval: a host-side throw still yields the callback pair", async () => {

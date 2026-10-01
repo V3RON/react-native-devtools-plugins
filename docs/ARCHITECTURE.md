@@ -49,8 +49,8 @@ into the frontend's main world, never `require`d at runtime.
   verbatim. Injected transports/timers/logging (no Electron import) keep it unit-testable
   against a fake upstream (`tests/cdp-bridge.test.js`). `DEVTOOLS_CDP_BRIDGE=off` leaves
   the socket to an external relay.
-- `inspected-window.js` — `chrome.devtools.inspectedWindow.eval` as
-  `Runtime.evaluate` on that session, with the pure CDP → Chrome
+- `inspected-window.js` — `chrome.devtools.inspectedWindow.eval` / `.reload` as
+  `Runtime.evaluate` / `Page.reload` on that session, with the pure CDP → Chrome
   `[value, exceptionInfo]` mapping (`mapEvaluation`).
 - `extension-server.js` — registers the privileged custom scheme **`rozenite://`**
   mapping `rozenite://<extension-id>/<path>` → `extensions/<extension-id>/<path>`,
@@ -87,8 +87,8 @@ Any iframe loaded under `rozenite:` (hostname = extension id) gets, in order:
   `new Function(script)(0)`) — this defines `chrome.devtools.panels.create` etc. so the
   extension's devtools page can register panel tabs;
 - the **`chrome` namespace** assembled by `src/chrome-shim`, merged onto `window.chrome`
-  (its `devtools.inspectedWindow.eval` is wired to the async `DEVTOOLS_EVAL` IPC channel,
-  answered by `src/main/inspected-window.js`);
+  (its `devtools.inspectedWindow.eval` / `.reload` are wired to the async `DEVTOOLS_EVAL`
+  / `DEVTOOLS_RELOAD` IPC channels, answered by `src/main/inspected-window.js`);
 - currently also a raw `ipcRenderer` exposure (security debt — see
   [LIMITATIONS.md](LIMITATIONS.md)).
 

@@ -14,6 +14,8 @@
 //   evalInPage     — optional (docs/features/INSPECTED-WINDOW.md): host
 //                    implementation behind chrome.devtools.inspectedWindow.eval;
 //                    absent = honest isError.
+//   reloadInPage   — optional (same doc): host implementation behind
+//                    inspectedWindow.reload (CDP Page.reload).
 //
 // Transports and concrete backends are wired by the caller (the
 // extension-frame preload). Status per namespace: docs/api/CHROME-EXTENSION-APIS.md.
@@ -32,6 +34,7 @@ const createChromeNamespace = ({
   transport,
   onPanelCreated,
   evalInPage,
+  reloadInPage,
 }) => {
   // Shared mutable lastError holder — runtime exposes it as a live getter;
   // the messaging client sets/clears it around callback invocations.
@@ -69,7 +72,8 @@ const createChromeNamespace = ({
     // extension frame, matching Chrome (devtools page + panel pages alike);
     // panels.create is host-driven (docs/features/DEVTOOLS-PANELS.md),
     // inspectedWindow.eval is host-backed (docs/features/INSPECTED-WINDOW.md)
-    devtools: createDevtools({ extensionId, onPanelCreated, evalInPage }).namespace,
+    devtools: createDevtools({ extensionId, onPanelCreated, evalInPage, reloadInPage })
+      .namespace,
 
     // [STUB] inert host shell: no browser tab model here (docs/LIMITATIONS.md)
     tabs: createTabs(),

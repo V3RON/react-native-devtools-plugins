@@ -10,6 +10,7 @@ const {
   mapEvaluation,
   toEvaluateParams,
   createEvalInPage,
+  createReloadInPage,
   TIMEOUT_SLACK_MS,
 } = require("../src/main/inspected-window");
 
@@ -196,4 +197,35 @@ test("evalInPage: a timed-out command settles as isError", async () => {
   assert.strictEqual(exceptionInfo.isError, true);
   // Chrome's timeout + the bridge's slack (src/main/inspected-window.js).
   assert.match(exceptionInfo.value, new RegExp(`timed out after ${5 + TIMEOUT_SLACK_MS}ms`));
+});
+
+// ── inspectedWindow.reload -> Page.reload ───────────────────────────────────
+test("createReloadInPage maps Chrome's reload options onto Page.reload", async () => {
+  const calls = [];
+  const reloadInPage = createReloadInPage(async (method, params) => {
+    calls.push({ method, params });
+    return {};
+  });
+  assert.deepStrictEqual(await reloadInPage(), { ok: true });
+  assert.strictEqual(calls[0].method, "Page.reload");
+  assert.deepStrictEqual(calls[0].params, { ignoreCache: false });
+
+  await reloadInPage({ ignoreCache: true, injectedScript: "globalThis.x = 1" });
+  assert.deepStrictEqual(calls[1].params, {
+    ignoreCache: true,
+    scriptToEvaluateOnLoad: "globalThis.x = 1",
+  });
+
+  await reloadInPage({ injectedScript: 42, frameURL: "app://x" });
+  assert.deepStrictEqual(calls[2].params, { ignoreCache: false });
+});
+
+test("createReloadInPage reports failure instead of rejecting", async () => {
+  const reloadInPage = createReloadInPage(async () => {
+    throw new Error("Page.reload: no CDP session is attached");
+  });
+  assert.deepStrictEqual(await reloadInPage({}), {
+    ok: false,
+    error: "Page.reload: no CDP session is attached",
+  });
 });

@@ -139,11 +139,44 @@ const createEvalInPage =
 /** The dependency injected into src/chrome-shim/devtools.js (see above). */
 const evalInPage = createEvalInPage(sendCommand);
 
+/**
+ * `reloadInPage` bound to a command sender. Chrome's `inspectedWindow.reload()`
+ * maps onto CDP `Page.reload`, which RN's backend really implements
+ * (`jsinspector-modern/HostAgent.cpp`: `Page.reload` -> `onReload({ignoreCache,
+ * scriptToEvaluateOnLoad})`), so this is a genuine reload of the JS bundle, not a
+ * no-op. Chrome's `options.injectedScript` is the same idea as CDP's
+ * `scriptToEvaluateOnLoad`, so it is mapped rather than dropped.
+ *
+ * Chrome's signature has no callback, so there is no channel to report failure
+ * through: the caller (the shim) logs the reason instead of staying quiet.
+ *
+ * @param {(method: string, params: object, opts?: object) => Promise<object>} sendCommand
+ * @returns {(options?: object) => Promise<{ok: boolean, error?: string}>}
+ */
+const createReloadInPage =
+  (sendCommand) =>
+  async ({ ignoreCache = false, injectedScript } = {}) => {
+    const params = { ignoreCache: !!ignoreCache };
+    if (typeof injectedScript === "string") {
+      params.scriptToEvaluateOnLoad = injectedScript;
+    }
+    try {
+      await sendCommand("Page.reload", params);
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, error: error.message };
+    }
+  };
+
+const reloadInPage = createReloadInPage(sendCommand);
+
 module.exports = {
   mapEvaluation,
   toEvaluateParams,
   createEvalInPage,
+  createReloadInPage,
   evalInPage,
+  reloadInPage,
   FAILURE,
   TIMEOUT_SLACK_MS,
 };

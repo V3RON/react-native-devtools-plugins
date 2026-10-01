@@ -13,11 +13,12 @@ Per-namespace plans live in [../features/README.md](../features/README.md).
 - **`devtools.network`** — 🟡 synthetic + hardcoded bodies; must be rebuilt on the
   frontend's CDP `Network.*` model →
   [features/DEVTOOLS-NETWORK.md](../features/DEVTOOLS-NETWORK.md).
-- **`devtools.inspectedWindow`** — 🟨 `eval` is **real**: CDP `Runtime.evaluate`
-  (`returnByValue`, `awaitPromise`) over the shell's CDP bridge, Chrome's
-  `[value, exceptionInfo]` pair, works against Hermes; `frameURL` /
-  `useContentScriptContext` accepted-and-ignored, `reload` / `getResources` inert →
-  [features/INSPECTED-WINDOW.md](../features/INSPECTED-WINDOW.md).
+- **`devtools.inspectedWindow`** — 🟨 `eval` and `reload` are **real**: CDP
+  `Runtime.evaluate` (`returnByValue`, `awaitPromise`) and `Page.reload` over the
+  shell's CDP bridge, answering Chrome's `[value, exceptionInfo]` pair. `frameURL` /
+  `useContentScriptContext` accepted-and-ignored; `getResources` / `getSelectedNode`
+  inert → [features/INSPECTED-WINDOW.md](../features/INSPECTED-WINDOW.md). (Against a
+  real Hermes backend this is asserted by the sample panel, not yet run on a device.)
 
 ## B. Extension-foundation namespaces (used by *every* extension page)
 
