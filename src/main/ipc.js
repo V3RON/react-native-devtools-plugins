@@ -115,12 +115,12 @@ const makeFrameSender =
         throw new Error("frame gone");
       }
       // WebFrameMain.send addresses the principal we registered, which is the
-      // only form that is correct by construction here. Verified in a headless
-      // Electron 38 run with an out-of-process `rozenite://` iframe:
-      // `webContents.sendToFrame([webContents.id, event.frameId], …)` returns
-      // false and delivers NOTHING — that tuple is [processId, routingId], not
-      // [webContentsId, frameId], so the message went to a process that has no
-      // such frame. `frame.send(…)` is what lands.
+      // only form that is correct by construction here. Measured in a headless
+      // Electron 38 run with an out-of-process `rozenite://` iframe: addressing
+      // with `sendToFrame([webContents.id, event.frameId], …)` delivered NOTHING
+      // and threw nothing — that tuple is read as [processId, routingId], not
+      // [webContentsId, frameId], so the message went to a process with no such
+      // frame and the failure was silent. `frame.send(…)` is what lands.
       frame.send(channel, { kind, payload });
     } catch {
       // detached frame: retire it so pending legs/ports settle
