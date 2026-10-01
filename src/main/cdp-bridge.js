@@ -97,6 +97,7 @@ const createCdpBridge = (options = {}) => {
   let upstream = null;
   let server = null;
   let stopped = false;
+  let attachLoopRunning = false;
   let hostIdSeq = 0;
   let target = null;
   /** Messages from the frontend that could not go out yet (bounded). */
@@ -246,6 +247,20 @@ const createCdpBridge = (options = {}) => {
     });
 
   const attachLoop = async () => {
+    // One loop per bridge: start() after stop() must not stack loops, or two of
+    // them would race to open upstream sockets.
+    if (attachLoopRunning) {
+      return;
+    }
+    attachLoopRunning = true;
+    try {
+      await pollAndAttach();
+    } finally {
+      attachLoopRunning = false;
+    }
+  };
+
+  const pollAndAttach = async () => {
     while (!stopped) {
       if (!isOpen(upstream)) {
         const found = await findTarget();
