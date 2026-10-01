@@ -7,6 +7,7 @@ const { showContextMenu } = require("./context-menu");
 const extensionServer = require("./extension-server");
 const panelHost = require("./panel-host");
 const { createMessageRouter } = require("./message-router");
+const { evalInPage } = require("./inspected-window");
 const {
   STORE_INJECTED_SCRIPT,
   GET_INJECTED_SCRIPT,
@@ -28,6 +29,7 @@ const {
   RUNTIME_PORT_CLOSE,
   RUNTIME_DELIVER,
   EXT_PANEL_CREATE,
+  DEVTOOLS_EVAL,
 } = require("../shared/ipc");
 
 // ── runtime messaging router wiring ─────────────────────────────────────────
@@ -192,6 +194,22 @@ const registerIpcHandlers = () => {
       return { ok: false };
     }
     return { ok: panelHost.addPanel({ extensionId, title, pagePath }) };
+  });
+
+  // ── inspected window (docs/features/INSPECTED-WINDOW.md) ──────────────────
+  // chrome.devtools.inspectedWindow.eval -> CDP Runtime.evaluate over the
+  // frontend's debugger session (src/main/cdp-bridge.js). Same frame gate as
+  // panels.create: an unregistered frame gets a visible isError, never a
+  // fabricated value.
+  ipcMain.handle(DEVTOOLS_EVAL, (event, { expression, options } = {}) => {
+    if (!resolveFrameKey(event) || typeof expression !== "string") {
+      return { ok: false, error: "inspectedWindow.eval: unauthorized call" };
+    }
+    return evalInPage(expression, options || {}).then(({ value, exceptionInfo }) => ({
+      ok: true,
+      value,
+      exceptionInfo,
+    }));
   });
 };
 

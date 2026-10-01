@@ -33,6 +33,7 @@ const {
   RUNTIME_DELIVER,
   EVENTS,
   EXT_PANEL_CREATE,
+  DEVTOOLS_EVAL,
 } = require("../shared/ipc");
 
 const extensionId = window.location.hostname; // id == hostname: load-bearing
@@ -124,6 +125,24 @@ const chrome = createChromeNamespace({
   onPanelCreated: ({ title, pagePath }) => {
     ipcRenderer.invoke(EXT_PANEL_CREATE, { title, pagePath }).catch(() => {});
   },
+  // chrome.devtools.inspectedWindow.eval -> host -> CDP Runtime.evaluate
+  // (docs/features/INSPECTED-WINDOW.md, src/main/inspected-window.js).
+  // The host never throws across IPC: a missing CDP session comes back as
+  // ok:false with a message, which becomes Chrome's exceptionInfo.isError.
+  evalInPage: (expression, options) =>
+    ipcRenderer
+      .invoke(DEVTOOLS_EVAL, { expression, options })
+      .then((reply) =>
+        reply && reply.ok
+          ? { value: reply.value, exceptionInfo: reply.exceptionInfo || null }
+          : {
+              value: undefined,
+              exceptionInfo: {
+                isError: true,
+                value: (reply && reply.error) || "inspectedWindow.eval failed",
+              },
+            }
+      ),
 });
 
 // Router -> frame deliveries (messages, ports).

@@ -54,4 +54,9 @@ module.exports = {
   // ── shell-driven extension hosting (docs/features/DEVTOOLS-PANELS.md) ────
   /** ({title, pagePath}) from a devtools frame -> registers a frontend panel. */
   EXT_PANEL_CREATE: "ext-panel-create",
+
+  // ── inspected window (docs/features/INSPECTED-WINDOW.md) ──────────────────
+  /** ({expression, options}) from an extension frame -> Chrome's
+   *  [value, exceptionInfo] pair, answered from the CDP bridge. */
+  DEVTOOLS_EVAL: "devtools-eval",
 };
