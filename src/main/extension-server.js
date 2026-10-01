@@ -7,9 +7,17 @@
 // carries that extension's Content-Security-Policy (src/shared/csp.js), so an
 // extension page gets Chrome's `script-src 'self'` unless its own manifest
 // declares a policy.
+//
+// The handler is `protocol.handle`, not the deprecated `registerFileProtocol`:
+// a file-only handler can serve nothing that is not already on disk, and the
+// extension folder is a read-only install (dropping a folder in `extensions/` IS
+// the install step). The background worker's bootstrap document is synthesized
+// rather than shipped, so it has to be generated here — see
+// BACKGROUND_BOOTSTRAP_PATH below and docs/features/BACKGROUND-WORKER.md.
 const fs = require("fs");
 const path = require("path");
-const { protocol } = require("electron");
+const { pathToFileURL } = require("url");
+const { protocol, net } = require("electron");
 const config = require("./config");
 const {
   EXTENSION_SCHEME,
@@ -21,16 +29,23 @@ const { contentSecurityPolicyFor, unsafeReason } = require("../shared/csp");
 const EXTENSION_ID_RE = /^[A-Za-z0-9._-]+$/;
 const RESERVED_IDS = new Set([".", ".."]);
 
-// net::ERR_FILE_NOT_FOUND
-const FILE_NOT_FOUND = -6;
+// Reserved inner path: the synthesized background bootstrap document
+// (src/main/background-host.js asks for it). Reserved in BOTH directions — no
+// file inside an extension folder can be served under this path, and a real
+// folder named this cannot take the path either — see RESERVED_INNER_PATHS.
+const BACKGROUND_BOOTSTRAP_PATH = "__rozenite_background__";
+const RESERVED_INNER_PATHS = new Set([BACKGROUND_BOOTSTRAP_PATH]);
 
 /**
- * Resolve an extension-relative path, or null if it escapes the extension dir.
- * `path.resolve` collapses `..` before the containment check, and the
- * `root + path.sep` prefix rule means one extension can never name a sibling
- * extension's file (`/…/extensions/ab` does not start with `/…/extensions/a/`).
+ * The containment guard, in one place: the id must be a plausible folder name,
+ * the inner path must resolve to something inside that folder (`path.resolve`
+ * collapses `..` first, and the `root + path.sep` prefix rule means one
+ * extension can never name a sibling's file — `/…/extensions/ab` does not start
+ * with `/…/extensions/a/`), and the path must not be a reserved one.
+ *
+ * @returns {string|null} the absolute path, or null when the request is refused
  */
-const resolveExtensionFile = (extensionId, innerPath) => {
+const resolveInsideExtension = (extensionId, innerPath) => {
   if (!EXTENSION_ID_RE.test(extensionId) || RESERVED_IDS.has(extensionId)) {
     return null;
   }
@@ -41,6 +56,22 @@ const resolveExtensionFile = (extensionId, innerPath) => {
   }
   return target;
 };
+
+/**
+ * Resolve an extension-relative path to a FILE that may be served, or null.
+ * Identical containment rules to `resolveInsideExtension`, plus the reserved
+ * paths: a bootstrap request must never be answered from a file that happens to
+ * exist at that name, because then the generated document would be whatever the
+ * extension wrote there instead of what this server generated.
+ */
+const resolveExtensionFile = (extensionId, innerPath) => {
+  const normalized = String(innerPath || "").replace(/^\/+/, "");
+  if (RESERVED_INNER_PATHS.has(normalized)) {
+    return null;
+  }
+  return resolveInsideExtension(extensionId, normalized);
+};
+
 
 /**
  * The CSP to serve for one manifest. Chrome refuses to load an extension whose
@@ -91,7 +122,46 @@ const loadManifest = (extensionId) => {
   }
 };
 
+/**
+ * The bootstrap document a background worker loads, synthesized because the
+ * extension folder is a read-only install and its CSP (`script-src 'self'`)
+ * refuses any inline `<script>` this host might want to write. So the document's
+ * ONLY body content is one same-origin `src=` tag — same-origin script loads are
+ * exactly what `script-src 'self'` permits.
+ *
+ * `script` is already resolved and containment-checked by the caller; it is
+ * inserted URL-encoded and quoted, so a path with punctuation cannot break out
+ * of the attribute it lands in.
+ */
+const bootstrapDocument = ({ script, type }) =>
+  `<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <!-- Synthesized by the host (src/main/extension-server.js) for the extension's
+         background context. No inline script: this document is served under the
+         extension's own CSP, where 'self' permits src= and refuses inline. -->
+    <title>Background context</title>
+  </head>
+  <body>
+    <script src="${encodeURI(script)}"${type === "module" ? ' type="module"' : ""}></script>
+  </body>
+</html>
+`;
+
+/** Query part of a URL, without the fragment ("" when there is none). */
+const queryOf = (rawURL) => {
+  const index = String(rawURL).indexOf("?");
+  return index === -1 ? "" : String(rawURL).slice(index + 1).split("#")[0];
+};
+
 // Must run after app ready.
+//
+// `protocol.handle` replaces the deprecated `registerFileProtocol` because this
+// server now answers one request kind that has no file behind it: the background
+// bootstrap document. Guard semantics are unchanged and still asserted —
+// traversal blocked, no sibling-extension reads, reserved paths unreachable from
+// disk, unknown id 404 — and every response still carries that extension's CSP.
 const registerExtensionProtocol = ({ log = console } = {}) => {
   const policies = new Map(); // extensionId -> {value, source}
   const policyFor = (extensionId) => {
@@ -100,26 +170,90 @@ const registerExtensionProtocol = ({ log = console } = {}) => {
     }
     return policies.get(extensionId);
   };
-
-  protocol.registerFileProtocol(EXTENSION_SCHEME, (request, callback) => {
-    const parsed = parseExtensionURL(request.url);
-    const filePath =
-      parsed && resolveExtensionFile(parsed.extensionId, parsed.innerPath);
-    if (!filePath) {
-      callback({ error: FILE_NOT_FOUND });
-      return;
-    }
-    callback({
-      path: filePath,
-      headers: { "Content-Security-Policy": [policyFor(parsed.extensionId).value] },
+  const headersFor = (extensionId, extra = {}) => ({
+    ...extra,
+    "Content-Security-Policy": policyFor(extensionId).value,
+  });
+  const notFound = (extensionId, why) => {
+    log.warn(`[rozenite://] refused ${String(why)} (extension ${extensionId || "<none>"})`);
+    return new Response("Not found", {
+      status: 404,
+      headers: extensionId ? headersFor(extensionId) : {},
     });
+  };
+
+  const serveBootstrap = (extensionId, search) => {
+    // The script path arrives in the query string but is NEVER trusted from it:
+    // it goes through the same containment rules as a real file request, so a
+    // crafted `?script=../sibling/x.js` is refused exactly like a direct request
+    // to that file would be.
+    const requested = new URLSearchParams(search).get("script");
+    if (!requested) {
+      return notFound(extensionId, "bootstrap request without ?script=");
+    }
+    const filePath = resolveExtensionFile(extensionId, requested);
+    if (!filePath) {
+      return notFound(extensionId, `bootstrap script outside the extension: ${requested}`);
+    }
+    if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
+      return notFound(extensionId, `bootstrap script does not exist: ${requested}`);
+    }
+    const type = new URLSearchParams(search).get("type") === "module" ? "module" : "classic";
+    return new Response(
+      bootstrapDocument({ script: requested.replace(/^\/+/, ""), type }),
+      {
+        status: 200,
+        headers: headersFor(extensionId, { "Content-Type": "text/html; charset=utf-8" }),
+      }
+    );
+  };
+
+  const serveFile = async (extensionId, innerPath) => {
+    const filePath = resolveExtensionFile(extensionId, innerPath);
+    if (!filePath || !fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
+      return notFound(extensionId, `no such file: ${innerPath || "<empty>"}`);
+    }
+    // net.fetch (file://) so Chromium picks the MIME type: a module script with
+    // the wrong type is a hard load failure, and guessing here would be worse
+    // than the one `try` that follows.
+    try {
+      const upstream = await net.fetch(pathToFileURL(filePath).href);
+      const headers = new Headers(upstream.headers);
+      headers.set("Content-Security-Policy", policyFor(extensionId).value);
+      return new Response(upstream.body, { status: upstream.status, headers });
+    } catch (error) {
+      log.warn(`[rozenite://] net.fetch failed for ${filePath}: ${error.message}`);
+      try {
+        return new Response(fs.readFileSync(filePath), {
+          status: 200,
+          headers: headersFor(extensionId),
+        });
+      } catch (readError) {
+        return notFound(extensionId, `unreadable file: ${readError.message}`);
+      }
+    }
+  };
+
+  protocol.handle(EXTENSION_SCHEME, async (request) => {
+    const parsed = parseExtensionURL(String(request.url).split("?")[0].split("#")[0]);
+    if (!parsed) {
+      return notFound(null, `not a ${EXTENSION_SCHEME} URL`);
+    }
+    const innerPath = parsed.innerPath.replace(/^\/+/, "");
+    if (innerPath === BACKGROUND_BOOTSTRAP_PATH) {
+      return serveBootstrap(parsed.extensionId, queryOf(request.url));
+    }
+    return serveFile(parsed.extensionId, innerPath);
   });
 
   return policyFor;
 };
 
 module.exports = {
+  BACKGROUND_BOOTSTRAP_PATH,
+  bootstrapDocument,
   resolveExtensionFile,
+  resolveInsideExtension,
   loadManifest,
   policyForManifest,
   registerExtensionSchemePrivileges,
