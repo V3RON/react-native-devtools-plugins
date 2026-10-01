@@ -19,10 +19,11 @@
   would have been torn down in Chrome keeps running here. That is a superset for a devtools
   host and a divergence from Chrome's resource model at the same time.
 - Still missing from the extension model: content-script injection, a working
-  `action`/popup, options UI, `tabs`, `notifications`, `alarms`, a `chrome.permissions`
-  prompt. `action` and `notifications` exist as **registrable no-op shells** so that a worker
-  naming them at module scope can load at all; they show nothing and their events never fire
-  ([features/SMALL-SHIMS.md](features/SMALL-SHIMS.md)).
+  `action`/popup, options UI, `notifications`, `alarms`, a `chrome.permissions` prompt,
+  and a toolbar. `action` and `notifications` exist as **registrable shells** so that a
+  worker naming them at module scope can load at all
+  ([features/SMALL-SHIMS.md](features/SMALL-SHIMS.md)). What HAS arrived: `tabs` answers
+  with one synthetic tab for the inspected target rather than an empty list.
 - DevTools pages are only "loaded" as iframes; no real separation between devtools page
   and panel frames like Chrome has.
 
@@ -43,13 +44,33 @@
   ([features/DEVTOOLS-NETWORK.md](features/DEVTOOLS-NETWORK.md)).
 - Network history is a bounded ring (500 settled records, in-flight requests never dropped);
   an evicted record's body then honestly reports itself as unavailable rather than stale.
-- `chrome.tabs.*` is an **inert shell** (`query()` → `[]`, `create()` resolves `undefined` and
-  opens nothing, events never fire — `src/chrome-shim/tabs.js`), enough for Altair's
-  `tabs.query` consumers to render its monitor panel. The background worker runs
-  ([features/BACKGROUND-WORKER.md](features/BACKGROUND-WORKER.md)), so `runtime.onInstalled`
-  and `onStartup` now have a producer; making `tabs.create` actually open something is
-  outstanding. `runtime.sendMessage`/Ports between extension frames — including to and from
-  the worker — work ([features/RUNTIME-MESSAGING.md](features/RUNTIME-MESSAGING.md)).
+- `chrome.tabs` answers with **one synthetic tab standing for the inspected RN
+  target** (`src/chrome-shim/tabs.js`, [features/SMALL-SHIMS.md](features/SMALL-SHIMS.md)).
+  `query`/`get`/`update` all return that same tab under the id
+  `devtools.inspectedWindow.tabId` reports; its `url`/`title` come from `Target.getTargetInfo`
+  while a CDP session is attached, and fall back to Chrome's own `about:blank` + `""` when it
+  is not — with `status` and `windowId` left absent rather than guessed. That is **one tab
+  standing in for a whole browser**: there is no tab strip, no window model, and no second
+  tab, so a `windowId`/`groupId`/`title` query filter matches nothing by design.
+- **`chrome.tabs.sendMessage` has no receiver yet.** It resolves `undefined` with one console
+  line and is deliberately *not* routed into the extension's own runtime messaging: doing
+  that would let an extension message itself and treat the success as a page having
+  answered. Delivery arrives with content scripts
+  ([features/CONTENT-SCRIPTS.md](features/CONTENT-SCRIPTS.md), issue #5). Deviation from
+  Chrome, stated: Chrome fails this call with a connection error; this shell resolves
+  `undefined`, so a caller that only checks for a response value could read it as success —
+  the console line is what says otherwise.
+- **`chrome.tabs.create` opens nothing by default.** It returns a real descriptor (id +
+  resolved url, which is what unblocks Altair's `tabs.js`), plus a non-Chrome `openedVia`
+  field saying `"external"` / `"window"` / `null`. The open itself is
+  `DEVTOOLS_TABS_OPEN=none|external|window` and defaults to `none`, because both shipped
+  extensions call `create` from an automated handler (graphql's `onInstalled` opens a
+  marketing URL) and launching the user's real browser because a devtools session started is
+  a side effect nobody asked for.
+  The background worker runs ([features/BACKGROUND-WORKER.md](features/BACKGROUND-WORKER.md)),
+  so `runtime.onInstalled` and `onStartup` have a producer, and
+  `runtime.sendMessage`/Ports between extension frames — including to and from the worker —
+  work ([features/RUNTIME-MESSAGING.md](features/RUNTIME-MESSAGING.md)).
 - **`chrome.tabs.create` inside a worker without the `tabs` permission fails differently than
   in Chrome.** GraphQL Network Inspector declares `["webRequest","storage"]` and no `tabs`, and
   its `onInstalled` handler calls `chrome.tabs.create`. Chrome would not inject `chrome.tabs`

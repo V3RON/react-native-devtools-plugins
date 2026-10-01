@@ -25,17 +25,25 @@
 //                    ungated, which is what every unit test that predates
 //                    permission enforcement injects.
 //   onPermissionDenied — optional (reason, api) sink for the console/log
+//   getTargetInfo  — optional (docs/features/SMALL-SHIMS.md): what the host knows
+//                    about the inspected target, {attached, url, title}. Feeds
+//                    chrome.tabs' one synthetic tab. Absent = never attached, i.e.
+//                    the documented `about:blank` fallback.
+//   openTabIn / closeTabById — optional host capability behind tabs.create/remove.
+//                    Absent = nothing opens, and the returned tab says so with
+//                    `openedVia: null` rather than pretending to be a browser tab.
 //
 // Transports and concrete backends are wired by the caller (the
 // extension-frame preload). Status per namespace: docs/api/CHROME-EXTENSION-APIS.md.
 const { createEvent } = require("./event");
 const { createRuntime } = require("./runtime");
 const { createMessagingClient } = require("./messaging");
-const { createDevtools } = require("./devtools");
+const { createDevtools, tabIdFor } = require("./devtools");
 const { createTabs } = require("./tabs");
 const { createAction, createNotifications } = require("./browser-apis");
 const { createPermissionsApi } = require("./permissions-api");
 const { declaredPermissions } = require("../shared/permissions");
+const { buildExtensionURL } = require("../shared/protocol");
 const {
   gateCallbackNamespace,
   gateWebRequest,
@@ -52,6 +60,9 @@ const createChromeNamespace = ({
   evalInPage,
   reloadInPage,
   permissions,
+  getTargetInfo = () => ({ attached: false }),
+  openTabIn = null,
+  closeTabById = null,
   logger = console,
 }) => {
   // Shared mutable lastError holder — runtime exposes it as a live getter;
@@ -136,11 +147,29 @@ const createChromeNamespace = ({
       networkApi: networkBridge.network,
     }).namespace,
 
-    // [STUB] inert host shell: no browser tab model here (docs/LIMITATIONS.md).
+    // [REAL for one tab] `chrome.tabs` answers with the ONE tab this shell has: the
+    // inspected RN target, under the same id `devtools.inspectedWindow.tabId`
+    // reports, with url/title from the host's CDP target info and Chrome's
+    // `about:blank` + `""` fallback when no session is attached. `create` returns a
+    // real descriptor with an id and a resolved url (what Altair's tabs.js needs)
+    // and reports what it actually opened via `openedVia`; `sendMessage` stays an
+    // honest no-receivers answer until content scripts exist (issue #5).
     // Gated on the declared `tabs` permission (Chrome requires it): every method
     // keeps its shape and its promise/callback duality, and fails with
     // runtime.lastError when the permission is missing.
-    tabs: gateCallbackNamespace(createTabs(), {
+    tabs: gateCallbackNamespace(
+      createTabs({
+        // The SAME id chrome.devtools.inspectedWindow.tabId reports, so an
+        // extension that talks to both APIs is talking about one thing.
+        tabId: tabIdFor(extensionId),
+        getTarget: getTargetInfo,
+        resolveUrl: (innerPath) => buildExtensionURL(extensionId, innerPath),
+        openTab: openTabIn,
+        closeTab: closeTabById,
+        onUnsupported: (message) => logger.warn(`[chrome.tabs] ${message}`),
+        lastError,
+      }),
+      {
       api: "tabs",
       check: (api) => gate.check(api),
       setLastError,

@@ -45,6 +45,9 @@ const {
   NETWORK_GET_STATUS,
   NETWORK_GET_BODY,
   NETWORK_DELIVER,
+  TABS_TARGET_INFO,
+  TABS_OPEN,
+  TABS_CLOSE,
 } = require("../shared/ipc");
 
 const extensionId = window.location.hostname; // id == hostname: load-bearing
@@ -118,6 +121,11 @@ const networkBridge = createNetworkBridge({
     asNetworkCaller(() => ipcRenderer.invoke(NETWORK_GET_BODY, { requestId })),
 });
 
+// Same rule as the network reads for every other host-backed call: the host derives
+// this frame's identity from the registered principal, so nothing is asked before
+// RUNTIME_REGISTER resolves.
+const asRegisteredCaller = asNetworkCaller;
+
 // chrome.runtime messaging transport over IPC (docs/features/RUNTIME-MESSAGING.md).
 // Registration gates all traffic: until it resolves the frame is unknown to
 // the router (methods above still call it, so pending sends simply queue on
@@ -137,6 +145,10 @@ const transport = {
     registered.then(() => ipcRenderer.invoke(RUNTIME_PORT_CLOSE, { portId })),
 };
 
+// chrome.tabs' view of the inspected target, and the two things main can do that a
+// frame cannot (src/main/tab-host.js). Both are gated AGAIN in main from the host's
+// own grants, so a frame that ignored its RUNTIME_REGISTER reply gets neither the
+// target's url nor a launched window (docs/features/EXTENSION-MANAGEMENT.md).
 const chrome = createChromeNamespace({
   extensionId,
   getManifest,
@@ -147,6 +159,26 @@ const chrome = createChromeNamespace({
   storage,
   networkBridge,
   transport,
+  getTargetInfo: () =>
+    asRegisteredCaller(() => ipcRenderer.invoke(TABS_TARGET_INFO)).then((reply) =>
+      // A denial or a lost reply both mean the same thing to the shim: the host did
+      // not report a target, so the synthetic tab falls back to about:blank + "".
+      reply && reply.ok
+        ? { attached: Boolean(reply.attached), url: reply.url, title: reply.title }
+        : { attached: false }
+    ),
+  openTabIn: (details) =>
+    asRegisteredCaller(() =>
+      ipcRenderer.invoke(TABS_OPEN, {
+        url: details.url,
+        windowId: details.windowId,
+        active: details.active,
+      })
+    ).then((reply) => (reply && reply.ok ? { via: reply.via ?? null, handle: reply.handle } : { via: null })),
+  closeTabById: (handle) =>
+    asRegisteredCaller(() => ipcRenderer.invoke(TABS_CLOSE, { handle })).then(
+      (closed) => Boolean(closed)
+    ),
   // Declared permissions gate capability (docs/features/EXTENSION-MANAGEMENT.md).
   // The verdict this frame is gated on is the host's — RUNTIME_REGISTER read the
   // manifest from disk — so a page-world script cannot widen it by replacing

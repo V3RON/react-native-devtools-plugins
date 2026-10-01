@@ -71,4 +71,14 @@ module.exports = {
   NETWORK_GET_BODY: "network-get-body",
   /** main -> frame push: one request lifecycle step, or a navigated/status note. */
   NETWORK_DELIVER: "network-deliver",
+
+  // ── chrome.tabs (docs/features/SMALL-SHIMS.md) ──────────────────────────────
+  /** () -> what the host knows about the inspected target {attached, url, title}.
+   *  Gated on the frame's `tabs` grant, like the API itself. */
+  TABS_TARGET_INFO: "tabs-target-info",
+  /** ({url, windowId, active}) -> the shell's open policy applied to one URL;
+   *  resolves {via, handle} and is gated on the frame's `tabs` grant. */
+  TABS_OPEN: "tabs-open",
+  /** ({handle}) -> closes a window THIS host opened for a created tab. */
+  TABS_CLOSE: "tabs-close",
 };

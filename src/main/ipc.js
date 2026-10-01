@@ -18,6 +18,7 @@ const { evalInPage, reloadInPage } = require("./inspected-window");
 const { createNetworkService } = require("./network-service");
 const { sendCommand, onEvent, status: bridgeStatus } = require("./cdp-bridge");
 const { createPermissionGate, API_PERMISSIONS } = require("../shared/permissions");
+const tabHost = require("./tab-host");
 const {
   SHOW_CONTEXT_MENU,
   PREF_REGISTER,
@@ -44,6 +45,9 @@ const {
   NETWORK_GET_STATUS,
   NETWORK_GET_BODY,
   NETWORK_DELIVER,
+  TABS_TARGET_INFO,
+  TABS_OPEN,
+  TABS_CLOSE,
 } = require("../shared/ipc");
 
 // ── runtime messaging router wiring ─────────────────────────────────────────
@@ -399,6 +403,47 @@ const registerIpcHandlers = () => {
       return { available: false, error: "Network.getResponseBody: requestId is required." };
     }
     return networkService.getBody(requestId);
+  });
+  // ── chrome.tabs (docs/features/SMALL-SHIMS.md) ─────────────────────────────
+  // The frame's shim is already gated by its RUNTIME_REGISTER grants; these
+  // handlers enforce the same verdict from host state anyway, for the same reason
+  // the network handlers do: a frame that ignores the answer in its registration
+  // reply must still not be able to ask for the inspected target's url/title or
+  // launch a window. Identity from the frame, never from payload.
+  const tabsCaller = (event) => {
+    const key = resolveFrameKey(event);
+    if (!key) {
+      return false;
+    }
+    const frameGrants = grants.get(key) || {};
+    return frameGrants.tabs === true;
+  };
+
+  ipcMain.handle(TABS_TARGET_INFO, (event) => {
+    if (!tabsCaller(event)) {
+      // Not `{attached: false}`: that would be the shape of a truthful "nothing is
+      // attached", which is a claim about the app the caller has not earned.
+      return { ok: false, error: "tabs: permission 'tabs' is not declared" };
+    }
+    return tabHost.getTabHost().targetInfo();
+  });
+
+  ipcMain.handle(TABS_OPEN, (event, details = {}) => {
+    if (!tabsCaller(event)) {
+      return { ok: false, error: "tabs: permission 'tabs' is not declared" };
+    }
+    return tabHost
+      .getTabHost()
+      .open({ url: details.url, windowId: details.windowId, active: details.active })
+      .then((outcome) => ({ ok: true, ...outcome }))
+      .catch((error) => ({ ok: false, error: error && error.message }));
+  });
+
+  ipcMain.handle(TABS_CLOSE, async (event, { handle } = {}) => {
+    if (!tabsCaller(event)) {
+      return false;
+    }
+    return tabHost.getTabHost().close(handle);
   });
 };
 
