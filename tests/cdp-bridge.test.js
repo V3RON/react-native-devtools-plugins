@@ -167,7 +167,15 @@ const freePort = () =>
     probe.once("error", reject);
   });
 
-const waitFor = async (predicate, { timeoutMs = 4000, intervalMs = 10 } = {}) => {
+// Upper bound only: every predicate returns the moment it holds, so a generous
+// deadline costs nothing when things work and only buys tolerance when the
+// machine is busy. 4000ms was observed to false-fail the re-attach test inside a
+// full `npm test` (three Electron harnesses share the suite): a re-attach needs a
+// /json/list fetch plus a WebSocket handshake — two round trips through an event
+// loop other processes are starving. The re-attach's own assertions (a NEW
+// upstream socket, the relay still working afterwards) are untouched, so this
+// bound never lets a wrong behavior pass.
+const waitFor = async (predicate, { timeoutMs = 15000, intervalMs = 10 } = {}) => {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     if (await predicate()) return;
