@@ -1,7 +1,7 @@
 # `InspectorFrontendHost.*` gap analysis
 
 Full real surface per upstream `InspectorFrontendHostAPI.ts`. Implementation today:
-`preload.js` (main frame). Status legend: [../README.md](../README.md) +
+`src/preload/frontend-host.js` (main frame). Status legend: [../README.md](../README.md) +
 [README.md](README.md) (🔧/🔌/⛔ marks).
 
 ## Key upstream fact: partial coverage is survivable
@@ -52,8 +52,8 @@ stub — see "Generate, don't hand-write" in [../ROADMAP.md](../ROADMAP.md).
 | Method | Status | Electron wiring |
 | --- | --- | --- |
 | `setInjectedScriptForOrigin(origin, script)` | ✅ repurposed as the **extension-API injection channel** | keep, but make async and scoped (see [../LIMITATIONS.md](../LIMITATIONS.md)) |
-| `sendMessageToBackend(message)` | ✅ no-op | 🔌 **important**: the frontend→backend CDP escape hatch. Dispatch channel is ready to carry the replies — remaining blocker is pinning the fork's response contract, then wiring the CDP socket ([features/DISPATCH-CHANNEL.md](../features/DISPATCH-CHANNEL.md)) |
-| `events` + `InspectorFrontendAPI` dispatcher (`dispatchMessage`, `dispatchMessageChunk`, `showPanel`, `setInspectedTabId`, `contextMenuItemSelected`, `savedURL`, `revealSourceLine`, `keyEventUnhandled`, `colorThemeChanged`, `reloadInspectedPage`, …) | 🟨 dispatch channel **live**: main dispatches to `window.InspectorFrontendAPI[name]` (upstream impl forwards onto the events EventTarget). First consumer: context menus | remaining producers/consumers (`showPanel`, `dispatchMessage`, …) come with the APIs that need them → [features/DISPATCH-CHANNEL.md](../features/DISPATCH-CHANNEL.md) |
+| `sendMessageToBackend(message)` | ✅ no-op, **correctly** | not a gap: with `?ws=` in the frontend URL the frontend build selects `WebSocketConnection`, and only `MainConnection` calls this method, so it is structurally dead here. The host reaches the backend on that socket itself → [src/main/cdp-bridge.js](../../src/main/cdp-bridge.js) ([features/DISPATCH-CHANNEL.md](../features/DISPATCH-CHANNEL.md)) |
+| `events` + `InspectorFrontendAPI` dispatcher (`dispatchMessage`, `dispatchMessageChunk`, `showPanel`, `setInspectedTabId`, `contextMenuItemSelected`, `savedURL`, `revealSourceLine`, `keyEventUnhandled`, `colorThemeChanged`, `reloadInspectedPage`, …) | 🟨 dispatch channel **live**: main dispatches to `window.InspectorFrontendAPI[name]` (upstream impl forwards onto the events EventTarget). First consumer: context menus | `dispatchMessage`/`dispatchMessageChunk` only matter to `MainConnection`, which our `?ws=` URL never builds — dead like `sendMessageToBackend`. Remaining producers (`showPanel`, …) come with the APIs that need them → [features/DISPATCH-CHANNEL.md](../features/DISPATCH-CHANNEL.md) |
 | `inspectedURLChanged(url)` | ✅ sets title | fine |
 | `inspectElementCompleted()` | ✅ | fine |
 

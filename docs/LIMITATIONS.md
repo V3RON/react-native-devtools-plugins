@@ -29,17 +29,31 @@
   `runtime.sendMessage`/Ports between extension frames DO work now
   ([features/RUNTIME-MESSAGING.md](features/RUNTIME-MESSAGING.md)).
 - `chrome.devtools.panels.create` is real and shell-driven
-  ([features/DEVTOOLS-PANELS.md](features/DEVTOOLS-PANELS.md)); `devtools.inspectedWindow.eval`,
-  `devtools.network.getHAR` etc. are inert stubs awaiting the dispatch channel.
+  ([features/DEVTOOLS-PANELS.md](features/DEVTOOLS-PANELS.md)), and so is
+  `devtools.inspectedWindow.eval` (CDP `Runtime.evaluate` over the shell's CDP bridge —
+  see [features/INSPECTED-WINDOW.md](features/INSPECTED-WINDOW.md) for the fidelity and
+  the honest-degradation table). `devtools.network.getHAR` and the rest of
+  `devtools.network` are still inert stubs, and `inspectedWindow.reload` /
+  `getResources` / `getSelectedNode` answer with documented no-data.
+- `inspectedWindow.eval` only answers when the shell's CDP bridge actually has a session:
+  no Metro, no debuggable app, or `DEVTOOLS_CDP_BRIDGE=off` without an external relay all
+  surface as `exceptionInfo.isError` with the host's reason. Nothing is answered from
+  cache or invented.
 
 **Host/frontend coupling**
 
 - Depends on a **private patched RN DevTools fork** served from a Metro dev server at a
   hardcoded URL/port; nothing is packaged. Stock RN DevTools + this shell = no extension
   support.
-- CDP connection fixed at `ws=localhost:9223`; `src/tools/fake-cdp.js` proxies exactly one
-  Chrome tab and `src/tools/rn-cdp.js` exactly one RN app target — no multi-target/device
-  multiplexing.
+- The frontend's CDP endpoint is fixed at `?ws=localhost:<port>` (default 9223) and the
+  bridge keeps **exactly one** upstream debugger session: one RN app target at a time, no
+  multi-target/device multiplexing (`src/tools/fake-cdp.js` likewise proxies exactly one
+  Chrome tab). Target *selection* is filterable (`DEVTOOLS_APP_FILTER` /
+  `DEVTOOLS_DEVICE_FILTER`), multiplexing is not.
+- Because the frontend URL carries `?ws=`, the frontend build talks to the socket itself
+  and `InspectorFrontendHost.sendMessageToBackend` is never called — that Chrome escape
+  hatch is structurally unavailable here, and the host reaches the backend on the socket
+  instead ([features/DISPATCH-CHANNEL.md](features/DISPATCH-CHANNEL.md)).
 
 **Security & robustness**
 

@@ -4,7 +4,7 @@
 | --- | --- |
 | **Status** | ❌ not implemented (design agreed) |
 | **Tier** | 2 — but strategically the most important Tier-2 item |
-| **Blocked by** | [DISPATCH-CHANNEL.md](DISPATCH-CHANNEL.md), [RUNTIME-MESSAGING.md](RUNTIME-MESSAGING.md) |
+| **Blocked by** | [RUNTIME-MESSAGING.md](RUNTIME-MESSAGING.md) (real now); the CDP transport is real too ([src/main/cdp-bridge.js](../../src/main/cdp-bridge.js)) |
 
 ## Why this matters
 

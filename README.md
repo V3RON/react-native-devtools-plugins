@@ -16,23 +16,29 @@ npm run app:install         # the Expo app (app/)
 # 1. terminal A — Metro for the app, with the patched frontend enabled
 npm run app:start           # = WITH_ROZENITE=true expo start (port 8081)
 
-# 2. terminal B — CDP bridge + Electron shell
-npm run rn-cdp -- --app devtools-poc   # frontend ⇄ app bridge (port 9223)
-npm start                              # opens the DevTools window
+# 2. npm start — the shell attaches to Metro's debugger itself (no separate relay needed)
+npm start                   # opens the DevTools window
 ```
 
 Then in the app (Expo Go / dev build / simulator): press a button — the request should
 show up in the Rozenite Network Activity panel and in the GraphQL Network Inspector /
-Altair panels. `app/` wires `@rozenite/metro` (serves the patched frontend this shell
-loads, incl. `rozenite/rn_fusebox.html`) and `@rozenite/network-activity-plugin`
-(network capture).
+Altair panels; the sample extension's **Osudio** panel asserts
+`chrome.devtools.inspectedWindow.eval` against the live app. `app/` wires
+`@rozenite/metro` (serves the patched frontend this shell loads, incl.
+`rozenite/rn_fusebox.html`) and `@rozenite/network-activity-plugin` (network capture).
 
 Notes:
 
 - `app/` needs a *debuggable* connection to Metro (dev build; Dev Menu →
   "Connect to debugger" if the app doesn't show up in Metro's `/json/list`).
-- Ports: `rn-cdp` supports `--metro-port` / `--listen-port`; the shell's frontend URL is
-  `DEVTOOLS_FRONTEND_URL` (default `http://127.0.0.1:8081/rozenite/rn_fusebox.html?ws=localhost:9223`).
+- The shell runs the CDP bridge in-process (`src/main/cdp-bridge.js`): it discovers the
+  app through Metro's `/json/list` and answers on the frontend's `ws` port. Knobs:
+  `DEVTOOLS_METRO_HOST` / `DEVTOOLS_METRO_PORT`, `DEVTOOLS_APP_FILTER` /
+  `DEVTOOLS_DEVICE_FILTER`, `DEVTOOLS_CDP_PORT`.
+- Want the relay outside the shell (or a Chrome tab as the target)? Set
+  `DEVTOOLS_CDP_BRIDGE=off` and run `npm run rn-cdp` (RN app) or `npm run fake-cdp`
+  (Chrome tab) on that port. The shell's frontend URL is `DEVTOOLS_FRONTEND_URL`
+  (default `http://127.0.0.1:8081/rozenite/rn_fusebox.html?ws=localhost:9223`).
 
 ## What's in the box
 
@@ -47,12 +53,13 @@ Notes:
   - `extensions/graphql/` — GraphQL Network Inspector (unpacked Chrome Web Store build)
   - `extensions/altair/` — Altair GraphQL Client (unpacked Chrome Web Store build)
 - `src/tools/fake-cdp.js` — standalone CDP proxy that points the frontend at a real Chrome tab
-  instead of an RN app (`npm run fake-cdp`, needs Chrome with `--remote-debugging-port=9222`).
-- `src/tools/rn-cdp.js` — the RN sibling: attaches the frontend to a real React Native app
-  debuggable through Metro's inspector proxy (`npm run rn-cdp`, needs the app connected to
-  Metro; `--metro-port`, `--app`, `--device` filters). Works against any RN app, `app/`
-  included; against `../expo56` the same recipe applies (`WITH_ROZENITE=true npx expo start`
-  there, then `npm run rn-cdp && npm start` here).
+  instead of an RN app (`npm run fake-cdp`, needs Chrome with `--remote-debugging-port=9222`;
+  run the shell with `DEVTOOLS_CDP_BRIDGE=off` so the port is free).
+- `src/tools/rn-cdp.js` — the RN sibling, now a CLI over the shell's own
+  `src/main/cdp-bridge.js`. Only needed to run the relay outside the shell
+  (`DEVTOOLS_CDP_BRIDGE=off npm start` + `npm run rn-cdp`); `--metro-port`, `--app`,
+  `--device` filters. Against `../expo56` the same recipe applies (`WITH_ROZENITE=true
+  npx expo start` there, then `DEVTOOLS_METRO_PORT=<port> npm start` here).
 
 ## Repository layout
 

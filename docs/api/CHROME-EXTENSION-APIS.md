@@ -13,9 +13,10 @@ Per-namespace plans live in [../features/README.md](../features/README.md).
 - **`devtools.network`** — 🟡 synthetic + hardcoded bodies; must be rebuilt on the
   frontend's CDP `Network.*` model →
   [features/DEVTOOLS-NETWORK.md](../features/DEVTOOLS-NETWORK.md).
-- **`devtools.inspectedWindow`** — ❌; `eval` → CDP `Runtime.evaluate`
-  (`returnByValue`, `awaitPromise`), works great against Hermes; `frameURL` degrades;
-  `getResources` → `Debugger.getScriptParsed` →
+- **`devtools.inspectedWindow`** — 🟨 `eval` is **real**: CDP `Runtime.evaluate`
+  (`returnByValue`, `awaitPromise`) over the shell's CDP bridge, Chrome's
+  `[value, exceptionInfo]` pair, works against Hermes; `frameURL` /
+  `useContentScriptContext` accepted-and-ignored, `reload` / `getResources` inert →
   [features/INSPECTED-WINDOW.md](../features/INSPECTED-WINDOW.md).
 
 ## B. Extension-foundation namespaces (used by *every* extension page)
