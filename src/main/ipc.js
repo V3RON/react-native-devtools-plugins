@@ -76,6 +76,35 @@ const principals = new Map();
 // ignores the answer in its RUNTIME_REGISTER reply still gets no data.
 const grants = new Map();
 
+// Registered extension frames the host wants watched beyond the router's own
+// bookkeeping (src/main/background-host.js: a background context has to hear
+// about its extension's lifecycle the moment it registers). Observers get a
+// read-only view of the frame the host verified, and cannot change routing.
+const frameObservers = new Set();
+
+/**
+ * Watch router-frame registrations. Called with the frame descriptor plus the
+ * frame's own `send` (the same closure the router pushes messages through), so a
+ * legitimate delivery needs no privileged channel. Returns an unsubscribe.
+ *
+ * @param {(frame: {extensionId: string, key: string, url: string, send: function}) => void} observer
+ */
+const subscribeRouterFrames = (observer) => {
+  frameObservers.add(observer);
+  return () => frameObservers.delete(observer);
+};
+
+const notifyFrameObservers = (descriptor) => {
+  for (const observer of [...frameObservers]) {
+    try {
+      observer(descriptor);
+    } catch (error) {
+      // A broken observer must not cost the extension its registration.
+      console.error(`[extensions] frame observer failed: ${error && error.message}`);
+    }
+  }
+};
+
 /**
  * The declared permissions a frame's extension holds, decided in main from the
  * manifest on disk — never from anything the frame sends. This matters: the
@@ -205,6 +234,12 @@ const registerIpcHandlers = () => {
     const granted = grantedPermissions(event);
     grants.set(key, granted);
     router.registerFrame({
+      key,
+      extensionId,
+      url: frame.url,
+      send: makeFrameSender(key, event.sender, frame),
+    });
+    notifyFrameObservers({
       key,
       extensionId,
       url: frame.url,
@@ -362,4 +397,4 @@ const registerIpcHandlers = () => {
   });
 };
 
-module.exports = { registerIpcHandlers };
+module.exports = { registerIpcHandlers, subscribeRouterFrames };

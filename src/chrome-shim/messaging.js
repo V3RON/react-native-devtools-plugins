@@ -10,7 +10,7 @@
 //   portClose({portId})          -> Promise
 //
 // Incoming deliveries arrive via onDelivery({kind, payload}) with kinds:
-//   message | port-connect | port-message | port-disconnect.
+//   lifecycle | message | port-connect | port-message | port-disconnect.
 //
 // Chrome contract rules honored here:
 //   - promise AND callback dual style (callback form returns undefined);
@@ -191,6 +191,21 @@ const createMessagingClient = ({ extensionId, transport, runtimeEvents, lastErro
   // ── incoming deliveries from the host ────────────────────────────────────
   const handleDelivery = ({ kind, payload }) => {
     switch (kind) {
+      case "lifecycle": {
+        // The host knows an extension was just installed/updated, or that this is
+        // a plain launch (docs/features/BACKGROUND-WORKER.md). Chrome's arguments:
+        // onInstalled gets a detail object, onStartup gets none.
+        const reason = (payload && payload.reason) || "startup";
+        if (reason === "install" || reason === "update" || reason === "chrome_update") {
+          runtimeEvents.onInstalled._fire({
+            reason,
+            previousVersion: (payload && payload.previousVersion) || null,
+          });
+        } else {
+          runtimeEvents.onStartup._fire();
+        }
+        break;
+      }
       case "message":
         handleInboundMessage(payload);
         break;

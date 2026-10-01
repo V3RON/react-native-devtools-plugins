@@ -44,7 +44,7 @@ module.exports = {
   RUNTIME_PORT_POST: "runtime-port-post",
   /** ({portId}) -> Port close relay. */
   RUNTIME_PORT_CLOSE: "runtime-port-close",
-  /** main -> frame push: {kind: message|connect|port-message|port-disconnect}. */
+  /** main -> frame push: {kind: lifecycle|message|connect|port-message|port-disconnect}. */
   RUNTIME_DELIVER: "runtime-deliver",
 
   // ── shell-driven extension hosting (docs/features/DEVTOOLS-PANELS.md) ────
