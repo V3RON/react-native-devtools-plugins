@@ -91,12 +91,24 @@ const scheduleFor = (alarmInfo, now) => {
  * @param {() => number} [deps.now] epoch ms
  * @param {(ms: number, fn: () => void) => any} deps.setTimer
  * @param {(handle: any) => void} deps.clearTimer
+ * @param {number|(() => number)} [deps.clockScale] host-provided multiplier that SHORTENS every
+ *        delay (src/main/config.js explains why the host, not the frame, decides it).
+ *        Validation still uses Chrome's real floors, so an extension is judged as
+ *        Chrome would judge it; only the wait is shorter.
  */
 const createAlarms = ({
   now = () => Date.now(),
   setTimer = (ms, fn) => setTimeout(fn, ms),
   clearTimer = (handle) => clearTimeout(handle),
+  clockScale = 1,
 } = {}) => {
+  // The frame learns the host's clock scale from its RUNTIME_REGISTER reply, which
+  // can land after this namespace is built, so it is read per arming rather than
+  // captured once.
+  const scale = () => {
+    const value = typeof clockScale === "function" ? clockScale() : clockScale;
+    return Number.isFinite(value) && value > 0 ? value : 1;
+  };
   const alarms = new Map(); // name -> {name, when, periodMs, periodInMinutes, handle}
   const onAlarm = createEvent();
 
@@ -110,7 +122,7 @@ const createAlarms = ({
   /** Arm the next occurrence of `alarm`, honouring its own period. */
   const arm = (alarm) => {
     const delay = Math.max(0, alarm.when - now());
-    alarm.handle = setTimer(delay, () => {
+    alarm.handle = setTimer(delay / scale(), () => {
       const firedAt = alarm.when;
       onAlarm._fire({
         name: alarm.name,
@@ -214,10 +226,14 @@ const createAlarms = ({
         callback
       ),
     clearAll: (callback) => promiseOrCallback(() => clearAllAlarm(), callback),
+
+    // ── NOT part of chrome.alarms: the shim's own hooks, `_`-prefixed so the
+    // permission gate (src/chrome-shim/permission-gate.js) keeps them out of the
+    // exposed namespace. The raw object is what a caller reaches.
     /** The context is going away: nothing may fire afterwards. */
-    cancelAll: clearAllAlarm,
+    _cancelAll: clearAllAlarm,
     /** How many alarms are armed — for the caller that has to report honestly. */
-    size: () => alarms.size,
+    _size: () => alarms.size,
   };
 };
 

@@ -44,9 +44,19 @@ const tabsOpenPolicy = () => {
   return TABS_OPEN_POLICIES.includes(raw) ? raw : "none";
 };
 
-// Alarms' floor, in ms, for the shim's timers (src/chrome-shim/alarms.js). A test
-// drives the shim with its own fake timers; this only scales what a real extension
-// schedules, and Chrome's own 30 s minimum is what the shim validates against.
+// How fast an extension's `chrome.alarms` timers run, as a multiplier on the real
+// delay (src/chrome-shim/alarms.js). 1 = real time, which is what a user gets.
+//
+// It exists because a headless test cannot wait 30 s for Chrome's own minimum alarm
+// delay, and faking the shim's clock inside the extension context would test nothing
+// about the path this shell actually uses. The value is decided HERE, in main, and
+// handed to each context through its RUNTIME_REGISTER reply — the frame never reads
+// the environment itself, so a page cannot notice or influence it.
+const alarmClockScale = () => {
+  const value = Number(process.env.DEVTOOLS_ALARM_CLOCK_SCALE);
+  return Number.isFinite(value) && value > 0 ? value : 1;
+};
+
 module.exports = {
   repoRoot,
 

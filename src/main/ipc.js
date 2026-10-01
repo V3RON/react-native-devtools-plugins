@@ -19,6 +19,9 @@ const { createNetworkService } = require("./network-service");
 const { sendCommand, onEvent, status: bridgeStatus } = require("./cdp-bridge");
 const { createPermissionGate, API_PERMISSIONS } = require("../shared/permissions");
 const tabHost = require("./tab-host");
+const notificationHost = require("./notification-host");
+const { getContextRegistry } = require("./context-registry");
+const config = require("./config");
 const {
   SHOW_CONTEXT_MENU,
   PREF_REGISTER,
@@ -48,6 +51,9 @@ const {
   TABS_TARGET_INFO,
   TABS_OPEN,
   TABS_CLOSE,
+  NOTIFICATION_SHOW,
+  NOTIFICATION_CLEAR,
+  NOTIFICATION_PERMISSION,
 } = require("../shared/ipc");
 
 // ── runtime messaging router wiring ─────────────────────────────────────────
@@ -213,6 +219,10 @@ const registerIpcHandlers = () => {
   unregisterRouterFrame = (key) => {
     principals.delete(key);
     grants.delete(key);
+    // A context that goes away stops being a target for host events. Without this a
+    // notification click would be pushed into a detached frame (the registry's own
+    // send throws for that, but the id would stay owned forever).
+    getContextRegistry().unregister(key);
     router.unregisterFrame(key);
     // A frame that goes away also stops being a network subscriber; the model
     // stops asking the backend for Network events once no frame wants them.
@@ -235,6 +245,12 @@ const registerIpcHandlers = () => {
     }
     const key = `${event.sender.id}:${event.frameId}`;
     principals.set(key, frame);
+    // Reachability registry (src/main/context-registry.js): the same `send` closure
+    // the router gets, kept so a host-produced, context-owned event — a system
+    // notification the user clicked — can go to the ONE context that created it,
+    // which is what Chrome does and what the router (fan-out to every frame of the
+    // extension) is not.
+    getContextRegistry().register({ frameKey: key, extensionId, send: makeFrameSender(key, event.sender, frame) });
     // Which declared permissions this frame's extension has, decided from the
     // manifest on disk and handed back once, at registration. The frame's shim
     // uses it for lastError reporting; the network handlers below enforce the
@@ -255,7 +271,10 @@ const registerIpcHandlers = () => {
       send: makeFrameSender(key, event.sender, frame),
     });
     event.sender.once("destroyed", () => unregisterRouterFrame(key));
-    return { ok: true, granted };
+    // `alarmClockScale` is decided here rather than read in the frame: a page-world
+    // script must not be able to see or influence the host's test configuration
+    // (src/main/config.js explains what the value is for).
+    return { ok: true, granted, alarmClockScale: config.alarmClockScale };
   });
 
   const registeredHandle = (channel, handler) =>
@@ -419,6 +438,16 @@ const registerIpcHandlers = () => {
     return frameGrants.tabs === true;
   };
 
+  /** The calling frame's key when its extension declares `permission`, else false. */
+  const gatedFrameKey = (event, permission) => {
+    const key = resolveFrameKey(event);
+    if (!key) {
+      return null;
+    }
+    const frameGrants = grants.get(key) || {};
+    return frameGrants[permission] === true ? key : null;
+  };
+
   ipcMain.handle(TABS_TARGET_INFO, (event) => {
     if (!tabsCaller(event)) {
       // Not `{attached: false}`: that would be the shape of a truthful "nothing is
@@ -437,6 +466,43 @@ const registerIpcHandlers = () => {
       .open({ url: details.url, windowId: details.windowId, active: details.active })
       .then((outcome) => ({ ok: true, ...outcome }))
       .catch((error) => ({ ok: false, error: error && error.message }));
+  });
+
+  // ── chrome.notifications (docs/features/SMALL-SHIMS.md) ────────────────────
+  // The `notifications` permission is enforced HERE as well as in the frame's gate:
+  // a frame that ignored its RUNTIME_REGISTER reply must not be able to raise a
+  // system notification. The OWNER is this event's own frame key, which main derives
+  // from the frame — a payload can never name a context to receive a click.
+  ipcMain.handle(NOTIFICATION_SHOW, (event, details = {}) => {
+    const key = gatedFrameKey(event, "notifications");
+    if (!key) {
+      return { ok: false, error: "notifications: permission 'notifications' is not declared" };
+    }
+    return notificationHost
+      .getNotificationHost()
+      .show({
+        frameKey: key,
+        id: details.id,
+        title: details.title,
+        message: details.message,
+        silent: details.silent,
+        iconUrl: details.iconUrl,
+      })
+      .catch((error) => ({ ok: false, error: (error && error.message) || "notification failed" }));
+  });
+
+  ipcMain.handle(NOTIFICATION_CLEAR, (event, { id } = {}) => {
+    if (!gatedFrameKey(event, "notifications")) {
+      return false;
+    }
+    return notificationHost.getNotificationHost().clear({ notificationId: id });
+  });
+
+  ipcMain.handle(NOTIFICATION_PERMISSION, (event) => {
+    if (!gatedFrameKey(event, "notifications")) {
+      return "unspecifed";
+    }
+    return notificationHost.getNotificationHost().permissionLevel();
   });
 
   ipcMain.handle(TABS_CLOSE, async (event, { handle } = {}) => {

@@ -44,12 +44,25 @@ const SETTLE_MS = Number(arg("settle") || 900);
 const withBackgroundHost = ["on", "true", "1"].includes(arg("background-host"));
 // Which extension id's CSP to report in the `harness` line.
 const reportedExtensionId = arg("extension-id") || "probe.local";
+// The chrome.notifications backend, chosen per run:
+//   fake   (default) — RECORDS the show and raises nothing. No click, no close.
+//   click            — records, then scripts a user who clicks and dismisses it, so a
+//                      worker's notifications.onClicked can be observed end to end.
+//   deny             — records AND fails every show: the "nothing was shown, so no id
+//                      is named" path.
+//   real             — Electron's own Notification. NO TEST USES IT: a suite that
+//                      raises a real notification on the user's machine is not a suite.
+// `fake` is the default so every pre-existing run of this harness stays unchanged.
+const notifierMode = (arg("notifier") || "fake").toLowerCase();
+// Compress the background context's alarm clock (src/main/config.js). 1 = real time.
+const alarmClockScale = Number(arg("alarm-clock-scale") || "1");
 
 // Must precede requiring config: it captures DEVTOOLS_EXTENSIONS_DIR at module
 // load and the file server resolves against it. Production code unchanged,
 // pointed at the caller's extensions dir.
 process.env.DEVTOOLS_EXTENSIONS_DIR = extensionsDir;
 process.env.DEVTOOLS_CDP_BRIDGE = "off";
+process.env.DEVTOOLS_ALARM_CLOCK_SCALE = String(alarmClockScale);
 
 // Keep electron-store (and every other userData writer) inside the test tree.
 const userDataDir = arg("user-data-dir");
@@ -63,6 +76,7 @@ const { frontendPreferences } = require("../src/main/frame-security");
 const config = require("../src/main/config");
 const { createBackgroundHost } = require("../src/main/background-host");
 const { createInstallState } = require("../src/main/install-state");
+const notificationHost = require("../src/main/notification-host");
 
 // Production privileges, once, before ready.
 production.registerExtensionSchemePrivileges();
@@ -82,6 +96,50 @@ app
     // src/main/index.js does for electron-store's renderer adapter.
     Store.initRenderer();
     registerIpcHandlers();
+
+    // chrome.notifications: a RECORDING notifier, so this suite never raises a real
+    // system notification (the rule the whole harness runs under). It behaves like
+    // the platform: it records what was asked for, and then hands back the click and
+    // close callbacks the OS would call — the test decides whether a click happens,
+    // so `onClicked` firing in a worker is evidence about the DELIVERY path, not a
+    // notification this process invented.
+    //
+    // `--notifier=deny` additionally makes every show FAIL, which is how the "nothing
+    // was shown, so no id is named" path is observed. Electron's own notifier is
+    // installed only by a run that asks for it with `--notifier=real`, and no test
+    // does (asserted in tests/notifications-shim.test.js).
+    if (notifierMode !== "real") {
+      const deny = notifierMode === "deny";
+      const scriptedUser = notifierMode === "click";
+      const live = new Map();
+      const fakeNotifier = async (notification, handlers) => {
+        note({
+          kind: "notification-show",
+          id: notification.id,
+          title: notification.title,
+          message: notification.message,
+          silent: notification.silent,
+        });
+        if (deny) {
+          return "fake notifier refusing (test condition)";
+        }
+        live.set(notification.id, handlers);
+        if (scriptedUser) {
+          // The harness plays the user. The shell only ever forwards what this
+          // backend calls, so a click observed in a worker is evidence about the
+          // delivery path — never a click the shell invented.
+          setTimeout(() => handlers.onClick(), 60);
+          setTimeout(() => handlers.onClose(), 160);
+        }
+        return null;
+      };
+      fakeNotifier.hide = (id) => live.delete(id);
+      notificationHost.attachNotificationHost({
+        notifier: fakeNotifier,
+        permissionLevel: () => "granted",
+      });
+    }
+
     const policyFor = production.registerExtensionProtocol();
 
     // The production background host, in the process that will actually hold it
@@ -192,6 +250,7 @@ app
       // the same function the protocol handler uses.
       servedCsp: policyFor(reportedExtensionId),
       backgroundHost: Boolean(host),
+      notifier: notifierMode,
       electronVersion: process.versions.electron,
       chromeVersion: process.versions.chrome,
     });

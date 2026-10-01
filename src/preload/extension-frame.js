@@ -48,6 +48,9 @@ const {
   TABS_TARGET_INFO,
   TABS_OPEN,
   TABS_CLOSE,
+  NOTIFICATION_SHOW,
+  NOTIFICATION_CLEAR,
+  NOTIFICATION_PERMISSION,
 } = require("../shared/ipc");
 
 const extensionId = window.location.hostname; // id == hostname: load-bearing
@@ -80,6 +83,11 @@ const getManifest = () => manifestCache;
 let grants;
 const permissions = createGrantGate(() => grants);
 
+// chrome.alarms' clock multiplier, decided by the host and handed back at
+// registration (src/main/config.js). 1 = real time; the harness shortens it so a
+// headless run can observe a real timer fire inside a worker.
+let alarmClockScale = 1;
+
 // electron-store -> chrome-shim StorageBackend adapter.
 // NOTE: one Store instance per frame per area races on the shared JSON file;
 // swap for a main-process-backed backend (docs/LIMITATIONS.md).
@@ -108,6 +116,8 @@ const storage = createExtensionStorage({
 // to the app's traffic.
 const registered = ipcRenderer.invoke(RUNTIME_REGISTER).then((reply) => {
   grants = (reply && reply.granted) || {};
+  const scale = Number(reply && reply.alarmClockScale);
+  alarmClockScale = Number.isFinite(scale) && scale > 0 ? scale : 1;
   permissions.manifestLoaded();
   return reply || { ok: false };
 });
@@ -179,6 +189,23 @@ const chrome = createChromeNamespace({
     asRegisteredCaller(() => ipcRenderer.invoke(TABS_CLOSE, { handle })).then(
       (closed) => Boolean(closed)
     ),
+  // chrome.notifications -> the host's Electron Notification. The OWNER of a
+  // notification is recorded in main from this frame's own identity, so the click
+  // comes back to this context alone — the frame never names a recipient.
+  showNotification: (notification) =>
+    asRegisteredCaller(() => ipcRenderer.invoke(NOTIFICATION_SHOW, notification)).then(
+      (reply) => (reply && reply.ok ? null : (reply && reply.error) || "notification could not be shown")
+    ),
+  hideNotification: (id) =>
+    asRegisteredCaller(() => ipcRenderer.invoke(NOTIFICATION_CLEAR, { id })).then(
+      (cleared) => Boolean(cleared)
+    ),
+  getNotificationPermissionLevel: () =>
+    asRegisteredCaller(() => ipcRenderer.invoke(NOTIFICATION_PERMISSION)).then(
+      // An absent answer is not "granted": say what is unknown rather than assume.
+      (level) => (typeof level === "string" ? level : "unspecifed")
+    ),
+  getAlarmClockScale: () => alarmClockScale,
   // Declared permissions gate capability (docs/features/EXTENSION-MANAGEMENT.md).
   // The verdict this frame is gated on is the host's — RUNTIME_REGISTER read the
   // manifest from disk — so a page-world script cannot widen it by replacing
@@ -260,6 +287,16 @@ const startDeliveries = (channel, handle) => {
 };
 
 startDeliveries(RUNTIME_DELIVER, (delivery) => chrome.handleDelivery(delivery));
+
+// An alarm is a timer, and this context owns it: when the document goes away, nothing
+// may fire any more. Chrome's worker would be evicted and its alarms persisted; this
+// shell's worker is always-on, so the teardown is the one place the two models meet,
+// and doing it here is what keeps "an alarm outlived its context" from happening.
+window.addEventListener("pagehide", () => {
+  if (chrome._alarmsShim) {
+    chrome._alarmsShim._cancelAll();
+  }
+});
 
 // Network deliveries (devtools.network events + webRequest listeners). The host
 // wraps them as {kind, payload}; the shim consumes the payload shape. A frame

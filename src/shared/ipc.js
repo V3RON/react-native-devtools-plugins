@@ -81,4 +81,14 @@ module.exports = {
   TABS_OPEN: "tabs-open",
   /** ({handle}) -> closes a window THIS host opened for a created tab. */
   TABS_CLOSE: "tabs-close",
+
+  // ── chrome.notifications (docs/features/SMALL-SHIMS.md) ──────────────────────
+  /** ({id, title, message, silent}) -> show one system notification for the calling
+   *  context. Main records the caller's OWN frame key as the owner, so a later click
+   *  is delivered to that context alone. Gated on the `notifications` grant in main. */
+  NOTIFICATION_SHOW: "notification-show",
+  /** ({id}) -> clear one this host showed for the calling context. */
+  NOTIFICATION_CLEAR: "notification-clear",
+  /** () -> the permission level this host can actually observe. */
+  NOTIFICATION_PERMISSION: "notification-permission",
 };

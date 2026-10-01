@@ -64,6 +64,12 @@ const runHarness = ({
   extensionId = "",
   userDataDir,
   extraArgs = [],
+  // Which chrome.notifications backend the harness installs: "fake" (the default —
+  // a recorder, so the suite never raises a real system notification), "deny" (a
+  // recorder that fails every show, to observe the no-id path) or "real".
+  notifier = "fake",
+  // Compress the background context's alarm clock (see src/main/config.js).
+  alarmClockScale = 1,
 }) => {
   const hostDir = path.join(root, "frontend");
   fs.mkdirSync(hostDir, { recursive: true });
@@ -81,6 +87,8 @@ const runHarness = ({
     `--page=${page}`,
     `--timeout=${Math.floor(timeoutMs / 2)}`,
     `--settle=${settleMs}`,
+    `--notifier=${notifier}`,
+    `--alarm-clock-scale=${alarmClockScale}`,
     ...extraArgs,
   ];
   if (waitFor) {

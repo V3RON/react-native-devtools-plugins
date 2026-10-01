@@ -32,6 +32,12 @@
 //   openTabIn / closeTabById — optional host capability behind tabs.create/remove.
 //                    Absent = nothing opens, and the returned tab says so with
 //                    `openedVia: null` rather than pretending to be a browser tab.
+//   getAlarmClockScale — optional () => number: the host's clock multiplier for
+//                    chrome.alarms (src/main/config.js explains why main decides it
+//                    and the frame is handed it). 1 = real time.
+//   showNotification / hideNotification / getNotificationPermissionLevel —
+//                    optional host capability behind chrome.notifications (issue #4).
+//                    Absent = no backend, so create() names no id at all.
 //
 // Transports and concrete backends are wired by the caller (the
 // extension-frame preload). Status per namespace: docs/api/CHROME-EXTENSION-APIS.md.
@@ -42,6 +48,7 @@ const { createDevtools, tabIdFor } = require("./devtools");
 const { createTabs } = require("./tabs");
 const { createAction, createNotifications } = require("./browser-apis");
 const { createPermissionsApi } = require("./permissions-api");
+const { createAlarms } = require("./alarms");
 const { declaredPermissions } = require("../shared/permissions");
 const { buildExtensionURL } = require("../shared/protocol");
 const {
@@ -63,6 +70,10 @@ const createChromeNamespace = ({
   getTargetInfo = () => ({ attached: false }),
   openTabIn = null,
   closeTabById = null,
+  showNotification = null,
+  hideNotification = null,
+  getNotificationPermissionLevel = () => "granted",
+  getAlarmClockScale = () => 1,
   logger = console,
 }) => {
   // Shared mutable lastError holder — runtime exposes it as a live getter;
@@ -90,6 +101,25 @@ const createChromeNamespace = ({
     permissions && typeof permissions.declaredList === "function"
       ? permissions.declaredList()
       : declaredPermissions(getManifest());
+
+  // Built before the namespace so host->frame deliveries can be routed to the REAL
+  // object: the gated wrapper adds lastError behaviour for denied callers, which is
+  // right for a page calling `create` and wrong for the host reporting a click the
+  // user already made.
+  const notifications = createNotifications({
+    show: showNotification,
+    hide: hideNotification,
+    permissionLevel: getNotificationPermissionLevel,
+    onUnsupported: (message) => logger.warn(`[chrome.notifications] ${message}`),
+  });
+
+  // [REAL] `chrome.alarms` — timers in THIS context (docs/features/SMALL-SHIMS.md).
+  // Chrome's other half, persistence plus event-driven wake, does not exist here:
+  // this host's worker is always-on (docs/features/BACKGROUND-WORKER.md), so an alarm
+  // lives and dies with the context that created it. That divergence is stated in
+  // docs/LIMITATIONS.md; what is implemented is Chrome's argument rules, its
+  // replace-on-recreate behavior, and its `scheduledTime` semantics.
+  const alarms = createAlarms({ clockScale: getAlarmClockScale });
 
   let handleDelivery = () => {};
   if (transport) {
@@ -221,27 +251,55 @@ const createChromeNamespace = ({
     // shows NOTHING and names nothing; onClicked never fires. Gated on the
     // declared `notifications` permission like Chrome's (Altair declares it;
     // an extension that does not gets lastError, not a silent no-op).
-    notifications: gateCallbackNamespace(
-      createNotifications({
-        onStubCall: (message) =>
-          logger.warn(`[chrome.notifications] ${message}`),
-      }),
-      {
-        api: "notifications",
-        check: (api) => gate.check(api),
-        setLastError,
-        onDenied: (method, error) =>
-          reportDenied(`${method}: ${error.message}`, "notifications"),
-      }
-    ),
+    // [REAL] `chrome.notifications` → Electron `Notification`, on the declared
+    // `notifications` permission like Chrome's (an extension that does not declare it
+    // gets lastError, not a silent no-op). `create` allocates the id only if something
+    // really showed, `clear`/`getAll` answer from the live registry, and `onClicked`/
+    // `onClosed` fire from the OS's own click/close callbacks — never fabricated.
+    notifications: gateCallbackNamespace(notifications, {
+      api: "notifications",
+      check: (api) => gate.check(api),
+      setLastError,
+      onDenied: (method, error) =>
+        reportDenied(`${method}: ${error.message}`, "notifications"),
+    }),
+
+    // [REAL] `chrome.alarms` — real timers in this context, gated on the declared
+    // `alarms` permission like Chrome's. `create` validates alarmInfo the way Chrome
+    // does (throwing synchronously), and `onAlarm` carries the time the occurrence was
+    // SCHEDULED for rather than the tick's Date.now(). Alarms do NOT survive the
+    // context: this worker is always-on, so there is no eviction to persist through
+    // (docs/LIMITATIONS.md).
+    alarms: gateCallbackNamespace(alarms, {
+      api: "alarms",
+      check: (api) => gate.check(api),
+      setLastError,
+      onDenied: (method, error) => reportDenied(`${method}: ${error.message}`, "alarms"),
+    }),
   };
 
-  // Host -> frame delivery entry point (non-enumerable: not part of the
-  // exposed chrome namespace). The preload wires it to RUNTIME_DELIVER IPC.
+  // Host -> frame delivery entry point (non-enumerable: not part of the exposed
+  // chrome namespace). The preload wires it to RUNTIME_DELIVER IPC.
+  //
+  // Order matters and is not arbitrary: a `notification` delivery is consumed by
+  // the notifications namespace and must not reach the messaging client, which
+  // would otherwise ignore it silently (its default branch is a no-op).
   Object.defineProperty(chrome, "handleDelivery", {
-    value: handleDelivery,
+    value: (delivery) => {
+      if (delivery && delivery.kind === "notification" && notifications._onDelivery) {
+        if (notifications._onDelivery(delivery)) {
+          return;
+        }
+      }
+      handleDelivery(delivery);
+    },
     enumerable: false,
   });
+
+  // The un-gated alarms instance, for the caller that has to stop its timers when
+  // the context goes away (the preload tears it down on `pagehide`). Non-enumerable:
+  // not part of the exposed chrome namespace.
+  Object.defineProperty(chrome, "_alarmsShim", { value: alarms, enumerable: false });
 
   return chrome;
 };

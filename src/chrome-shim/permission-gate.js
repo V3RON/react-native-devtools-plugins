@@ -58,6 +58,14 @@ const gateCallbackNamespace = (
 ) => {
   const gated = {};
   for (const [name, value] of Object.entries(target)) {
+    // `_`-prefixed members are the shim's own host->context entry points and
+    // diagnostics (e.g. notifications' `_onDelivery`), not Chrome API. They are
+    // called on the real object by src/chrome-shim/index.js, so leaving them out of
+    // the exposed namespace is both cleaner and the reason a host delivery is never
+    // gated as if a page had asked for it.
+    if (name.startsWith("_")) {
+      continue;
+    }
     if (typeof value !== "function") {
       gated[name] = value; // constants (TAB_ID_NONE) and Event objects stay as-is
       continue;
