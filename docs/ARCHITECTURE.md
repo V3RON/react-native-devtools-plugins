@@ -33,9 +33,14 @@ into the frontend's main world, never `require`d at runtime.
 
 ### Electron main process (`src/main/`)
 
-- `index.js` — lifecycle wiring only. `window.js` — BrowserWindow + frontend load.
+- `index.js` — lifecycle wiring only (`start()` the bridge on ready, `stop()` on quit).
+  `window.js` — BrowserWindow + frontend load.
   `config.js` — frontend URL (`http://127.0.0.1:8081/rozenite/rn_fusebox.html?ws=localhost:9223`),
-  extensions dir, CDP-bridge knobs; all env-overridable. The frontend is a patched RN
+  extensions dir, CDP-bridge knobs; all env-overridable: `DEVTOOLS_FRONTEND_URL`,
+  `DEVTOOLS_EXTENSIONS_DIR`, `DEVTOOLS_CDP_BRIDGE` (`off` = external relay),
+  `DEVTOOLS_METRO_HOST` / `DEVTOOLS_METRO_PORT`, `DEVTOOLS_CDP_HOST` / `DEVTOOLS_CDP_PORT`,
+  `DEVTOOLS_APP_FILTER` / `DEVTOOLS_DEVICE_FILTER`, `DEVTOOLS_CDP_REQUEST_TIMEOUT_MS`.
+  The frontend is a patched RN
   DevTools fork ("rozenite") that renders extension panels as iframes; it is **not** in
   this repo.
 - `cdp-bridge.js` — **the shell owns the RN debugger session**. Accepts the frontend's
@@ -142,18 +147,20 @@ to serve the frontend from another host. Flags: `--metro-host/--metro-port`,
 ## Data flows (current)
 
 ```
-                    RN app  ⇄  Metro /inspector/debug
-                                    ▲  upstream socket (discovery + re-attach loop)
-                                    │
-   host: sendCommand(method, params)│   CDP BRIDGE   ⇄   DevTools frontend (main frame)
-         onEvent(method, handler) ──┤   (src/main/       │ InspectorFrontendHost.* (preload stubs)
-   ids >= HOST_ID_BASE are consumed      cdp-bridge.js)  │ setInjectedScriptForOrigin ──► main map
-   here and never forwarded;          │                   ▼
-   everything else relays verbatim ───┘   extension iframes  rozenite://<id>/<page>
-                                          (preload: injected script + chrome shim)
-   main/inspected-window.js ◄── DEVTOOLS_EVAL IPC from an extension frame
-   = sendCommand("Runtime.evaluate")        ▲
-                                    chrome.devtools.inspectedWindow.eval
+        RN app  ⇄  Metro /inspector/debug
+                        ▲
+                        │ upstream socket (/json/list discovery + re-attach loop)
+                        ▼
+   host ──► CDP BRIDGE (src/main/cdp-bridge.js) ◄──► DevTools frontend (main frame)
+            │  sendCommand(method, params) → Promise     │ InspectorFrontendHost.* (preload stubs)
+            │  onEvent(method, handler)                  │ setInjectedScriptForOrigin ──► main map
+            │                                            ▼
+            │  ids ≥ HOST_ID_BASE: consumed here,     extension iframes  rozenite://<id>/<page>
+            │  never forwarded to the frontend;       (preload: injected script + chrome shim)
+            │  everything else relays verbatim              ▲
+            │                                               │ async IPC
+            └── Runtime.evaluate / Page.reload ◄── main/inspected-window.js
+                                                    (DEVTOOLS_EVAL / DEVTOOLS_RELOAD)
 
    [FAKE, still] frontend postMessage (RequestStarted/RequestFinished)
              ──► chrome.webRequest listeners → to be replaced by the bridge's
