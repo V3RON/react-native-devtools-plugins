@@ -80,6 +80,49 @@
           assert(pong === "port-pong:ping", String(pong));
           port.disconnect();
         });
+
+        // inspectedWindow.eval needs a live RN app on the shell's CDP bridge, so
+        // these fail (loudly, with the host's reason) until one is attached —
+        // never silently, and never with invented data.
+        // (docs/features/INSPECTED-WINDOW.md, README "Quick start".)
+        await check("inspectedWindow.eval returns real app globals", async () => {
+          const pair = await chrome.devtools.inspectedWindow.eval(
+            'JSON.stringify({dev: globalThis.__DEV__, platform: globalThis.platform, window: typeof globalThis.window})'
+          );
+          const [value, info] = pair || [];
+          assert(!info, "no exceptionInfo: " + JSON.stringify(info));
+          const parsed = JSON.parse(value);
+          assert(typeof parsed.dev === "boolean", "__DEV__ is a boolean: " + value);
+          assert(typeof parsed.platform === "string", "platform is a string: " + value);
+          assert(parsed.window === "object", "RN aliases global.window: " + value);
+          console.log("[inspectedWindow] app says", parsed);
+        });
+
+        await check("inspectedWindow.eval reports page exceptions (callback style)", () =>
+          new Promise((resolve, reject) =>
+            chrome.devtools.inspectedWindow.eval("globalThis.__no_such_global__", (value, info) => {
+              try {
+                assert(value === undefined, "no value for a thrown exception");
+                assert(info && info.isException === true, JSON.stringify(info));
+                assert(/Uncaught/.test(info.value), info.value);
+                assert(!info.isError, "isError is reserved for tooling failures");
+                resolve();
+              } catch (e) {
+                reject(e);
+              }
+            })
+          )
+        );
+
+        await check("inspectedWindow.eval: unserializable results are undefined, not faked", async () => {
+          // CDP hands back an objectId for values it cannot serialize; Chrome's
+          // JSON-constrained eval then has nothing to give the extension either.
+          const [value, info] = await chrome.devtools.inspectedWindow.eval(
+            "(function notSerializable() {})"
+          );
+          assert(value === undefined, "a function has no JSON form: " + JSON.stringify(value));
+          assert(!info, "and it is not an error: " + JSON.stringify(info));
+        });
       })();
     </script>
   </body>
