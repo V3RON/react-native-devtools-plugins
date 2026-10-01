@@ -55,10 +55,14 @@ const basePreferences = ({ preloadPath }) => ({
   // require/process/Buffer/ipcRenderer is asserted, not assumed.
   nodeIntegration: false,
   contextIsolation: true,
-  // Same-origin checks on: a `rozenite://<id>` frame cannot read another
-  // extension's files through the frontend's DOM, and `rozenite://` frames
-  // still load. Per-extension CSP rides the response headers
-  // (src/main/extension-server.js).
+  // Same-origin policy enforced: `rozenite://` frames still load inside the
+  // http:// frontend (the scheme is registered standard + bypassCSP), inline
+  // `<script>` in an extension page is refused, and per-extension CSP rides the
+  // response headers (src/main/extension-server.js).
+  // What it does NOT do is separate one extension from another: every
+  // `rozenite://<id>` shares one origin, so a page in extension A can fetch a
+  // sibling's files. Measured, asserted, and recorded in docs/LIMITATIONS.md —
+  // webSecurity on is not the same as per-extension origin isolation.
   webSecurity: true,
   allowRunningInsecureContent: false,
   // Still false: a sandboxed preload cannot require this repo's preload modules
