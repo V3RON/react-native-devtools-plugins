@@ -83,6 +83,24 @@ const lifecycleFor = (stored, version) => {
   return "startup";
 };
 
+// Electron 38 reports console-message as (event, level, message, …) where
+// `event.level` is a NAME ("error"/"warning"/"log"/"info"/"debug"), while older
+// shapes pass a NUMBER. Both are read here rather than assumed, because a level
+// that silently normalizes to "log" is how a worker's uncaught error stops being
+// reportable — measured, not guessed.
+const LEVELS = { debug: 0, info: 1, log: 1, warning: 2, warn: 2, error: 3 };
+const consoleRecord = (args) => {
+  const first = args[0];
+  const isObject = first && typeof first === "object";
+  const raw = isObject ? first.level : first;
+  const name =
+    typeof raw === "string"
+      ? raw.toLowerCase()
+      : Object.keys(LEVELS).find((key) => LEVELS[key] === raw) || "log";
+  const message = (isObject ? first.message : args[2]) || "";
+  return { level: name, value: LEVELS[name] === undefined ? 1 : LEVELS[name], message };
+};
+
 /**
  * @param {object} deps
  * @param {() => object[]} [deps.scan] background-extension discovery
@@ -92,6 +110,8 @@ const lifecycleFor = (stored, version) => {
  *        router frame the host sees; returns the listener for that frame
  * @param {(extensionId: string) => object} [deps.readManifest] the host's own read
  *        of the manifest on disk (version is what install/update compares)
+ * @param {(record: {extensionId: string, level: number, message: string}) => void} [deps.onWorkerConsole]
+ *        raw worker console records, bypassing the log prefixing
  * @param {object} [deps.log]
  */
 const createBackgroundHost = ({
@@ -100,6 +120,7 @@ const createBackgroundHost = ({
   installState,
   observeFrame = defaultObserveFrame(),
   readManifest = loadManifest,
+  onWorkerConsole = null,
   log = console,
 } = {}) => {
   const windows = new Map(); // extensionId -> {win, url, script, reported}
@@ -138,18 +159,28 @@ const createBackgroundHost = ({
       line(`${entry.extensionId}: renderer unresponsive`);
     });
     // The worker's console is its only stdout. Everything it logs is relayed with
-    // the extension id in front of it, and errors/warnings are elevated.
+    // the extension id in front of it, and errors/warnings are elevated. A caller
+    // that wants the raw records (the headless harness) gets them verbatim.
     win.webContents.on("console-message", (...args) => {
-      const first = args[0];
-      const details =
-        first && typeof first === "object"
-          ? { level: first.level, message: first.message || args[2] || "" }
-          : { level: first, message: args[2] || "" };
-      const text = `[${entry.extensionId}] ${details.message}`;
-      if (Number(details.level) >= 3) log.error(text);
-      else if (Number(details.level) === 2) log.warn(text);
+      const record = consoleRecord(args);
+      if (onWorkerConsole) {
+        onWorkerConsole({
+          extensionId: entry.extensionId,
+          level: record.level,
+          value: record.value,
+          message: record.message,
+        });
+        return;
+      }
+      const text = `[${entry.extensionId}] ${record.message}`;
+      if (record.value >= 3) log.error(text);
+      else if (record.value === 2) log.warn(text);
       else log.log(text);
     });
+    // An uncaught error that never reaches the console (a crashed renderer, a
+    // rejected top-level module load reported as a page error) is still a death
+    // worth naming.
+    win.webContents.on("render-process-gone", () => {});
     return win;
   };
 

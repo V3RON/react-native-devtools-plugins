@@ -182,8 +182,52 @@ const chrome = createChromeNamespace({
     ipcRenderer.invoke(DEVTOOLS_RELOAD, { options }).then((reply) => reply || { ok: false }),
 });
 
-// Router -> frame deliveries (messages, ports).
-ipcRenderer.on(RUNTIME_DELIVER, (_event, delivery) => chrome.handleDelivery(delivery));
+// Router -> frame deliveries (messages, ports, lifecycle events).
+//
+// Deliveries that arrive during startup are queued and flushed once the page's own
+// scripts have run. Chrome does not dispatch a runtime event to a worker before its
+// initial script has finished evaluating — and it has to work that way, because the
+// `onInstalled`/`onMessage` listener the script registers at the top level does not
+// exist yet. This frame needs the same rule for the same reason: the host pushes
+// `lifecycle` the moment the frame registers, which is during preload evaluation,
+// i.e. strictly before the worker's script has had a chance to add its listener.
+// Flushing on DOMContentLoaded covers both a classic script (runs during parsing)
+// and a `type="module"` one (deferred, runs just before the event).
+const startDeliveries = (channel, handle) => {
+  let queue = [];
+  let live = false;
+  const flush = () => {
+    if (live) {
+      return;
+    }
+    live = true;
+    const queued = queue;
+    queue = [];
+    for (const delivery of queued) {
+      handle(delivery);
+    }
+  };
+  ipcRenderer.on(channel, (_event, delivery) => {
+    if (live) {
+      handle(delivery);
+    } else {
+      queue.push(delivery);
+    }
+  });
+  if (document.readyState === "loading") {
+    // `document` is the shared DOM object, so a listener registered from this
+    // isolated world does observe the page's own DOMContentLoaded.
+    document.addEventListener("DOMContentLoaded", flush, { once: true });
+    // Backstop for a document whose parse never completes: queued events are late
+    // rather than lost.
+    window.addEventListener("load", flush, { once: true });
+    setTimeout(flush, 5000);
+  } else {
+    setTimeout(flush, 0);
+  }
+};
+
+startDeliveries(RUNTIME_DELIVER, (delivery) => chrome.handleDelivery(delivery));
 
 // Network deliveries (devtools.network events + webRequest listeners). The host
 // wraps them as {kind, payload}; the shim consumes the payload shape. A frame
