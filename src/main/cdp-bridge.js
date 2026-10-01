@@ -9,7 +9,7 @@
 // The bridge therefore sits on the wire: the frontend connects to this server,
 // and this module owns the upstream socket to Metro's inspector proxy.
 //
-// Topology (one upstream, N frontend clients — usually 1):
+// Topology (one upstream, one frontend client at a time — see handleClient):
 //
 //   RN app ⇄ Metro /inspector/debug?device=…&page=… ⇄ THIS BRIDGE ⇄ frontend
 //                                                      ▲
