@@ -104,9 +104,10 @@ print a reason instead of an unexplained empty list. Shape:
   when nothing is attached. That is the honest payload; a fabricated URL is not.
 - `getResponseBody(requestOrId, cb)` is implemented as a shell-side convenience over the
   same lazy lookup (it mirrors what the vendored frontend's extension API exposes).
-  `getHarEntry()` is **not** implemented as a method: a `Request` **is** the HAR entry
-  (`request`, `response`, `timings`, `_resourceType`, `_transferSize`, `_requestId`), so
-  Chrome's accessor would have nothing to compute.
+  `getHarEntry()` is present and returns the entry the `Request` already is
+  (`request`, `response`, `timings`, `_resourceType`, `_transferSize`, `_requestId`)
+  without its accessors — a shallow, accessor-free copy, since a `Request` *is* the
+  HAR entry here and there is nothing second-hand to compute.
 
 ## What has *not* been verified
 

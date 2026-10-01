@@ -352,6 +352,23 @@ test("getRequestContent is Chrome's alias and callback style returns nothing", a
   assert.ok(request.getContent() instanceof Promise);
 });
 
+test("getHarEntry hands back the entry without the accessors", async () => {
+  const { bridge } = makeBridge();
+  const request = await new Promise((resolve) => {
+    bridge.network.onRequestFinished.addListener(resolve);
+    bridge.handleDelivery({ kind: "completed", record: record(), entry: entry() });
+  });
+  const har = request.getHarEntry();
+  assert.strictEqual(har.request.method, "POST");
+  assert.strictEqual(har.response.status, 200);
+  assert.strictEqual(har._requestId, "1");
+  assert.strictEqual(har.time, 500);
+  // The entry is data, not the API surface riding on it.
+  for (const accessor of ["getContent", "getRequestContent", "getHarEntry"]) {
+    assert.strictEqual(accessor in har, false, `${accessor} is not part of a HAR entry`);
+  }
+});
+
 test("failed requests fire onRequestFinished too, entry and all", async () => {
   const { bridge } = makeBridge();
   const failedEntry = entry({ response: { status: -1, statusText: "", content: { size: -1 } }, _failure: { errorText: "net::ERR_FAILED", canceled: false } });

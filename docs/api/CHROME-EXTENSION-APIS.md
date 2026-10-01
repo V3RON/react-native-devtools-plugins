@@ -14,7 +14,8 @@ Per-namespace plans live in [../features/README.md](../features/README.md).
   lazy `getContent`/`getRequestContent`), `getHAR`, `getResponseBody`, `onNavigated`, built
   on the shell's CDP `Network.*` model. Divergences: `onNavigated` fires on a
   debugger-session change with the target's title (RN has no page navigations), unknown HAR
-  timings stay `-1`, `getHarEntry()` is absent because the entry *is* the HAR entry;
+  timings stay `-1`, `getHarEntry()` returns a copy of the entry the `Request` already
+  is;
   `getNetworkStatus()` is a shell addition for honest empty states →
   [features/DEVTOOLS-NETWORK.md](../features/DEVTOOLS-NETWORK.md).
 - **`devtools.inspectedWindow`** — 🟨 `eval` and `reload` are **real**: CDP

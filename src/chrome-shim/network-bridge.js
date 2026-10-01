@@ -299,13 +299,23 @@ const createNetworkBridge = ({
       return settled;
     };
 
-    return {
+    // Chrome's accessor for the HAR entry behind a `Request`. The object a listener
+    // receives *is* that entry, so this hands back its own HAR fields without the
+    // accessors rather than inventing a second representation. The accessor-free
+    // copy keeps a panel replacing a top-level field from writing back through an
+    // object the host still uses.
+    const request = {
       ...(entry || {}),
       requestId: id,
       getContent: loadContent,
       // Chrome's alias, same behavior.
       getRequestContent: loadContent,
+      getHarEntry: () => {
+        const { getContent, getRequestContent, getHarEntry, ...harEntry } = request;
+        return harEntry;
+      },
     };
+    return request;
   };
 
   /**
