@@ -129,7 +129,8 @@ const createAlarms = ({
         // Chrome: the time this occurrence was SCHEDULED for, so a worker that
         // woke late can still tell it was late.
         scheduledTime: firedAt,
-        periodInMinutes: alarm.periodInMinutes === null ? undefined : alarm.periodInMinutes,
+        // Chrome's Alarm has no periodInMinutes key at all for a one-shot.
+        ...(alarm.periodInMinutes === null ? {} : { periodInMinutes: alarm.periodInMinutes }),
       });
       if (alarm.periodMs === null) {
         alarms.delete(alarm.name);
@@ -199,11 +200,19 @@ const createAlarms = ({
   // callback-style with no promise (docs/features/RUNTIME-MESSAGING.md contract).
   return {
     onAlarm,
-    create: (nameOrInfo, alarmInfo, callback) =>
-      // `create` throws synchronously for a bad alarmInfo, callback style or not:
-      // that is Chrome's behavior, and a callback caller that never sees the
-      // mistake would schedule nothing in silence.
-      promiseOrCallback(() => create(nameOrInfo, alarmInfo), callback),
+    create: (nameOrInfo, alarmInfo, callback) => {
+      // Chrome validates alarmInfo SYNCHRONOUSLY and throws. That is worth keeping
+      // exactly: an extension that typos `delayInMinutes` and gets an async rejection
+      // it never observes would schedule nothing in silence. The callback style is
+      // still Chrome's (no promise back), but it throws too rather than reporting
+      // success for a schedule that was refused.
+      create(nameOrInfo, alarmInfo);
+      if (typeof callback === "function") {
+        setTimeout(() => callback(), 0);
+        return undefined;
+      }
+      return Promise.resolve();
+    },
     clear: (nameOrCallback, callback) =>
       promiseOrCallback(
         () => clearAlarm(typeof nameOrCallback === "function" ? "" : nameOrCallback),

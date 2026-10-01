@@ -24,8 +24,8 @@ needed. Legend and tiers: [../README.md](../README.md). Last reviewed: 2026-10-0
 | [webRequest](WEBREQUEST.md) (`chrome.webRequest`) | 🟨 observe-only, 7 of 9 events from the real CDP model; filters + `ResourceType` real | 2 | — (blocking needs CDP `Fetch`) |
 | [`chrome.permissions`](SMALL-SHIMS.md) — "everything declared is granted" shim | 🟨 accept-and-grant: reports the host's real verdict, `request` grants nothing new | 2 | — |
 | [`chrome.tabs`/`windows` subset](SMALL-SHIMS.md) — one synthetic tab = inspected target | 🟨 one synthetic tab is real (`query`/`get`/`update`/`create`/`remove`); `sendMessage` has no receiver until content scripts; no window model | 2 | content scripts (for `sendMessage`) |
-| [`chrome.notifications`](SMALL-SHIMS.md) → Electron `Notification` | ❌ registrable shell only, so a worker can load | 2 | — |
-| [`chrome.alarms`](SMALL-SHIMS.md) → timers | ❌ | 2 | ~~background worker~~ host exists now |
+| [`chrome.notifications`](SMALL-SHIMS.md) → Electron `Notification` | 🟨 real: shows, allocates the id, `onClicked`/`onClosed` from the real notification; no button events, no real dismiss on Electron 38 | 2 | — |
+| [`chrome.alarms`](SMALL-SHIMS.md) → timers | 🟨 real timers + Chrome's argument rules + `onAlarm`; alarms do not outlive the context (no persistence, always-on worker) | 2 | — |
 | [`chrome.downloads`](SMALL-SHIMS.md) → save dialog | ❌ | 2 | dispatch channel (save flow) |
 | [`chrome.action`/`commands`/`contextMenus`](SMALL-SHIMS.md) — accept-and-no-op shells | 🟨 `action` is a registrable no-op shell (worker-load only); `commands`/`contextMenus` missing | 2 | — |
 | [Manifest `options_ui`](SMALL-SHIMS.md) → separate window | ❌ | 2 | extension management |

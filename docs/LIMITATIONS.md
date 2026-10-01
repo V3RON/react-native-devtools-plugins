@@ -160,6 +160,27 @@
   shim (`src/chrome-shim/permission-gate.js`). Deviation from Chrome, stated: Chrome omits
   an undeclared namespace entirely, this shell keeps the namespace and fails the call
   (shape-first rule, [OVERVIEW.md](OVERVIEW.md)).
+- **`chrome.notifications` is real, with three gaps.** It shows an Electron
+  `Notification`, allocates the id Chrome would, and fires `onClicked`/`onClosed` from the
+  notification's own click/close callbacks into the context that created it
+  ([features/SMALL-SHIMS.md](features/SMALL-SHIMS.md)). What it cannot do:
+  - **no real dismiss.** Electron 38 removed `Notification.close()`. `clear` drops the
+    host's ownership and stops forwarding that notification's events (and the extension is
+    told `onClosed`, as Chrome does), but the banner stays on screen until the user or the OS
+    dismisses it.
+  - **no buttons.** `onButtonClicked` and `onShowSettings` never fire; a `buttons` array in
+    the options is reported as ignored rather than dropped in silence.
+  - **`getPermissionLevel` is an observation, not a verdict.** It reports
+    `Notification.isSupported()`. There is no permission prompt in this host to read a real
+    answer from, so "granted" here means "the platform backend works", not "the user agreed".
+  A notification that could not be shown is given **no id** — an id is the promise of a click.
+- **`chrome.alarms` does not outlive the context that created it.** Chrome persists alarms and
+  wakes the service worker to fire them; this host's background context is always-on, so there
+  is nothing to wake and nothing is persisted (claiming persistence without a store would be a
+  fabrication). An alarm dies with its window — the preload cancels every alarm on `pagehide`,
+  asserted in `tests/alarms.test.js` — and does not survive a shell restart. Alarms are
+  therefore tied to a live always-on worker rather than to MV3's evict-and-wake lifecycle
+  ([features/BACKGROUND-WORKER.md](features/BACKGROUND-WORKER.md)).
 - **`chrome.permissions.request` grants nothing.** `contains`/`getAll` report exactly what
   the manifest declares (the host's own verdict), and `request` resolves `true` only for
   permissions already declared — `false` for anything else, with one console line. There is

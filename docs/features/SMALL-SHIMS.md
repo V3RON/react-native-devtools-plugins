@@ -135,8 +135,36 @@ screen until the user or the OS dismisses it. That is recorded in
 
 ## `chrome.alarms`
 
-`create/update/clear/getAll/onAlarm` → `setTimeout`/`setInterval` inside the
-[background worker](BACKGROUND-WORKER.md) context.
+**✅ Real timers, one divergence** (`src/chrome-shim/alarms.js`, GitHub issue #4).
+
+| Method | Status |
+| --- | --- |
+| `create(name, alarmInfo)` | **real** — a timer in the extension's own context. `when` (epoch ms), `delayInMinutes`, `periodInMinutes`, and Chrome's argument rules are enforced **synchronously**: `delayInMinutes` + `periodInMinutes` together, an empty `alarmInfo`, and a delay/period under Chrome's 30 s floor each throw a `TypeError`, in callback style too — an extension that typos the field and gets a silent async rejection schedules nothing and never learns. |
+| `clear` / `clearAll` | **real** — resolve the honest boolean / count of what was actually armed. |
+| `get` / `getAll` | **real** — `{name, scheduledTime, periodInMinutes?}` for what is armed now; a one-shot alarm has no `periodInMinutes` key at all, like Chrome's. |
+| `onAlarm` | **real** — fires with the time the occurrence was **SCHEDULED for**, not the tick's clock time, so an extension can tell a late delivery from an on-time one. A periodic alarm's next occurrence is anchored on the schedule, so a late tick does not push the series back. |
+| re-`create` with the same name | **real replace** — the old timer is cancelled, so the replaced schedule cannot fire. |
+
+Gated on the declared `alarms` permission, like Chrome's (`API_PERMISSIONS` already listed
+it; the gate is asserted).
+
+**The divergence: alarms do not outlive the context.** Chrome persists alarms and wakes the
+service worker to fire them. This host's background context is **always-on**
+([BACKGROUND-WORKER.md](BACKGROUND-WORKER.md)) — nothing evicts it, so there is nothing to
+wake — and nothing here persists an alarm, because claiming persistence without a store
+would be a fabrication. Consequences worth stating: an alarm dies with the window that
+created it (the preload cancels every alarm on `pagehide`, and the test for that is the one
+named "nothing may fire after the worker is gone"), and an alarm does not survive a shell
+restart.
+
+**The clock scale.** A headless test cannot wait 30 seconds for Chrome's own minimum alarm
+delay, and faking the shim's clock *inside* the extension context would prove nothing about
+the path this shell uses. So the host offers a multiplier —
+`DEVTOOLS_ALARM_CLOCK_SCALE` (`src/main/config.js`) — decided in **main** and handed to each
+context in its `RUNTIME_REGISTER` reply, so a page-world script can neither see nor influence
+it. It shortens the wait only: validation still uses Chrome's real floors and `scheduledTime`
+still reports the real scheduled time, so a scaled run is not a loosened one. The unit tests
+above inject their own timers and need neither.
 
 ## `chrome.downloads`
 
