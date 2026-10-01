@@ -18,12 +18,16 @@
   nothing has to wake it, so `onSuspend`/`onUpdateAvailable` never fire and a worker that
   would have been torn down in Chrome keeps running here. That is a superset for a devtools
   host and a divergence from Chrome's resource model at the same time.
-- Still missing from the extension model: content-script injection, a working
-  `action`/popup, options UI, `notifications`, `alarms`, a `chrome.permissions` prompt,
-  and a toolbar. `action` and `notifications` exist as **registrable shells** so that a
-  worker naming them at module scope can load at all
-  ([features/SMALL-SHIMS.md](features/SMALL-SHIMS.md)). What HAS arrived: `tabs` answers
-  with one synthetic tab for the inspected target rather than an empty list.
+- Still missing from the extension model: content-script injection and a working
+  `action`/popup — plus a toolbar, browser menu, or shortcut routing, which is why
+  `action.onClicked`, `commands.onCommand`, and `contextMenus.onClicked` are registrable but
+  have no producer. What HAS arrived since (issue #4,
+  [features/SMALL-SHIMS.md](features/SMALL-SHIMS.md)): `notifications` raises real system
+  notifications, `alarms` runs real timers, `downloads` really saves over the shell's one
+  export path, manifest `options_ui` opens a real window, `permissions` reports the manifest's
+  truth, and `tabs` answers with one synthetic tab for the inspected target rather than an
+  empty list. A `chrome.permissions` prompt still does not exist, so `permissions.request`
+  grants nothing.
 - DevTools pages are only "loaded" as iframes; no real separation between devtools page
   and panel frames like Chrome has.
 
@@ -188,6 +192,30 @@
   so an accepting `request` could only defer the refusal to the first real call. `remove`
   resolves and changes nothing; `onAdded`/`onRemoved` are registrable and never fire, because
   nothing in this shell changes a grant ([features/SMALL-SHIMS.md](features/SMALL-SHIMS.md)).
+- **`chrome.downloads` is a real save with a registry scoped to this shell.** The bytes are
+  written and `totalBytes` is counted from what was written
+  ([features/SMALL-SHIMS.md](features/SMALL-SHIMS.md)), but:
+  - **`show` and `showDefaultFolder` do nothing** — Electron 38 exposes no reveal. Both report
+    that once per key rather than pretending a window was raised.
+  - **the ledger is this shell's own**, so `search` answers for what this shell saved while it
+    has been running: no browser download history, and nothing from before the shell started.
+  - **`filename` is the path the shell wrote to**, not Chrome's `<downloads>/<n> name.ext`
+    numbering, and `search`/`erase`/`cancel` are scoped to the caller's own extension id.
+  - `onDeterminingFilename` runs on the timer rather than the Chrome extension thread, so an
+    async suggestion must arrive within the host's window (`DEVTOOLS_SUGGEST_TIMEOUT`, 3 s) or
+    the host saves under its own name and logs that it decided.
+- **`options_ui.open_in_tab` means a window here, not a tab.** This shell has no browser tab,
+  so the flag is reported in the window's title. Altair declares `open_in_tab: true` with no
+  `tabs` permission — a combination Chrome itself warns about — and the options host reports
+  that gap too rather than dropping it.
+- **`commands`, `contextMenus` and `sidePanel` are injected, and none can do its headline
+  trick.** They exist with the real method shape so a worker naming them at module scope loads,
+  and each names what it lacks once: `commands.getAll` answers from the manifest but
+  `onCommand` never fires (no shortcut routing); `contextMenus` maintains a real registry with
+  Chrome's validations but `onClicked` never fires (no right-click menu to click);
+  `sidePanel` round-trips its configuration, and **`open` rejects** rather than resolving,
+  because its promise means a panel came up and none can
+  ([features/SMALL-SHIMS.md](features/SMALL-SHIMS.md)).
 - **Per-extension CSP.** Every `rozenite://` response carries that extension's
   `content_security_policy`; an extension declaring none gets Chrome's MV3 default
   (`script-src 'self'; object-src 'self'`, plus `wasm-unsafe-eval` when it has a service

@@ -50,6 +50,7 @@ const { createAction, createNotifications } = require("./browser-apis");
 const { createPermissionsApi } = require("./permissions-api");
 const { createAlarms } = require("./alarms");
 const { createDownloads } = require("./downloads");
+const { createCommands, createContextMenus, createSidePanel } = require("./browser-shells");
 const { declaredPermissions } = require("../shared/permissions");
 const { buildExtensionURL } = require("../shared/protocol");
 const {
@@ -317,6 +318,31 @@ const createChromeNamespace = ({
       check: (api) => gate.check(api),
       setLastError,
       onDenied: (method, error) => reportDenied(`${method}: ${error.message}`, "downloads"),
+    }),
+
+    // [ACCEPT-AND-GRANT, truthful] The three namespaces whose SURFACE this host does not
+    // have: no keyboard shortcut is routed to an extension, there is no browser right-click
+    // menu, and there is no panel drawer. They exist with Chrome's shape so a worker naming
+    // them at module scope LOADS (docs/OVERVIEW.md's stubbing rule), and each reports once
+    // which producer is missing. No event here fires, because firing one would run the
+    // handler the extension wrote for a real click or keypress. `commands.getAll` is the one
+    // method that can be genuinely real: it reads the manifest, which is a fact.
+    // Ungated, like Chrome's (src/shared/permissions.js lists all three under UNGATED_APIS).
+    // docs/features/SMALL-SHIMS.md + docs/LIMITATIONS.md record each divergence.
+    commands: createCommands({
+      getManifest,
+      onUnsupported: (message) => logger.warn(`[chrome.commands] ${message}`),
+      lastError,
+    }),
+
+    contextMenus: createContextMenus({
+      onUnsupported: (message) => logger.warn(`[chrome.contextMenus] ${message}`),
+      lastError,
+    }),
+
+    sidePanel: createSidePanel({
+      onUnsupported: (message) => logger.warn(`[chrome.sidePanel] ${message}`),
+      lastError,
     }),
   };
 

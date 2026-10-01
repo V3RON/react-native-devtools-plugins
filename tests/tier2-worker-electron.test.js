@@ -49,6 +49,7 @@ const manifest = (options = {}) =>
           },
         }
       : {}),
+    ...(options.commands ? { commands: options.commands } : {}),
     content_security_policy: { extension_pages: "script-src 'self'; object-src 'self'" },
   });
 
@@ -117,6 +118,38 @@ try {
     .catch((error) => report("downloads-search-rejected:" + String(error && error.message)));
 } catch (error) {
   report("downloads-threw:" + String(error && error.message));
+}
+
+// ── 5. the accept-and-grant shells: they exist, they answer, they stay quiet ─
+// The load itself is the first claim: this worker NAMES all three at module scope, so
+// before step 6 it took a TypeError at load and had no background context at all.
+try {
+  chrome.commands.onCommand.addListener(() => report("command-fired-should-not-happen"));
+  chrome.contextMenus.onClicked.addListener(() => report("menu-clicked-should-not-happen"));
+  chrome.sidePanel.onClicked.addListener(() => report("panel-clicked-should-not-happen"));
+  chrome.contextMenus.create({ id: "shell-item", title: "Shell item", contexts: ["selection"] });
+  chrome.sidePanel.setOptions({ path: "panel.html", enabled: true });
+  chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
+  chrome.sidePanel.open({ tabId: 1 })
+    .then(() => report("shells-open-resolved-WRONG"))
+    .catch((error) => report("shells-open-rejected:" + String(error && error.message)));
+  // Chrome's own validation, through the promise that reports it:
+  chrome.contextMenus.update("never-made", { title: "x" })
+    .then(() => report("shells-update-resolved-WRONG"))
+    .catch((error) => report("shells-update-rejected:" + String(error && error.message)));
+  // getAll reads the MANIFEST, which arrives with RUNTIME_REGISTER, so it is asked for once
+  // the registration reply has had time to land.
+  setTimeout(() => {
+    chrome.commands.getAll((all) =>
+      report("shells-commands:" + JSON.stringify(all && all.openShell ? all.openShell : all))
+    );
+    chrome.sidePanel.getOptions({ path: "panel.html" }, (opts) => report("shells-options:" + JSON.stringify(opts)));
+    chrome.sidePanel.getPanelBehavior((b) => report("shells-behavior:" + JSON.stringify(b)));
+    chrome.contextMenus.remove("shell-item", () => report("shells-removed"));
+    chrome.contextMenus.remove("shell-item", () => report("shells-remove-again-lastError:" + String(chrome.runtime.lastError && chrome.runtime.lastError.message)));
+  }, 400);
+} catch (error) {
+  report("shells-threw:" + String(error && error.message));
 }
 
 console.log("TIER2:ready");
@@ -195,8 +228,18 @@ suite("tier-2 shims inside a real background worker", { timeout: 240000 }, async
   const extensionsDir = path.join(root, "extensions");
   stageExtension(extensionsDir, TIER2_ID, {
     // `alarms` only: notifications and downloads must be denied, and the manifest
-    // declares no options_ui, so openOptionsPage has to fail.
-    "manifest.json": manifest({ permissions: ["alarms"] }),
+    // declares no options_ui, so openOptionsPage has to fail. `commands` is declared so
+    // the shells suite can assert `commands.getAll` reads the manifest, not a guess.
+    "manifest.json": manifest({
+      permissions: ["alarms"],
+      commands: {
+        openShell: {
+          description: "Open the shell",
+          suggested_key: { default: "Alt+Shift+S" },
+          global: true,
+        },
+      },
+    }),
     "bg.js": workerScript,
   });
   noOptionsExtensions(root);
@@ -353,7 +396,58 @@ suite("tier-2 shims inside a real background worker", { timeout: 240000 }, async
   );
   assert.deepEqual(fs.readdirSync(downloadsDir), [], "the downloads dir is exactly as this run left it");
 
-  // ── 5. nothing here interrupted a human ───────────────────────────────────
+  // ── 5. the accept-and-grant shells: they load, answer, and stay quiet ──────
+  // Before step 6 this worker could not have got here at all: naming `chrome.commands`
+  // at module scope was a TypeError at LOAD, and the whole background context went with it.
+  assert.equal(said(TIER2_ID, "shells-threw"), false, "no synchronous throw at module scope");
+  assert.equal(
+    said(TIER2_ID, "shells-open-resolved-WRONG"),
+    false,
+    "sidePanel.open resolved, which would claim a panel came up"
+  );
+  assert.match(
+    JSON.stringify(lines(TIER2_ID)),
+    /TIER2:shells-open-rejected:chrome\.sidePanel\.open: this host has no side-panel drawer/,
+    "open() fails, because its promise means a panel is up and none can be"
+  );
+  assert.match(
+    JSON.stringify(lines(TIER2_ID)),
+    /TIER2:shells-update-rejected:Cannot find menu item with id never-made/,
+    "contextMenus.update keeps Chromium's own rejection across the process boundary"
+  );
+  const commandsLine = find(TIER2_ID, "shells-commands:");
+  assert.match(
+    String(commandsLine),
+    /"name":"openShell","description":"Open the shell","shortcuts":\["Alt\+Shift\+S"\],"global":true/,
+    `commands.getAll answered from the manifest on disk: ${commandsLine}`
+  );
+  const shellsLine = find(TIER2_ID, "shells-options:");
+  assert.deepEqual(
+    JSON.parse(String(shellsLine).replace("TIER2:shells-options:", "")),
+    { path: "panel.html", enabled: true },
+    `the configuration the worker wrote is the configuration it reads back: ${shellsLine}`
+  );
+  const behaviorLine = find(TIER2_ID, "shells-behavior:");
+  assert.deepEqual(
+    JSON.parse(String(behaviorLine).replace("TIER2:shells-behavior:", "")),
+    { openPanelOnActionClick: true },
+    `the one real PanelBehavior key round-trips: ${behaviorLine}`
+  );
+  assert.match(JSON.stringify(lines(TIER2_ID)), /TIER2:shells-removed/);
+  assert.match(
+    JSON.stringify(lines(TIER2_ID)),
+    /TIER2:shells-remove-again-lastError:Cannot find menu item with id shell-item/,
+    "and the registry knows an id it already removed is gone"
+  );
+  for (const never of ["command-fired", "menu-clicked", "panel-clicked"]) {
+    assert.equal(
+      said(TIER2_ID, never),
+      false,
+      `${never} fired: no keystroke, click or menu was observed by this host`
+    );
+  }
+
+  // ── 6. nothing here interrupted a human ───────────────────────────────────
   assert.equal(harnessLine.notifier, "fake", "the notifier was the recorder, not Electron's");
   assert.equal(harnessLine.saveDialog, "fake", "and the save dialog was answered by the harness");
   assert.equal(

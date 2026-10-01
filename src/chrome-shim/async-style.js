@@ -15,6 +15,10 @@
 // either report a failure as a successful `undefined`, or leak a value alongside the
 // error. The gate in src/chrome-shim/permission-gate.js does the same thing for
 // permission denials; this is the same contract for a shim's own errors.
+//
+// Whatever is handed to `setError` must carry `.message`: a callback caller's code is
+// `if (chrome.runtime.lastError)`, so an undefined-or-valueless holder would read as
+// "it worked".
 const promiseOrCallback = (produce, callback, options = {}) => {
   const { setError = null, clearError = () => {} } = options;
   const deliver = (value) => setTimeout(() => callback(value), 0);

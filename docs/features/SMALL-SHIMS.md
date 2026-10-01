@@ -2,7 +2,7 @@
 
 | | |
 | --- | --- |
-| **Status** | 🟨 `permissions`, `tabs`, `notifications`, `alarms`, `downloads` and manifest `options_ui` are implemented; the `commands`/`contextMenus`/`sidePanel` accept-and-grant shells are not injected yet |
+| **Status** | 🟨 `permissions`, `tabs`, `notifications`, `alarms`, `downloads` and manifest `options_ui` are implemented; the `commands`/`contextMenus`/`sidePanel` accept-and-grant shells are injected, with the producer each one lacks named below |
 | **Tier** | 2 |
 | **Blocked by** | [RUNTIME-MESSAGING.md](RUNTIME-MESSAGING.md) (messaging router + contract rules apply to all of these) |
 
@@ -221,13 +221,23 @@ Downloads folder, which `tests/save-service.test.js` asserts it never does.
 
 ## `chrome.commands` / `chrome.contextMenus` / `chrome.sidePanel`
 
-**❌ Not injected yet.** No keyboard-shortcut routing, no browser right-click menu, and no
-panel drawer exist in this host, so these namespaces have nothing truthful to do yet beyond
-existing. They are the next step here: full method shape, registrable events that never
-fire, and no permission gate (Chrome needs none for them). Until then a worker that names
-them at module scope takes a `TypeError` at load, which is the failure mode
-[../OVERVIEW.md](../OVERVIEW.md)'s stubbing rule exists to avoid — this is the one place in
-Tier 2 where the rule is not yet honoured.
+**🟨 Injected, with what is missing named** (`src/chrome-shim/browser-shells.js`, GitHub
+issue #4). All three now exist with the real method shape, so a worker that names them at
+module scope loads — the failure mode [../OVERVIEW.md](../OVERVIEW.md)'s stubbing rule exists
+to avoid. Each lacks a **producer**, which is a fact about this host rather than about the
+shim, and each says so once:
+
+| Namespace | What is real | What never happens |
+| --- | --- | --- |
+| `chrome.commands` | `getAll` returns the commands read from the extension's **manifest** (`commands`, with `suggested_key.default` folded into `shortcuts`, plus `description` and `global`), or `undefined` for an extension that declares none, like Chrome's. Altair's `openDevTools` therefore comes back with the `Alt+Shift+A` its own manifest declares. | `onCommand` **never fires**: no keyboard-shortcut routing exists here. Firing it would mean inventing a keypress whose whole purpose is to launch the handler. Surfacing these commands in the app menu is the honest path to making the event real. |
+| `chrome.contextMenus` | `create` / `update` / `remove` / `removeAll` are real over a **per-context registry**, with Chrome's validations and **Chromium's own message text**: a non-separator item with no title, a non-string `title`, a `contexts` entry that is not a `ContextType`, a `type` that is not an `ItemType`, a duplicate `id`, and `update`/`remove` of an id that was never created all reject (`Cannot create item with duplicate id …`, `Cannot find menu item with id …`). So `getPlatforms().contextMenus.create(…)` succeeds and a cleanup pass cannot crash a worker. `ContextType`, `ItemType` and `ACTION_MENU_TOP_LEVEL_LIMIT` are Chrome's. | `onClicked` and `onVisited` **never fire** — there is no right-click menu in the page to click, and a click event would run exactly the action the user chose by clicking. `create` resolves with the id the registry filed the item under — not with a menu item. |
+| `chrome.sidePanel` | `setOptions` / `getOptions` round-trip (extension-scoped ↔ per-`path` map) and `setPanelBehavior` / `getPanelBehavior` round-trip `openPanelOnActionClick`, because that configuration is state the extension owns and a read-back is checkable. `getOptions` answers with **what was set** and nothing more: Chrome's own default is `enabled: true`, and claiming that default here would report a panel state this host does not have. | **`open` fails, on purpose.** Its promise means "the panel is up" and nothing can be up here, so resolving would let `await open(); sendMessage(…)` wait forever on a panel. Chrome's own argument rejection (`At least one of tabId and windowId must be provided`) is kept. An unknown `setPanelBehavior` key is **reported and ignored**, not rejected: Chrome refuses it at its schema layer, which this shell cannot reproduce faithfully, and inventing a refusal would break code Chrome accepts. `onClicked` never fires, for the same reason as `onCommand`. |
+
+None of the three is permission-gated, matching Chrome. None of them throws synchronously
+for a bad argument either: Chrome routes those through `runtime.lastError` plus a rejected
+promise, and a sync throw here would kill a worker at module scope. Each namespace's
+read-back (`_itemIds`, `_state`) is **non-enumerable** — these three are ungated, so the
+gate's `_`-filter is not in play and `contextBridge` would otherwise hand them to the page.
 
 ## Manifest `options_ui`
 
