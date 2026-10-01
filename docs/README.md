@@ -4,7 +4,7 @@
 | --- | --- |
 | [STRUCTURE.md](STRUCTURE.md) | **Map of this tree** + "where do I look for…?" table + conventions |
 | [OVERVIEW.md](OVERVIEW.md) | The idea, how MV3 DevTools extensions work, what was achieved, what "inspected window" and "network" mean for React Native |
-| [ARCHITECTURE.md](ARCHITECTURE.md) | How the current prototype works (Electron shell, preloads, `rozenite://` protocol, injected-script channel, fake CDP) |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | How the current prototype works (Electron shell, preloads, `rozenite://` protocol, security model, fake CDP) |
 | [LIMITATIONS.md](LIMITATIONS.md) | Limitations of the current prototype |
 | [features/README.md](features/README.md) | **Master status matrix** — one page per functionality, with status, tier, and blockers |
 | [api/README.md](api/README.md) | Real Chrome host surfaces (`InspectorFrontendHost.*`, `chrome.*`) vs. this shim |

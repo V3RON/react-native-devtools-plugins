@@ -72,7 +72,13 @@ Independent of order, fix first: ~~**preferences persistence**~~ ✅ done
 - **Version pinning:** this surface changes slowly but constantly (`dispatchHttpRequest`,
   AIDA, new-badge telemetry were all added recently). Pin the frontend fork; regenerate
   the coverage matrix in CI (`test/api` in devtools-frontend is the conformance reference).
-- **Security debt — fix before growing the surface:** replace `sendSync` + `new Function`
-  + exposed `ipcRenderer` + `webSecurity:false` with an async, per-extension,
-  message-validated IPC layer and per-extension CSP. Every API added onto the current
-  trust-free substrate multiplies the blast radius of any installed extension.
+- **Security debt — mostly paid; what's left:** ~~`sendSync`~~ (gone, the house rule is now
+  unconditional), ~~`new Function` on a host-stored script~~ (channel deleted), ~~exposed
+  `ipcRenderer`~~, ~~`webSecurity:false`~~ (on, and `rozenite://` proved not to need it off),
+  ~~per-extension CSP~~, ~~permission gating~~. Still open, in rough order of value:
+  `sandbox: true` (needs one bundled preload file, i.e. a build step), extension frames on
+  their own `WebContentsView`/partition so the frontend and extension pages can have
+  different policies, and `host_permissions` meaning something. Until sandbox lands, the
+  guards limit what an extension page can *ask* for — a renderer compromise is still a Node
+  compromise, which is why the background worker and content-script injection are stacked
+  *after* this rather than before it.

@@ -73,8 +73,9 @@ Still missing:
 ## Plan
 
 1. ~~Preload listens on IPC and calls `InspectorFrontendAPI.<event>(...)~~ ✅ done.
-2. ~~Async-only IPC for new channels~~ ✅ done (injected-script `sendSync` kept
-   deliberately — it must run before page scripts; see `src/shared/ipc.js`).
+2. ~~Async-only IPC for new channels~~ ✅ done, and now unconditional: the last two
+   `sendSync` channels (the injected-script store) are gone with the channel itself, so
+   every IPC hop in the shell is `invoke`/`handle` (see `src/shared/ipc.js`).
 3. ~~Wire `sendMessageToBackend` → the CDP socket the frontend owns~~ ✅ **resolved
    differently**: the escape hatch is structurally dead with `?ws=` in the URL, so the
    shell took over the socket instead (`src/main/cdp-bridge.js`). Do **not** wire
