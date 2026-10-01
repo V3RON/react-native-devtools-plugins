@@ -27,7 +27,9 @@
   export path, manifest `options_ui` opens a real window, `permissions` reports the manifest's
   truth, and `tabs` answers with one synthetic tab for the inspected target rather than an
   empty list. A `chrome.permissions` prompt still does not exist, so `permissions.request`
-  grants nothing.
+  grants nothing. **`chrome.windows` is not injected at all** — no window model exists to
+  report — so a worker naming it at module scope is the one remaining case where Tier 2
+  breaks the "a missing namespace must not kill the worker" rule.
 - DevTools pages are only "loaded" as iframes; no real separation between devtools page
   and panel frames like Chrome has.
 

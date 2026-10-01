@@ -37,7 +37,8 @@ const callAsync = (callback, ...args) => {
   }
 };
 
-/** `chrome.action` — [STUB, issue #4]. Registrable, inert, never fires. */
+/** `chrome.action` — accept-and-grant by design: registrable, inert, never fires. Chrome's
+ *  toolbar surface does not exist here; see the namespace comment in index.js. */
 const createAction = () => ({
   onClicked: createEvent(),
   onBadgeTextChanged: createEvent(),

@@ -197,18 +197,36 @@ Pure modules; `index.js` assembles the namespace from injected deps:
   ([features/BACKGROUND-WORKER.md](features/BACKGROUND-WORKER.md)). `getBackgroundPage()`
   stays `undefined`, which is also Chrome's answer for an MV3 extension.
   `event.js` provides Chrome-semantics Event objects shared across the shim.
-- `browser-apis.js` — `chrome.action` and `chrome.notifications` as **registrable no-op
-  shells** ([STUB — issue #4 owns making this real]): they exist so an MV3 worker that names
-  them at module scope can load at all (an ESM worker's top-level statements run first, so a
-  missing namespace kills the whole context). No button, badge, popup or notification;
-  `notifications.create` calls back with **no id** and neither event ever fires.
-  `notifications` is permission-gated like Chrome's, `action` is ungated like Chrome's.
+- `browser-apis.js` + `browser-shells.js` — the browser-UI namespaces. `notifications` is
+  **real**: an injected `show`/`hide` pair (Electron `Notification` on the host side), the id
+  Chrome allocates only when something really showed, and `onClicked`/`onClosed` forwarded
+  from the notification's own callbacks into the context that created it. `action` stays a
+  **registrable no-op shell**: it exists so an MV3 worker that names it at module scope can
+  load at all (an ESM worker's top-level statements run first, so a missing namespace kills
+  the whole context); there is no toolbar to render a badge or a click.
+  `browser-shells.js` is the same trick for `commands` / `contextMenus` / `sidePanel`, where
+  what is missing is a **producer**: `commands.getAll` reads the manifest, `contextMenus`
+  keeps a real registry with Chrome's validations, `sidePanel` round-trips its options — and
+  no event fires, because a keypress or a click that never happened is exactly what those
+  handlers act on (`sidePanel.open` rejects rather than resolving). Both files take every
+  host capability as an injected dependency, so a context with nothing injected answers
+  honestly instead of failing. `notifications` is permission-gated like Chrome's; `action`,
+  `commands`, `contextMenus` and `sidePanel` are ungated like Chrome's
+  ([features/SMALL-SHIMS.md](features/SMALL-SHIMS.md)).
+- `permissions-api.js`, `alarms.js`, `downloads.js`, `tab-model.js` — the rest of Tier 2:
+  what the manifest really grants (never what the page claims), timers in the context that
+  created them, saves over main's one save path, and the one synthetic tab's descriptor.
+- `async-style.js` — `promiseOrCallback`, the one place Chrome's promise+callback duality and
+  `lastError` scoping are implemented; every Tier-2 namespace goes through it.
 - `devtools.js` — `chrome.devtools.*`: real `panels.create` (host-driven tabs), real
   `inspectedWindow.eval` against an injected `evalInPage` host dependency
   ([features/INSPECTED-WINDOW.md](features/INSPECTED-WINDOW.md)), `panels.network.getHAR`
   on the shared network bridge, and inert panel events
-  ([features/DEVTOOLS-PANELS.md](features/DEVTOOLS-PANELS.md)); `tabs.js` — inert
-  `chrome.tabs` shell. Full gap analysis: [api/CHROME-EXTENSION-APIS.md](api/CHROME-EXTENSION-APIS.md).
+  ([features/DEVTOOLS-PANELS.md](features/DEVTOOLS-PANELS.md)). `tabs.js` answers with the
+  ONE tab this shell has — the inspected RN target, under the id
+  `devtools.inspectedWindow.tabId` reports — with url/title read from the host's CDP target
+  info and `create`/`remove` driving the host's own open policy.
+  Full gap analysis: [api/CHROME-EXTENSION-APIS.md](api/CHROME-EXTENSION-APIS.md).
 
 ### Shell-driven extension hosting (`src/main/extensions.js`, `src/main/panel-host.js`, `src/frontend/panel-bridge.js`)
 
@@ -220,7 +238,8 @@ registry; the bridge imports the frontend's own `ui/legacy/legacy.js` (same modu
 instance, same `InspectorView` singleton), spawns hidden devtools-page iframes, and
 turns `chrome.devtools.panels.create` IPCs into real tabs (`SimpleView` + iframe).
 Devtools-side API surface lives in `chrome-shim/devtools.js` (panels/inspectedWindow/
-network) plus the inert `chrome-shim/tabs.js` shell.
+network); `chrome.tabs` answers with the one tab this shell has
+(`chrome-shim/tabs.js` + `tab-model.js`), driven by the host's CDP target info.
 
 ### `src/tools/fake-cdp.js` — dev convenience (`npm run fake-cdp`)
 

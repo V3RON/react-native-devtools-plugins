@@ -2,7 +2,7 @@
 
 | | |
 | --- | --- |
-| **Status** | 🟨 `permissions`, `tabs`, `notifications`, `alarms`, `downloads` and manifest `options_ui` are implemented; the `commands`/`contextMenus`/`sidePanel` accept-and-grant shells are injected, with the producer each one lacks named below |
+| **Status** | 🟨 `permissions`, `tabs`, `notifications`, `alarms`, `downloads`, manifest `options_ui` and the `commands`/`contextMenus`/`sidePanel` accept-and-grant shells are all implemented, each with the producer it lacks named; `chrome.windows` is the one Tier-2 namespace still absent |
 | **Tier** | 2 |
 | **Blocked by** | [RUNTIME-MESSAGING.md](RUNTIME-MESSAGING.md) (messaging router + contract rules apply to all of these) |
 
@@ -19,8 +19,10 @@ value, an event, or a capability is not an option in either branch.
 **Where each one started.** The background context arrived before these APIs did, and an MV3
 worker that names `chrome.action.onClicked` or `chrome.notifications.create` at module scope
 dies at LOAD — an ESM worker's top-level statements run before anything can guard them. So
-`src/chrome-shim/browser-apis.js` shipped both as inert shells. `notifications` is real now;
-`action` is the one that is left, for a reason stated below.
+`src/chrome-shim/browser-apis.js` shipped both as inert shells. `notifications` is real now.
+`action` is the one namespace that is still nothing but a shell, for the reason in its own
+row below; the three that joined it later (`commands`, `contextMenus`, `sidePanel`) are at the
+bottom of this page.
 
 | Shell | Status |
 | --- | --- |
@@ -56,10 +58,17 @@ fidelity, not new capability. Answering `true` for an undeclared permission woul
 worse than answering `false`: the extension would proceed and be refused at the first
 real call, with `lastError` naming a permission it was just told it held.
 
-## `chrome.tabs` / `chrome.windows` (subset)
+## `chrome.tabs` (subset)
 
 **🟨 One synthetic tab = the inspected RN target, plus what `create` really opened**
 (`src/chrome-shim/tabs.js` + `tab-model.js`, host side `src/main/tab-host.js`).
+
+**`chrome.windows` is not injected.** There is no window model to report — the one window
+this shell has is the DevTools window itself — and no shipped extension names the namespace.
+(`src/shared/permissions.js` lists it under `UNGATED_APIS`, which is only the statement that
+it would need no permission if it were injected.) Until it is injected, a worker that names
+`chrome.windows.getAll` at module scope takes a TypeError at load: the one place Tier 2 still
+breaks the stubbing rule ([../OVERVIEW.md](../OVERVIEW.md)).
 
 | Method | Status |
 | --- | --- |

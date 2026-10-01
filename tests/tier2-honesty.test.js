@@ -257,6 +257,31 @@ test("a Tier-2 log line never claims a UI affordance this host does not have", (
   assert.match(apis, /button/i, "and a `buttons` array is reported as ignored, not accepted in silence");
 });
 
+test("the namespaces that exist are exactly the ones the docs claim", () => {
+  // docs/features/SMALL-SHIMS.md and docs/api/CHROME-EXTENSION-APIS.md describe each of
+  // these as injected. A name added or dropped here changes what those pages are allowed to
+  // promise, so the list is pinned rather than remembered.
+  const chrome = namespace({ permissions: [] });
+  assert.deepStrictEqual(Object.keys(chrome).sort(), [
+    "action",
+    "alarms",
+    "commands",
+    "contextMenus",
+    "devtools",
+    "downloads",
+    "notifications",
+    "permissions",
+    "runtime",
+    "sidePanel",
+    "storage",
+    "tabs",
+    "webRequest",
+  ]);
+  // `chrome.windows` is the Tier-2 name on this list's edge: documented as NOT injected, and
+  // ungated in src/shared/permissions.js only because it would need no permission if it were.
+  assert.strictEqual(chrome.windows, undefined, "no window model, so no chrome.windows");
+});
+
 // ── 4. the only way in is what is injected ─────────────────────────────────
 test("every Tier-2 host capability is an injected function, defaulting to nothing", () => {
   // Build with NO injectables at all: the namespace must still construct, keep its shape,

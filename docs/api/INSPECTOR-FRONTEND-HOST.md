@@ -30,7 +30,7 @@ stub — see "Generate, don't hand-write" in [../ROADMAP.md](../ROADMAP.md).
 | `copyText(text)` | ✅ clipboard | already real |
 | `openInNewTab(url)` | ✅ `window.open` | 🔧 better: `shell.openExternal` |
 | `openSearchResultsInNewTab(query)` | ✅ no-op | 🔧 same |
-| `showItemInFolder(path)` | 🟡 no-op | 🔧 one line: `shell.showItemInFolder` |
+| `showItemInFolder(path)` | 🟨 inert + one warning | deliberately not wired to `shell.showItemInFolder`: the frontend names a path this host never wrote, so revealing *something* would show the user a file that is not the one they asked about. `chrome.downloads.show` has the same rule |
 | `showCertificateViewer(chain)` | 🟡 | low value; stub |
 | `reattach(cb)`, `readyForTest()`, `connectionReady()` | ✅ | fine |
 | `initialTargetId()` | ✅ `null` | 🔧 return the active RN target id — enables multi-target UX |
@@ -43,7 +43,7 @@ stub — see "Generate, don't hand-write" in [../ROADMAP.md](../ROADMAP.md).
 | `registerPreference` / `get{,All}Preference(s)` / `setPreference` / `removePreference` / `clearPreferences` | ✅ persisted in `electron-store` (`frontend-preferences.json`), host-side defaults from `registerPreference` honored | — |
 | `getSyncInformation(cb)` | ✅ reports no-sync | fine — no Chrome Sync exists |
 | `getHostConfig(cb)` | ✅ `{}` | 🔧 feed `experiments`, `disableAutosave`, etc. |
-| `save/append/close(url, content…)` | ✅ anchor-download hack | 🔧 Electron `dialog.showSaveDialog` + fs; report via ⛔ `savedURL` |
+| `save/append/close(url, content…)` | ✅ `save` is real: `dialog.showSaveDialog` + fs over the shell's one save path (`src/main/save-service.js`), the same one `chrome.downloads.download` uses; `append` is inert + one warning; `close` is a no-op (nothing stays open) | 🔧 `append` needs the save to hold a handle open; report via ⛔ `savedURL` |
 | `requestFileSystems` / `add/removeFileSystem` / `isolatedFileSystem` / `upgradeDraggedFileSystemPermissions` / `connect/disconnectAutomaticFileSystem` | ✅ no-ops | 🔧 workspace folders: `dialog.showOpenDialog` + fs watch → ⛔ `fileSystemsLoaded/fileSystemAdded/…`. Needed for Sources autosave & overrides; nice-to-have |
 | `indexPath` / `stopIndexing` / `searchInPath` | ✅ no-ops | 🔧 ripgrep/fs scan → ⛔ `indexing*`/`searchCompleted` |
 

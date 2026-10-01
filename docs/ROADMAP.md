@@ -23,8 +23,11 @@ browser; no for things that do — and that's a product decision, not a technica
 ## Implementation buckets
 
 1. **Free (Electron primitives, hours each):** ~~preferences→`electron-store`,
-   clipboard, zoom, context menus~~ ✅ done; remaining: save→dialog,
-   `shell.openExternal/showItemInFolder`, notifications,
+   clipboard, zoom, context menus~~ ✅ done; ~~save→dialog, notifications,
+   `shell.openExternal` (as `tabs.create`'s policy-gated open)~~ ✅ done via Tier 2
+   (`src/main/save-service.js`, `notification-host.js`, `tab-host.js`). Deliberately NOT
+   done: `shell.showItemInFolder` and a downloads "reveal" — the frontend/extension names a
+   path this host did not write, so revealing anything would mislead. Remaining:
    `dispatchHttpRequest`.
 2. **Dispatch channel — the prerequisite (days):** ~~host→frontend events
    (`InspectorFrontendAPI` via IPC)~~ ✅ live. ~~`sendMessageToBackend`→CDP socket~~

@@ -20,9 +20,12 @@ never fire); otherwise leave `undefined`. Document every divergence.
 
 ## Browser chrome UI
 
-`action` popup semantics, `omnibox`, `contextMenus` (browser right-click), `sidePanel`
-(could someday host panels, but overlaps DevTools panels), `commands` (no-op shells —
-see [features/SMALL-SHIMS.md](SMALL-SHIMS.md)).
+What is omitted here is the **surface**, not the namespace: `action` popup semantics,
+`omnibox`, a real browser right-click menu, a real side-panel drawer, keyboard-shortcut
+routing to an extension. `action`, `contextMenus`, `sidePanel` and `commands` are still
+injected as accept-and-grant shells so a worker that names them loads — see
+[features/SMALL-SHIMS.md](SMALL-SHIMS.md) for what each one can honestly do and which of
+its events therefore has no producer.
 
 ## Browser data & state
 
