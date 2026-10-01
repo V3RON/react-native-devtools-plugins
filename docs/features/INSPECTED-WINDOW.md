@@ -10,9 +10,9 @@
 
 - `tabId` — id of the inspected tab
 - `eval(expression, options?, cb)` — run JS in the inspected page; options:
-  `useContentScriptContext`, `scriptExecutionContext`, `frameURL`; answers with the
-  pair `[value, exceptionInfo]`
-- `reload()`
+  `frameURL`, `scriptExecutionContext`, `useContentScriptContext` (the guide also
+  documents `contextSecurityOrigin`); answers with the pair `[value, exceptionInfo]`
+- `reload(options?)` — options: `ignoreCache`, `injectedScript`; returns nothing
 - `getResources(cb)` (deprecated) / `getResourceContent(url, timeout, cb)`
 
 ## Current state here
@@ -54,7 +54,7 @@ being swallowed.
 | --- | --- | --- |
 | `tabId` | synthetic constant | fine |
 | `eval` | `Runtime.evaluate` (`returnByValue`, `awaitPromise`) | High for JSON-serializable values |
-| `eval` + `frameURL` / `useContentScriptContext` / `scriptExecutionContext` | accepted, **ignored** | documented degradation: RN has no frames and no isolated content-script worlds — the app's global context is the only context, and RN aliases `global.window = global` (`Libraries/Core/setUpGlobals.js`), which is what state-debugger extensions need |
+| `eval` + `frameURL` / `scriptExecutionContext` / `useContentScriptContext` | accepted, **ignored** | documented degradation: RN has no frames and no isolated content-script worlds — the app's global context is the only context, and RN aliases `global.window = global` (`Libraries/Core/setUpGlobals.js`), which is what state-debugger extensions need. Chrome *fails* such a call when there is no content-script world (`isError`, `code: E_NOTFOUND`); erroring here would only make the API unusable, since RN genuinely has no other world to pick |
 | `eval` timeout | **our own option** (Chrome has none) | bounds the wait; forwarded to `Runtime.evaluate` best-effort, reply deadline sits slack behind it |
 | `reload` | `Page.reload` (`ignoreCache`, `injectedScript` → `scriptToEvaluateOnLoad`) | High for the JS bundle; RN reloads the bundle, not a DOM page. No callback in Chrome's API, so failures surface in the frame console |
 | `getResources` / `getResourceContent` | `Debugger.getScriptParsed` + script source | not implemented (Tier 2) |
@@ -96,7 +96,10 @@ globals through `JSON.stringify({dev: globalThis.__DEV__, platform, window:
 typeof globalThis.window})`, a page-side exception, an unserializable result). Those
 checks need a device and a Metro server, which the CI here does not have — so the
 status stays 🟨 until someone runs the panel against a real app and reports PASS.
-Unrun = unverified: no live result is claimed in these docs.
+Unrun = unverified: no live result is claimed in these docs. `reload` is deliberately
+not in the live checks: it reloads the bundle under test, which would tear down the
+session the other checks are using. Its mapping is covered by unit tests
+(`createReloadInPage`).
 
 ## Open risk for the next layer (devtools.network)
 

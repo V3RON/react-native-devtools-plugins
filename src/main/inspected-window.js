@@ -92,11 +92,14 @@ const mapEvaluation = (reply) => {
 
 /**
  * Runtime.evaluate params from Chrome's eval options.
- * `frameURL`, `useContentScriptContext` and `scriptExecutionContext` are accepted
- * and ignored: RN has no frames and no isolated content-script worlds — the app's
- * global context is the only context (and RN aliases `global.window = global`,
- * which is exactly what state-debugger extensions need). `timeout` is our own
- * addition (Chrome has none): it bounds the wait for a reply.
+ * `frameURL`, `scriptExecutionContext` and `useContentScriptContext` are accepted
+ * and ignored: RN has no frames and no
+ * isolated content-script worlds — the app's global context is the only context
+ * (and RN aliases `global.window = global`, which is exactly what
+ * state-debugger extensions need). Chrome itself errors when
+ * `useContentScriptContext` is set with no content-script world; erroring here
+ * would just make the API unusable, since RN genuinely has no other world.
+ * `timeout` is our own addition (Chrome has none): it bounds the wait for a reply.
  */
 const toEvaluateParams = (expression, options = {}) => {
   const params = {
