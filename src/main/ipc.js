@@ -21,6 +21,9 @@ const { createPermissionGate, API_PERMISSIONS } = require("../shared/permissions
 const tabHost = require("./tab-host");
 const notificationHost = require("./notification-host");
 const { getContextRegistry } = require("./context-registry");
+const { getRequestQueue } = require("./context-request");
+const saveService = require("./save-service");
+const optionsHost = require("./options-host");
 const config = require("./config");
 const {
   SHOW_CONTEXT_MENU,
@@ -54,6 +57,13 @@ const {
   NOTIFICATION_SHOW,
   NOTIFICATION_CLEAR,
   NOTIFICATION_PERMISSION,
+  HOST_SAVE,
+  OPTIONS_OPEN,
+  DOWNLOAD_START,
+  DOWNLOAD_CANCEL,
+  DOWNLOAD_ERASE,
+  DOWNLOAD_SEARCH,
+  DOWNLOAD_SUGGEST_REPLY,
 } = require("../shared/ipc");
 
 // ── runtime messaging router wiring ─────────────────────────────────────────
@@ -145,6 +155,20 @@ const grantedPermissions = (event) => {
 
 let unregisterRouterFrame; // set below to avoid closure-order issues
 
+/**
+ * The extension the calling frame belongs to, read from the frame's own URL by the
+ * host. Several features need an owner for host-side state (the download ledger,
+ * the options window) and this is the only source that is not something the frame
+ * asserted about itself. Returns null for a frame whose URL is not an extension URL.
+ */
+const extensionIdOfFrame = (event) => {
+  try {
+    return new URL(event.senderFrame.url).hostname;
+  } catch {
+    return null;
+  }
+};
+
 const makeFrameSender =
   (key, webContents, frame, channel = RUNTIME_DELIVER, filter = null) =>
   ({ kind, payload }) => {
@@ -223,6 +247,11 @@ const registerIpcHandlers = () => {
     // notification click would be pushed into a detached frame (the registry's own
     // send throws for that, but the id would stay owned forever).
     getContextRegistry().unregister(key);
+    // The same for a host->context REQUEST that is still open: a download waiting on
+    // a filename suggestion from a frame that has died would otherwise sit until its
+    // timeout. Settling it now lets the save proceed with the name it derived, and
+    // the save service reports that it did.
+    getRequestQueue().dropContext(key);
     router.unregisterFrame(key);
     // A frame that goes away also stops being a network subscriber; the model
     // stops asking the backend for Network events once no frame wants them.
@@ -273,7 +302,11 @@ const registerIpcHandlers = () => {
     event.sender.once("destroyed", () => unregisterRouterFrame(key));
     // `alarmClockScale` is decided here rather than read in the frame: a page-world
     // script must not be able to see or influence the host's test configuration
-    // (src/main/config.js explains what the value is for).
+    // (src/main/config.js explains what the value is for, and why the config exports
+    // it as a number: this reply crosses IPC through the structured-clone serializer,
+    // which DROPS a function-valued property rather than transferring it — so a
+    // function here reached the frame as `undefined` and every context ran unscaled,
+    // silently. tests/tier2-worker-electron.test.js is what measured that.)
     return { ok: true, granted, alarmClockScale: config.alarmClockScale };
   });
 
@@ -511,6 +544,133 @@ const registerIpcHandlers = () => {
     }
     return tabHost.getTabHost().close(handle);
   });
+
+  // ── chrome.downloads + runtime.openOptionsPage (docs/features/SMALL-SHIMS.md) ──
+  //
+  // The save machinery is src/main/save-service.js and the filename-suggestion
+  // round trip is src/main/context-request.js; both are transport-agnostic, so the
+  // DevTools frontend's own `InspectorFrontendHost.save` and an extension's
+  // `chrome.downloads.download` share one implementation and get the same honest
+  // states (in_progress → complete only after a write resolved, interrupted with
+  // the platform's own message otherwise).
+  //
+  // All of `downloads` is gated, including `erase`/`search`: in Chrome the same
+  // permission covers creating a download AND reading the history of the ones that
+  // exist. `OPTIONS_OPEN` is deliberately NOT gated, because Chrome does not gate
+  // `runtime.openOptionsPage` — the manifest on disk is the only authority, and an
+  // extension that declares no `options_ui` is told so (see options-host.js).
+
+  /**
+   * The calling frame when its extension declares `downloads`, with the extension id
+   * the host derived from the frame's own URL. That id is what scopes the download
+   * ledger: Chrome's download history belongs to one extension, so `search`/`erase`
+   * for one must never return another's files.
+   */
+  const downloadCaller = (event) => {
+    const frameKey = gatedFrameKey(event, "downloads");
+    if (!frameKey) {
+      return null;
+    }
+    return { frameKey, owner: extensionIdOfFrame(event) };
+  };
+
+  ipcMain.handle(DOWNLOAD_START, (event, details = {}) => {
+    const caller = downloadCaller(event);
+    if (!caller) {
+      return { ok: false, error: "downloads: permission 'downloads' is not declared" };
+    }
+    return saveService
+      .getSaveService()
+      .start({
+        // Owned by THIS frame: onChanged and any filename question go to the context
+        // that started the download, which is Chrome's rule. Both key and owner are
+        // main's own, never taken from the payload.
+        frameKey: caller.frameKey,
+        owner: caller.owner,
+        url: details.url,
+        content: details.content,
+        isBase64: details.isBase64 === true,
+        filename: details.filename,
+        saveAs: details.saveAs === true,
+        title: details.title,
+      })
+      .catch((error) => ({ ok: false, error: (error && error.message) || "the save failed" }));
+  });
+
+  ipcMain.handle(DOWNLOAD_CANCEL, (event, { id } = {}) => {
+    const caller = downloadCaller(event);
+    if (!caller) {
+      return false;
+    }
+    return saveService.getSaveService().cancel({ id, owner: caller.owner });
+  });
+
+  ipcMain.handle(DOWNLOAD_ERASE, (event, { ids } = {}) => {
+    const caller = downloadCaller(event);
+    if (!caller) {
+      return { id: [] };
+    }
+    return saveService.getSaveService().erase({ ids, owner: caller.owner });
+  });
+
+  ipcMain.handle(DOWNLOAD_SEARCH, (event, { query } = {}) => {
+    const caller = downloadCaller(event);
+    if (!caller) {
+      return [];
+    }
+    return saveService.getSaveService().search({ query: query || {}, owner: caller.owner });
+  });
+
+  ipcMain.handle(DOWNLOAD_SUGGEST_REPLY, (event, { requestId, filename } = {}) => {
+    const caller = downloadCaller(event);
+    if (!caller) {
+      return { ok: false };
+    }
+    // `resolve` returns false when nothing was waiting on THIS frame for that id, so
+    // a late or invented answer cannot influence a download that is already decided.
+    const answered = getRequestQueue().resolve(caller.frameKey, requestId, {
+      suggestion: typeof filename === "string" && filename ? filename : null,
+    });
+    return { ok: answered };
+  });
+
+  ipcMain.handle(OPTIONS_OPEN, (event) => {
+    // Identity from the frame's URL, like every other extension channel: a payload
+    // can never name the extension whose options page gets opened.
+    let extensionId;
+    try {
+      extensionId = new URL(event.senderFrame.url).hostname;
+    } catch {
+      return { ok: false, error: "openOptionsPage: the caller is not an extension page." };
+    }
+    if (!extensionServer.resolveExtensionFile(extensionId, "")) {
+      return { ok: false, error: "openOptionsPage: unknown extension." };
+    }
+    return optionsHost.getOptionsHost().openOptionsPage(extensionId);
+  });
+
+  // `InspectorFrontendHost.save` — the DevTools frontend's own save. Before this it
+  // built a Blob, hung an `<a download>` off the DevTools document and clicked it,
+  // which works only if the renderer may navigate to a `blob:` URL and tells nobody
+  // whether anything was written. Same service as chrome.downloads, no extension
+  // gating (the frontend is not an extension), and no filename suggestion because
+  // there is no extension to ask.
+  //
+  // Chrome's first argument is a NAME, not a location to fetch (the old hack used it
+  // as `a.download`), and the content arrives with the call — so it goes in as
+  // `filename` + `content` and nothing is fetched.
+  ipcMain.handle(HOST_SAVE, (_event, { url, content, forceSaveAs, isBase64 } = {}) =>
+    saveService
+      .getSaveService()
+      .start({
+        frameKey: null,
+        filename: String(url || "untitled.txt"),
+        content,
+        isBase64: isBase64 === true,
+        saveAs: forceSaveAs === true,
+      })
+      .catch((error) => ({ ok: false, error: (error && error.message) || "the save failed" }))
+  );
 };
 
 module.exports = { registerIpcHandlers, subscribeRouterFrames };

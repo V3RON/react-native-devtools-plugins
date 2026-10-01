@@ -2,7 +2,7 @@
 
 | | |
 | --- | --- |
-| **Status** | 🟨 `permissions`, `tabs` (one synthetic tab) and `notifications` are implemented; `alarms`, `downloads` + `options_ui` and the `action`/`commands`/`contextMenus`/`sidePanel` shells follow below |
+| **Status** | 🟨 `permissions`, `tabs`, `notifications`, `alarms`, `downloads` and manifest `options_ui` are implemented; the `commands`/`contextMenus`/`sidePanel` accept-and-grant shells are not injected yet |
 | **Tier** | 2 |
 | **Blocked by** | [RUNTIME-MESSAGING.md](RUNTIME-MESSAGING.md) (messaging router + contract rules apply to all of these) |
 
@@ -168,20 +168,86 @@ above inject their own timers and need neither.
 
 ## `chrome.downloads`
 
-`download({url | data})` → Electron save dialog + fs. Shares plumbing with
-`InspectorFrontendHost.save` (see [../api/INSPECTOR-FRONTEND-HOST.md](../api/INSPECTOR-FRONTEND-HOST.md)).
+**✅ Real saves over the shell's one save path** (`src/chrome-shim/downloads.js` +
+`src/main/save-service.js`, GitHub issue #4).
 
-## `chrome.action` / `commands` / `contextMenus` (browser-side)
+| Method | Status |
+| --- | --- |
+| `download({url})` | **real** — fetches and writes, and resolves the id **main allocated**. A `data:` URL is decoded rather than fetched, like Chrome's. |
+| `download({data \| body})` | **real content save** — `data` is a data URL and is decoded; `body` is written as the file's content, which is reported, because Chrome POSTs a `body` and this shell has no POST-download path. |
+| `saveAs: true` | **real save dialog** (`dialog.showSaveDialog`), defaulting to the derived name in the downloads directory. A cancelled dialog is `interrupted` with **no error**, because nothing went wrong. |
+| `onChanged` | **real** — the transitions main observed, pushed into the context that started the download (Chrome's rule). A delta carries `current` only on a download's first event, and a property only when it actually changed. |
+| `onDeterminingFilename` | **real two-step contract** — nothing is decided until the extension's callback runs, the callback may run once, and with **no listener** the download proceeds at once under the suggested name. A listener that answers asynchronously is not pre-empted; main waits its 3 s and then says that it decided the name itself. |
+| `cancel` | **real** — an active download becomes `interrupted` with error `CANCELED` (Chrome's vocabulary) and the partial file is unlinked. An unknown id resolves `false`. |
+| `search` | **real, scoped to the calling extension** — answered from what this shell tracked. Chrome's `id`/`state`/`url`/`filename`/`filenamePrefix`/`startedBefore`/`startedAfter`/`totalBytesGreater`/`limit` filters are honoured; a query field the host cannot filter on (`danger`, `error`) is **reported as ignored** rather than silently treated as match-everything. |
+| `erase` | **real, scoped to the calling extension** — forgets the ledger's entries and answers Chrome's `{id, url, filename}`. A running download is refused, and the **file is not deleted** (Chrome does not delete it either). |
+| `show` / `showDefaultFolder` | do nothing and **say so once**, because there is no download shelf to reveal anything in. |
+| `warning` / `danger` / `acceptDanger` | no equivalent: nothing here classifies a file as dangerous, so nothing can be reported about it. |
 
-Accept-and-no-op shells with the full method shape (`setIcon`/`setTitle`/`onClicked`,
-`onCommand`, `create/update/remove`…). No toolbar/right-click exists; they must not throw.
+**This replaced `InspectorFrontendHost.save`'s anchor hack.** Before it, the DevTools
+frontend's own save built a `Blob`, hung an `<a download>` off the DevTools document and
+clicked it — which works only if the renderer may navigate to a `blob:` URL, and tells
+nobody (not the user, not the shell, not the extension) whether a file was written or
+where. `src/main/save-service.js` is now the one implementation, and both
+`chrome.downloads.download` and `InspectorFrontendHost.save` are calls into it
+([../api/INSPECTOR-FRONTEND-HOST.md](../api/INSPECTOR-FRONTEND-HOST.md)).
+
+**What makes a state honest** (the rules `src/main/save-service.js` exists to hold):
+
+1. **An id exists because this file allocated it and is tracking it.** A request with
+   neither `url` nor content is refused before any id is minted, so nothing can later
+   "search" up a download that never started.
+2. **`complete` is reached only after `writeFile` resolved**, and `totalBytes` is the byte
+   count actually written — not the length of what was asked for.
+3. **A failure is `interrupted` with the platform's own message** (`404 Not Found`,
+   `ENOSPC: no space left on device`), and the partial file is removed, so nothing
+   half-written is reported as a download.
+4. **One extension's `search`/`erase` never sees another's.** Chrome's download history
+   belongs to an extension, so the ledger is keyed by the extension id **main read off the
+   calling frame's URL**. The only cross-extension caller is the DevTools frontend's own
+   save, which is not an extension.
+
+Gated on the declared `downloads` permission, twice over: the frame's gate, and
+`src/main/ipc.js` from the host's own grants (`erase`/`search` included, because in Chrome
+the same permission covers creating a download **and** reading the history of the ones that
+exist). A frame that ignored its `RUNTIME_REGISTER` reply cannot write a file.
+
+**Every capability is injected** — the save dialog, the fetch, the filesystem, the clock,
+the downloads directory, and the context the filename question is put to — so the rules
+above are unit-tested under bare Node with no Electron, no dialog, and no write outside a
+temp directory. The real backend lives in `attachSaveService()`; a test suite that called
+`getSaveService()` would raise a modal on the developer's screen and write into their
+Downloads folder, which `tests/save-service.test.js` asserts it never does.
+
+## `chrome.commands` / `chrome.contextMenus` / `chrome.sidePanel`
+
+**❌ Not injected yet.** No keyboard-shortcut routing, no browser right-click menu, and no
+panel drawer exist in this host, so these namespaces have nothing truthful to do yet beyond
+existing. They are the next step here: full method shape, registrable events that never
+fire, and no permission gate (Chrome needs none for them). Until then a worker that names
+them at module scope takes a `TypeError` at load, which is the failure mode
+[../OVERVIEW.md](../OVERVIEW.md)'s stubbing rule exists to avoid — this is the one place in
+Tier 2 where the rule is not yet honoured.
 
 ## Manifest `options_ui`
 
-`runtime.openOptionsPage()` → open the options HTML in a separate Electron window using
-the `rozenite://` protocol.
+**✅ Real: `runtime.openOptionsPage()` opens a window, or says why it cannot**
+(`src/main/options-host.js` + `src/chrome-shim/runtime.js`, GitHub issue #4).
 
-## `panels.elements` / `panels.sources` / `panels.performance`
+| Case | Answer |
+| --- | --- |
+| manifest declares `options_ui.page` | **a window opens** over `rozenite://<id>/<page>`, created with the **same `webPreferences` every other extension frame gets** — an options page is an extension page, not a privileged one. The page gets the working `chrome.*` shim (asserted: the opened page reads its own `runtime.id` and `getURL`). |
+| manifest declares none | **`lastError` + a rejection naming the extension id.** A resolved no-op would be the worse-than-absent case: an extension that opens its options page from a command or a button would proceed as if a window had appeared, and wait for one that never comes. |
+| `options_ui.page` outside the extension's folder | refused by the file server's own containment rules, and reported as "not a file this extension serves" rather than opened on a 404. |
+| `open_in_tab: true` | reported in the window's title rather than dropped: this shell has no browser tab to honour Chrome's in-tab meaning, and the difference is stated instead of pretended away. |
+| a second call while it is open | does not stack windows; the host logs that it is focusing the one it tracks. |
+
+**Not permission-gated, matching Chrome:** `runtime.openOptionsPage` needs no permission
+there either — the manifest on disk is the only authority, and that is the host's own read
+of it, never anything the frame sent. Chrome's first `openOptionsPage` argument is a
+**name**, not a location; the manifest's page is what opens.
+
+`panels.elements` / `panels.sources` / `panels.performance`
 
 Covered in [DEVTOOLS-PANELS.md](DEVTOOLS-PANELS.md); listed here only to complete the
 Tier-2 inventory: all remain ❌ and depend on

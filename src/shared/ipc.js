@@ -27,6 +27,11 @@ module.exports = {
   // ── window ops ───────────────────────────────────────────────────────────
   WINDOW_BRING_TO_FRONT: "window-bring-to-front",
   WINDOW_CLOSE: "window-close",
+  /** ({url, content, forceSaveAs, isBase64}) -> `InspectorFrontendHost.save` over
+   *  the shell's one save path (src/main/save-service.js). The frontend used to
+   *  click a synthetic `<a download>` at a `blob:` URL, which told nobody whether
+   *  anything was written; now it is the same service `chrome.downloads` uses. */
+  HOST_SAVE: "host-save",
 
   // ── chrome.runtime (docs/features/RUNTIME-MESSAGING.md) ──────────────────
   /** () -> manifest of the calling frame's extension (id from frame URL). */
@@ -91,4 +96,25 @@ module.exports = {
   NOTIFICATION_CLEAR: "notification-clear",
   /** () -> the permission level this host can actually observe. */
   NOTIFICATION_PERMISSION: "notification-permission",
+
+  // ── chrome.downloads + chrome.runtime.openOptionsPage (SMALL-SHIMS.md) ──────
+  // Every one of these is gated on the frame's own `downloads` grant, in the
+  // shape Chrome itself has: `downloads` covers creating a download AND the
+  // History API over the ones that exist (`downloads.erase`/`search` read the
+  // same history Chrome gates behind the same permission).
+  /** ({options, initiator}) -> save one URL; resolves {id} or {error}. */
+  DOWNLOAD_START: "download-start",
+  /** ({downloadId}) -> cancel a running download this host owns. */
+  DOWNLOAD_CANCEL: "download-cancel",
+  /** ({query}) -> erase finished downloads from the host's ledger. */
+  DOWNLOAD_ERASE: "download-erase",
+  /** ({query}) -> the tasks in the ledger matching the query. */
+  DOWNLOAD_SEARCH: "download-search",
+  /** ({requestId, filename}) -> an extension context answering one filename
+   *  suggestion request. Resolves {suggestion, error} — the host's fallback. */
+  DOWNLOAD_SUGGEST_REPLY: "download-suggest-reply",
+  /** () -> open this extension's `options_ui.page` in a window of its own.
+   *  Gated on `options` only where Chrome gates it, which is not at all: the
+   *  manifest decides, so an extension without `options_ui` gets lastError. */
+  OPTIONS_OPEN: "options-open",
 };

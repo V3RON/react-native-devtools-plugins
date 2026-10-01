@@ -51,6 +51,12 @@ const {
   NOTIFICATION_SHOW,
   NOTIFICATION_CLEAR,
   NOTIFICATION_PERMISSION,
+  OPTIONS_OPEN,
+  DOWNLOAD_START,
+  DOWNLOAD_CANCEL,
+  DOWNLOAD_ERASE,
+  DOWNLOAD_SEARCH,
+  DOWNLOAD_SUGGEST_REPLY,
 } = require("../shared/ipc");
 
 const extensionId = window.location.hostname; // id == hostname: load-bearing
@@ -114,13 +120,44 @@ const storage = createExtensionStorage({
 // Every call waits for RUNTIME_REGISTER, because the host derives this frame's
 // identity from the registered principal — an unregistered frame is not entitled
 // to the app's traffic.
-const registered = ipcRenderer.invoke(RUNTIME_REGISTER).then((reply) => {
-  grants = (reply && reply.granted) || {};
-  const scale = Number(reply && reply.alarmClockScale);
-  alarmClockScale = Number.isFinite(scale) && scale > 0 ? scale : 1;
+// The one place the frame learns whether the host knows it. Registration can fail in
+// two ways — the host refuses (an answer of `{ok: false}`) or the handler throws (a
+// rejected invoke) — and BOTH have to settle the permission gate:
+//
+//   - if they did not, `permissions.check` would keep returning a promise that never
+//     resolves, and every gated API call in this context would hang forever with no
+//     error anywhere. Measured: a throwing RUNTIME_REGISTER handler made a worker's
+//     first `chrome.notifications.create` never call back at all.
+//   - the fallback is `{}` — nothing declared — which is the honest reading of "the
+//     host told us nothing about this frame". Chrome does not run an extension page it
+//     cannot identify either, and a gate that defaults to ALLOWED would be the worst
+//     possible guess.
+//
+// The reason is logged, because a frame that silently loses every capability is the
+// kind of failure a developer spends a day on.
+const registrationFailed = (reason) => {
+  grants = {};
   permissions.manifestLoaded();
-  return reply || { ok: false };
-});
+  console.error(
+    `[chrome] this frame could not register with the host (${reason}); every permission-gated ` +
+      "API will report that its permission is not declared."
+  );
+  return { ok: false, error: reason };
+};
+
+const registered = ipcRenderer
+  .invoke(RUNTIME_REGISTER)
+  .then((reply) => {
+    if (!reply || !reply.ok) {
+      return registrationFailed("the host refused the registration");
+    }
+    grants = reply.granted || {};
+    const scale = Number(reply.alarmClockScale);
+    alarmClockScale = Number.isFinite(scale) && scale > 0 ? scale : 1;
+    permissions.manifestLoaded();
+    return reply;
+  })
+  .catch((error) => registrationFailed((error && error.message) || "registration failed"));
 const asNetworkCaller = (call) => registered.then(() => call());
 
 const networkBridge = createNetworkBridge({
@@ -206,6 +243,38 @@ const chrome = createChromeNamespace({
       (level) => (typeof level === "string" ? level : "unspecifed")
     ),
   getAlarmClockScale: () => alarmClockScale,
+  // chrome.downloads -> the shell's one save path (src/main/save-service.js). The id
+  // this resolves is main's, so an extension can only ever refer to a save main is
+  // really tracking; a refusal comes back as main's error and rejects the call.
+  saveDownload: (request) =>
+    asRegisteredCaller(() => ipcRenderer.invoke(DOWNLOAD_START, request)),
+  cancelDownload: (downloadId) =>
+    asRegisteredCaller(() => ipcRenderer.invoke(DOWNLOAD_CANCEL, { id: downloadId })).then(
+      (canceled) => Boolean(canceled)
+    ),
+  eraseDownloads: (ids) =>
+    asRegisteredCaller(() => ipcRenderer.invoke(DOWNLOAD_ERASE, { ids })).then(
+      (erased) => erased || []
+    ),
+  searchDownloads: (query) =>
+    asRegisteredCaller(() => ipcRenderer.invoke(DOWNLOAD_SEARCH, { query })).then(
+      (items) => items || []
+    ),
+  // The extension's answer to one filename-suggestion request. `suggestion === null`
+  // is the shim's "no suggestion" (Chrome's callback called with no argument), which
+  // the host reads as "keep the name you derived".
+  respondSuggestion: (requestId, suggestion) => {
+    ipcRenderer
+      .invoke(DOWNLOAD_SUGGEST_REPLY, { requestId, filename: suggestion })
+      .catch(() => {});
+  },
+  // chrome.runtime.openOptionsPage -> a window for the manifest's options_ui.page.
+  // Main reads the manifest from disk, so an extension with no options_ui gets the
+  // refusal (see src/main/options-host.js) rather than a resolved promise.
+  openOptionsPage: () =>
+    asRegisteredCaller(() => ipcRenderer.invoke(OPTIONS_OPEN)).then(
+      (reply) => reply || { ok: false, error: "openOptionsPage: no answer from the host." }
+    ),
   // Declared permissions gate capability (docs/features/EXTENSION-MANAGEMENT.md).
   // The verdict this frame is gated on is the host's — RUNTIME_REGISTER read the
   // manifest from disk — so a page-world script cannot widen it by replacing

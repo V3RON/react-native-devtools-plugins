@@ -74,6 +74,16 @@ module.exports = {
   // TABS_OPEN_POLICIES above for why the default opens nothing).
   tabsOpen: tabsOpenPolicy(),
 
+  // chrome.alarms' clock multiplier (src/chrome-shim/alarms.js), resolved to a NUMBER
+  // on purpose: this value travels to each extension context inside its
+  // RUNTIME_REGISTER reply, which crosses IPC through the structured-clone serializer.
+  // A function-valued property is dropped by that serializer rather than transferred,
+  // so a getter-style export would reach the frame as `undefined` and every context
+  // would silently run unscaled. Observed both ways in
+  // tests/tier2-worker-electron.test.js, which cannot observe a real alarm firing
+  // unless the scale really arrives.
+  alarmClockScale: alarmClockScale(),
+
   // In-process CDP bridge (src/main/cdp-bridge.js). Metro host/port and the
   // target filters mirror the flags src/tools/rn-cdp.js takes.
   cdpBridge: {

@@ -49,6 +49,7 @@ const { createTabs } = require("./tabs");
 const { createAction, createNotifications } = require("./browser-apis");
 const { createPermissionsApi } = require("./permissions-api");
 const { createAlarms } = require("./alarms");
+const { createDownloads } = require("./downloads");
 const { declaredPermissions } = require("../shared/permissions");
 const { buildExtensionURL } = require("../shared/protocol");
 const {
@@ -74,6 +75,12 @@ const createChromeNamespace = ({
   hideNotification = null,
   getNotificationPermissionLevel = () => "granted",
   getAlarmClockScale = () => 1,
+  saveDownload = null,
+  cancelDownload = null,
+  eraseDownloads = null,
+  searchDownloads = null,
+  respondSuggestion = null,
+  openOptionsPage = null,
   logger = console,
 }) => {
   // Shared mutable lastError holder — runtime exposes it as a live getter;
@@ -91,7 +98,13 @@ const createChromeNamespace = ({
     logger.warn(`[chrome.${api}] permission denied: ${detail}`);
   };
 
-  const runtime = createRuntime({ extensionId, getManifest, platform, lastError });
+  const runtime = createRuntime({
+    extensionId,
+    getManifest,
+    platform,
+    lastError,
+    openOptionsPage,
+  });
 
   // What this extension actually holds, from the HOST's verdict when there is one
   // (RUNTIME_REGISTER read the manifest from disk) and from the manifest otherwise.
@@ -120,6 +133,19 @@ const createChromeNamespace = ({
   // docs/LIMITATIONS.md; what is implemented is Chrome's argument rules, its
   // replace-on-recreate behavior, and its `scheduledTime` semantics.
   const alarms = createAlarms({ clockScale: getAlarmClockScale });
+
+  // [REAL] `chrome.downloads` over the shell's one save path (src/main/save-service.js).
+  // The id, the state transitions, and the byte count all come from main, which is
+  // where the write actually happens; this shim only shapes the answer and routes the
+  // pushes. Built before the namespace because host deliveries are routed into it.
+  const downloads = createDownloads({
+    start: saveDownload,
+    cancel: cancelDownload,
+    erase: eraseDownloads,
+    search: searchDownloads,
+    respondSuggestion,
+    onUnsupported: (message) => logger.warn(`[chrome.downloads] ${message}`),
+  });
 
   let handleDelivery = () => {};
   if (transport) {
@@ -276,6 +302,22 @@ const createChromeNamespace = ({
       setLastError,
       onDenied: (method, error) => reportDenied(`${method}: ${error.message}`, "alarms"),
     }),
+
+    // [REAL] `chrome.downloads` — Chrome's API over the shell's one save path
+    // (src/main/save-service.js), gated on the declared `downloads` permission like
+    // Chrome's. `download()` resolves the id main allocated (no id for a save that
+    // did not happen), `onChanged` carries the transitions main observed, and
+    // `onDeterminingFilename` keeps Chrome's contract that nothing is decided until
+    // the extension's callback runs — with Chrome's other half intact too: with no
+    // listener the download proceeds immediately under the suggested name.
+    // `show`/`showDefaultFolder` do nothing and say so, because there is no download
+    // shelf to reveal anything in (docs/LIMITATIONS.md).
+    downloads: gateCallbackNamespace(downloads, {
+      api: "downloads",
+      check: (api) => gate.check(api),
+      setLastError,
+      onDenied: (method, error) => reportDenied(`${method}: ${error.message}`, "downloads"),
+    }),
   };
 
   // Host -> frame delivery entry point (non-enumerable: not part of the exposed
@@ -288,6 +330,13 @@ const createChromeNamespace = ({
     value: (delivery) => {
       if (delivery && delivery.kind === "notification" && notifications._onDelivery) {
         if (notifications._onDelivery(delivery)) {
+          return;
+        }
+      }
+      // `download` pushes are chrome.downloads' own (onChanged / onDeterminingFilename),
+      // and are consumed here for the same reason: the messaging client would drop them.
+      if (delivery && delivery.kind === "download" && downloads._onDelivery) {
+        if (downloads._onDelivery(delivery)) {
           return;
         }
       }

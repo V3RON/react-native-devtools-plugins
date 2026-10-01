@@ -70,6 +70,16 @@ const runHarness = ({
   notifier = "fake",
   // Compress the background context's alarm clock (see src/main/config.js).
   alarmClockScale = 1,
+  // Where a save lands. Set, and the harness installs the production save service
+  // with its dialog and fetch answered by the harness and its filesystem REAL, pointed
+  // here. Unset, and no save service is installed for the run, so nothing can raise
+  // Electron's dialog or write into the developer's Downloads folder.
+  downloadsDir = "",
+  // How `runtime.openOptionsPage`'s window is handled: "record" (default) or "real"
+  // (a hidden BrowserWindow that loads the page through the production preload).
+  optionsWindows = "record",
+  // "accept" (default) answers the save dialog, "cancel" refuses it.
+  dialog = "accept",
 }) => {
   const hostDir = path.join(root, "frontend");
   fs.mkdirSync(hostDir, { recursive: true });
@@ -89,8 +99,13 @@ const runHarness = ({
     `--settle=${settleMs}`,
     `--notifier=${notifier}`,
     `--alarm-clock-scale=${alarmClockScale}`,
+    `--options-windows=${optionsWindows}`,
+    `--dialog=${dialog}`,
     ...extraArgs,
   ];
+  if (downloadsDir) {
+    args.push(`--downloads-dir=${downloadsDir}`);
+  }
   if (waitFor) {
     args.push(`--wait-for=${waitFor}`);
   }
