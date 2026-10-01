@@ -232,15 +232,41 @@ test("inspectedWindow.eval: a host-side throw still yields the callback pair", a
 test("out-of-scope APIs exist as inert shapes (stubbing rule)", async () => {
   const { devtools } = makeDevtools();
 
-  // devtools.network: events never fire, getHAR is an empty-but-valid HAR
+  // devtools.network with no host behind it: events never fire and getHAR answers
+  // with an empty-but-valid HAR log — Chrome's object shape (`harLog.entries`),
+  // never invented entries (tests/network-bridge.test.js covers the real feed).
   let fired = 0;
   devtools.network.onRequestFinished.addListener(() => fired++);
   const har = await new Promise((resolve) => devtools.network.getHAR(resolve));
-  assert.deepStrictEqual(JSON.parse(har).log.entries, []);
+  assert.deepStrictEqual(har.log.entries, []);
+  assert.strictEqual(har.version, "1.2");
   assert.strictEqual(fired, 0);
   devtools.network.onNavigated.addListener(() => fired++);
   await tick();
   assert.strictEqual(fired, 0);
+  // The honest "why is this empty" channel, so a panel can say "no network data".
+  assert.deepStrictEqual(await devtools.network.getNetworkStatus(), {
+    available: false,
+    observing: false,
+    enableState: "idle",
+    reason: null,
+    requests: 0,
+  });
+  // Chrome's duality holds on the no-data shapes too: callback style returns nothing.
+  const viaCallback = await new Promise((resolve) =>
+    devtools.network.getNetworkStatus((status) => resolve(status))
+  );
+  assert.strictEqual(viaCallback.available, false);
+  const body = await devtools.network.getResponseBody({ requestId: "nope" });
+  assert.deepStrictEqual(body, {
+    content: null,
+    encoding: null,
+    reason: "chrome.devtools.network has no network backend in this host",
+  });
+  const bodyViaCallback = await new Promise((resolve) =>
+    devtools.network.getResponseBody("nope", (content, encoding) => resolve([content, encoding]))
+  );
+  assert.deepStrictEqual(bodyViaCallback, [null, null]);
 
   // panels.elements sidebar panes: inert but addressable
   const pane = await new Promise((resolve) =>

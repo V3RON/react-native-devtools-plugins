@@ -67,9 +67,6 @@ onto the frontend's own session by message id, so no second debugger appears on 
 app. First consumer: [inspected-window](INSPECTED-WINDOW.md).
 Still missing:
 
-- The `Events` postMessage hack still carries the two synthetic network events;
-  its consumers (devtools-network/webRequest) should move onto real CDP
-  `Network.*` via the bridge rather than this channel.
 - No producer yet for `showPanel`/`colorThemeChanged`/etc. — they only become
   meaningful as extension APIs grow.
 
@@ -83,9 +80,10 @@ Still missing:
    shell took over the socket instead (`src/main/cdp-bridge.js`). Do **not** wire
    `sendMessageToBackend` — it would only work by dropping `?ws=` and switching the
    frontend to `MainConnection`, trading a real socket for a chunked event protocol.
-4. Replace the `Events` postMessage bridge: network events for
-   [devtools-network](DEVTOOLS-NETWORK.md)/[webRequest](WEBREQUEST.md) become a
-   consumer of the CDP bridge (`onEvent("Network.*")`), not a parallel transport.
+4. ~~Replace the `Events` postMessage bridge~~ ✅ done: the `Events` global is deleted
+   (it had no producers left) and [devtools-network](DEVTOOLS-NETWORK.md) /
+   [webRequest](WEBREQUEST.md) are consumers of the CDP bridge
+   (`onEvent("Network.*")` in `src/main/network-model.js`), not a parallel transport.
 
 ## Definition of done
 

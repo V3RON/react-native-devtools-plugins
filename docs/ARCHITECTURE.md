@@ -57,6 +57,14 @@ into the frontend's main world, never `require`d at runtime.
 - `inspected-window.js` — `chrome.devtools.inspectedWindow.eval` / `.reload` as
   `Runtime.evaluate` / `Page.reload` on that session, with the pure CDP → Chrome
   `[value, exceptionInfo]` mapping (`mapEvaluation`).
+- `network-model.js` + `network-service.js` — the shell's own network model, built from the
+  bridge's `Network.*` notifications (`requestWillBeSent` → `loadingFinished`/`loadingFailed`)
+  with lazy single-flight `Network.enable`, a bounded record buffer, HAR 1.2 output and lazy
+  `Network.getResponseBody` bodies. The service fans one message per lifecycle step out to
+  the extension frames that asked for network data and serves `getHar` / `getStatus` /
+  `getBody` over async IPC. No Electron, no bridge import: `sendCommand` / `onEvent` are
+  injected, so the model is unit-testable without a socket.
+  [features/DEVTOOLS-NETWORK.md](features/DEVTOOLS-NETWORK.md).
 - `extension-server.js` — registers the privileged custom scheme **`rozenite://`**
   mapping `rozenite://<extension-id>/<path>` → `extensions/<extension-id>/<path>`,
   guarded against path traversal. **Installing an extension = dropping its unpacked
@@ -81,8 +89,6 @@ into the frontend's main world, never `require`d at runtime.
 - Key repurposed method: `setInjectedScriptForOrigin(origin, script)` — the frontend hands
   the host a script per origin; stored in the main process (`sendSync`). This is the
   channel the fork uses to ship its `chrome.devtools.*` implementation into extension frames.
-- `Events.send` broadcasts `postMessage` to all iframes ([FAKE] frontend → extension
-  network event transport).
 
 ### Extension-iframe preload (`src/preload/extension-frame.js`)
 
@@ -93,7 +99,9 @@ Any iframe loaded under `rozenite:` (hostname = extension id) gets, in order:
   extension's devtools page can register panel tabs;
 - the **`chrome` namespace** assembled by `src/chrome-shim`, merged onto `window.chrome`
   (its `devtools.inspectedWindow.eval` / `.reload` are wired to the async `DEVTOOLS_EVAL`
-  / `DEVTOOLS_RELOAD` IPC channels, answered by `src/main/inspected-window.js`);
+  / `DEVTOOLS_RELOAD` IPC channels, answered by `src/main/inspected-window.js`; its network
+  APIs are wired to `NETWORK_SUBSCRIBE` / `NETWORK_GET_HAR` / `NETWORK_GET_STATUS` /
+  `NETWORK_GET_BODY`, with `NETWORK_DELIVER` as the host's push channel);
 - currently also a raw `ipcRenderer` exposure (security debt — see
   [LIMITATIONS.md](LIMITATIONS.md)).
 
@@ -104,17 +112,24 @@ Pure modules; `index.js` assembles the namespace from injected deps:
 - `storage.js` — real `chrome.storage.local/sync` ([REAL]), `StorageArea` contract with
   `onChanged`, quotas, promise + callback styles, against an injected backend
   (electron-store adapter wired by the preload: one JSON file per extension per area).
-- `network-bridge.js` — maps inbound `RequestStarted`/`RequestFinished` events
-  ([FAKE] synthetic feed from the frontend) onto `chrome.webRequest` listeners;
-  finished requests get a **hardcoded base64 stub body** via an injected dep.
+- `network-bridge.js` — `chrome.devtools.network` **and** `chrome.webRequest`, both fed by
+  the host's one CDP network model: the frame subscribes on its first listener, the host
+  pushes one delivery per lifecycle step, and this module decides which Chrome event each
+  step becomes (filters matched locally, real `Event` objects, `Request` objects with lazy
+  `getContent`). Reads (`getHAR`, status, bodies) are injected async host calls. Nothing is
+  invented: an unavailable capture stays an empty list plus one console sentence
+  ([features/DEVTOOLS-NETWORK.md](features/DEVTOOLS-NETWORK.md),
+  [features/WEBREQUEST.md](features/WEBREQUEST.md)). `web-request.js` holds the CDP →
+  webRequest mapping and Chrome's URL-pattern matching, pure.
 - `runtime.js` + `messaging.js` — identity (`id`/`getURL`/`getManifest`/platform) and
   real `sendMessage`/Ports, relayed by the host message router
   ([REAL, extension-scoped]; lifecycle events await the background host).
   `event.js` provides Chrome-semantics Event objects shared across the shim.
 - `devtools.js` — `chrome.devtools.*`: real `panels.create` (host-driven tabs), real
   `inspectedWindow.eval` against an injected `evalInPage` host dependency
-  ([features/INSPECTED-WINDOW.md](features/INSPECTED-WINDOW.md)), inert network/panels
-  events ([features/DEVTOOLS-PANELS.md](features/DEVTOOLS-PANELS.md)); `tabs.js` — inert
+  ([features/INSPECTED-WINDOW.md](features/INSPECTED-WINDOW.md)), `panels.network.getHAR`
+  on the shared network bridge, and inert panel events
+  ([features/DEVTOOLS-PANELS.md](features/DEVTOOLS-PANELS.md)); `tabs.js` — inert
   `chrome.tabs` shell. Full gap analysis: [api/CHROME-EXTENSION-APIS.md](api/CHROME-EXTENSION-APIS.md).
 
 ### Shell-driven extension hosting (`src/main/extensions.js`, `src/main/panel-host.js`, `src/frontend/panel-bridge.js`)
@@ -127,7 +142,7 @@ registry; the bridge imports the frontend's own `ui/legacy/legacy.js` (same modu
 instance, same `InspectorView` singleton), spawns hidden devtools-page iframes, and
 turns `chrome.devtools.panels.create` IPCs into real tabs (`SimpleView` + iframe).
 Devtools-side API surface lives in `chrome-shim/devtools.js` (panels/inspectedWindow/
-network per the stubbing rule) plus the inert `chrome-shim/tabs.js` shell.
+network) plus the inert `chrome-shim/tabs.js` shell.
 
 ### `src/tools/fake-cdp.js` — dev convenience (`npm run fake-cdp`)
 
@@ -159,15 +174,17 @@ to serve the frontend from another host. Flags: `--metro-host/--metro-port`,
             │  never forwarded to the frontend;       (preload: injected script + chrome shim)
             │  everything else relays verbatim              ▲
             │                                               │ async IPC
-            └── Runtime.evaluate / Page.reload ◄── main/inspected-window.js
-                                                    (DEVTOOLS_EVAL / DEVTOOLS_RELOAD)
-
-   [FAKE, still] frontend postMessage (RequestStarted/RequestFinished)
-             ──► chrome.webRequest listeners → to be replaced by the bridge's
-                 onEvent("Network.*")
+            ├── Runtime.evaluate / Page.reload ◄── main/inspected-window.js
+            │                                       (DEVTOOLS_EVAL / DEVTOOLS_RELOAD)
+            └── Network.* ◄─► main/network-model.js ──► network-service.js
+                                (lazy Network.enable,      │  one delivery per lifecycle step,
+                                 HAR 1.2, bodies)          ▼
+                                              chrome.devtools.network + chrome.webRequest
 ```
 
 One upstream session serves the frontend **and** host commands: the app never learns
-about a second debugger, and the frontend never sees a command it did not send.
+about a second debugger, and the frontend never sees a command it did not send. One
+`Network.enable` session likewise serves the frontend's own Network panel, Rozenite's
+middleware, and every extension frame — the model accumulates once in main and fans out.
 
 Target status per functionality: [features/README.md](features/README.md).

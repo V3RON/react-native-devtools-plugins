@@ -4,9 +4,10 @@
 //
 //   1. the frontend-provided injected script for this origin — evaluated
 //      before page scripts, defines chrome.devtools.* (the fork's channel);
-//   2. the chrome.* namespace (src/chrome-shim);
-//   3. the Events relay over the main-process IPC channel
-//      ([FAKE] transport, until the real dispatch channel lands).
+//   2. the chrome.* namespace (src/chrome-shim), whose network APIs ride the
+//      host's CDP network model over async IPC
+//      (src/main/network-service.js, docs/features/DEVTOOLS-NETWORK.md);
+//   3. the two delivery channels: runtime messaging and network events.
 //
 // SECURITY DEBT (docs/LIMITATIONS.md): exposing ipcRenderer raw and
 // evaluating scripts via new Function gives extension frames full Node
@@ -31,10 +32,14 @@ const {
   RUNTIME_PORT_POST,
   RUNTIME_PORT_CLOSE,
   RUNTIME_DELIVER,
-  EVENTS,
   EXT_PANEL_CREATE,
   DEVTOOLS_EVAL,
   DEVTOOLS_RELOAD,
+  NETWORK_SUBSCRIBE,
+  NETWORK_GET_HAR,
+  NETWORK_GET_STATUS,
+  NETWORK_GET_BODY,
+  NETWORK_DELIVER,
 } = require("../shared/ipc");
 
 const extensionId = window.location.hostname; // id == hostname: load-bearing
@@ -54,12 +59,6 @@ ipcRenderer
   })
   .catch(() => {});
 
-// [FAKE] placeholder response body so network-inspector extensions have
-// something to render. Replaced by real Network.getResponseBody via the
-// dispatch channel (docs/features/DEVTOOLS-NETWORK.md).
-const FAKE_RESPONSE_BODY_BASE64 =
-  "eyJkYXRhIjp7ImNoYXJhY3RlciI6eyJpZCI6IjEiLCJuYW1lIjoiUmljayBTYW5jaGV6Iiwic3RhdHVzIjoiQWxpdmUiLCJzcGVjaWVzIjoiSHVtYW4iLCJnZW5kZXIiOiJNYWxlIiwib3JpZ2luIjp7Im5hbWUiOiJFYXJ0aCAoQy0xMzcpIn0sImxvY2F0aW9uIjp7Im5hbWUiOiJDaXRhZGVsIG9mIFJpY2tzIn19fX0=";
-
 // electron-store -> chrome-shim StorageBackend adapter.
 // NOTE: one Store instance per frame per area races on the shared JSON file;
 // swap for a main-process-backed backend (docs/LIMITATIONS.md).
@@ -78,16 +77,29 @@ const storage = createExtensionStorage({
       : storeBackend(new Store({ name: `extension-${extensionId}-${areaName}` })),
 });
 
+// chrome.devtools.network + chrome.webRequest, both fed by the host's CDP network
+// model (src/main/network-service.js). Reads are async IPC; request lifecycle
+// steps arrive as NETWORK_DELIVER pushes. Nothing is answered from a cache here
+// and no body is invented: when the backend cannot report traffic, the host says
+// so and the shim reports "no network data" (docs/features/DEVTOOLS-NETWORK.md).
+// Every call waits for RUNTIME_REGISTER, because the host derives this frame's
+// identity from the registered principal — an unregistered frame is not entitled
+// to the app's traffic.
+const registered = ipcRenderer.invoke(RUNTIME_REGISTER).catch(() => ({ ok: false }));
+const asNetworkCaller = (call) => registered.then(() => call());
+
 const networkBridge = createNetworkBridge({
-  getContentBase64: () => FAKE_RESPONSE_BODY_BASE64,
+  subscribe: () => asNetworkCaller(() => ipcRenderer.invoke(NETWORK_SUBSCRIBE)),
+  getNetworkStatus: () => asNetworkCaller(() => ipcRenderer.invoke(NETWORK_GET_STATUS)),
+  fetchHar: (options) => asNetworkCaller(() => ipcRenderer.invoke(NETWORK_GET_HAR, { options })),
+  fetchBody: (requestId) =>
+    asNetworkCaller(() => ipcRenderer.invoke(NETWORK_GET_BODY, { requestId })),
 });
 
 // chrome.runtime messaging transport over IPC (docs/features/RUNTIME-MESSAGING.md).
 // Registration gates all traffic: until it resolves the frame is unknown to
-// the router (methods below still call it, so pending sends simply queue on
+// the router (methods above still call it, so pending sends simply queue on
 // the promise).
-const registered = ipcRenderer.invoke(RUNTIME_REGISTER).catch(() => ({ ok: false }));
-
 const transport = {
   sendMessage: ({ message }) =>
     registered.then((r) => (r.ok ? ipcRenderer.invoke(RUNTIME_SEND_MESSAGE, { message }) : undefined)),
@@ -102,14 +114,6 @@ const transport = {
   portClose: ({ portId }) =>
     registered.then(() => ipcRenderer.invoke(RUNTIME_PORT_CLOSE, { portId })),
 };
-
-// [FAKE] transport: the frontend broadcasts RequestStarted/RequestFinished
-// via postMessage (frontend-host "Events"); feed the pure bridge.
-window.addEventListener("message", ({ data }) => {
-  if (data && typeof data === "object" && typeof data.event === "string") {
-    networkBridge.onFrontendEvent(data.event, data.data);
-  }
-});
 
 const chrome = createChromeNamespace({
   extensionId,
@@ -154,6 +158,12 @@ const chrome = createChromeNamespace({
 // Router -> frame deliveries (messages, ports).
 ipcRenderer.on(RUNTIME_DELIVER, (_event, delivery) => chrome.handleDelivery(delivery));
 
+// Network deliveries (devtools.network events + webRequest listeners). The host
+// wraps them as {kind, payload}; the shim consumes the payload shape.
+ipcRenderer.on(NETWORK_DELIVER, (_event, delivery) =>
+  networkBridge.handleDelivery(delivery && delivery.payload ? delivery.payload : delivery)
+);
+
 // 1. Injected script for this origin (may not exist yet for some frames).
 const script = ipcRenderer.sendSync(GET_INJECTED_SCRIPT, window.location.origin);
 if (script) {
@@ -181,19 +191,5 @@ contextBridge.executeInMainWorld({
   },
 });
 
-// 3. Security-debt exposure (see header) + Events relay.
+// 3. Security-debt exposure (see header).
 contextBridge.exposeInMainWorld("ipcRenderer", ipcRenderer);
-contextBridge.exposeInMainWorld(EVENTS, {
-  addListener: (event, callback) => {
-    ipcRenderer.on(EVENTS, (receivedEvent, data) => {
-      if (event !== receivedEvent) {
-        return;
-      }
-
-      callback(data);
-    });
-  },
-  removeListener: (event, callback) => {
-    ipcRenderer.removeListener(EVENTS, callback);
-  },
-});
