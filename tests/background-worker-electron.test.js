@@ -474,6 +474,84 @@ suite("a background worker in a real Electron process", { timeout: 180000 }, asy
   );
 });
 
+// The shipped extensions' own workers, in the same headless shell. No fixture, no
+// staging: the real `extensions/graphql` and `extensions/altair` folders.
+suite(
+  "the shipped extensions' background workers load",
+  { timeout: 120000 },
+  async (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "rozenite-bgreal-"));
+    t.after(() => {
+      fs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    });
+
+    const run = await runHarness({
+      binary,
+      root,
+      extensionsDir: path.join(__dirname, "..", "extensions"),
+      backgroundHost: true,
+      hostPage: "<!DOCTYPE html><html><body>no extension frames</body></html>",
+      // Neither worker logs on startup (neither script prints anything at module
+      // scope), so this run settles on its deadline; the assertions are about what
+      // did NOT happen and about the two windows that did.
+      waitFor: "never-observed-marker",
+      timeoutMs: 16000,
+      settleMs: 2500,
+    });
+
+    const workerLines = run.observed.filter((line) => line.kind === "worker-console");
+    const errors = workerLines.filter((l) => Number(l.value) >= 3);
+    const windows = (run.observed.find((l) => l.kind === "background-windows") || {}).windows || [];
+    console.log(
+      [
+        `  [electron/background/shipped] exit=${run.code} windows=${windows.length}`,
+        `  [electron/background/shipped] windows: ${JSON.stringify(windows)}`,
+        `  [electron/background/shipped] worker output: ${JSON.stringify(
+          workerLines.map((l) => `${l.extensionId}[${l.level}] ${String(l.message).slice(0, 120)}`)
+        )}`,
+      ].join("\n")
+    );
+
+    assert.equal(windows.length, 2, "graphql and altair both get a background context");
+    assert.ok(
+      windows.every((win) => win.visible === false),
+      "both worker windows are hidden"
+    );
+    const altair = windows.find((win) => win.extensionId === "altair");
+    assert.match(altair.url, /type=module$/, "altair's worker is loaded as an ES module");
+
+    // Altair's worker is the load-time hazard: an ES module that references
+    // chrome.action.onClicked and chrome.notifications at top level and imports a
+    // sibling module. Any missing namespace or failed import is an uncaught error.
+    assert.equal(
+      errors.filter((l) => l.extensionId === "altair").length,
+      0,
+      `altair's ESM worker loaded cleanly: ${JSON.stringify(
+        errors.filter((l) => l.extensionId === "altair").map((l) => l.message)
+      )}`
+    );
+
+    // GraphQL's worker really runs and really hits the gate: it declares
+    // ["webRequest","storage"] and NOT tabs, and its onInstalled handler calls
+    // chrome.tabs.create. The denial is reported twice on purpose — the callback
+    // path logs it, and the unhandled rejection is surfaced rather than swallowed.
+    const graphqlDenials = workerLines.filter(
+      (l) => l.extensionId === "graphql" && /permission 'tabs' is not declared/.test(String(l.message))
+    );
+    assert.equal(
+      graphqlDenials.length >= 1,
+      true,
+      `graphql's worker ran and was denied: ${JSON.stringify(graphqlDenials)}`
+    );
+    assert.equal(
+      workerLines.filter((l) => l.extensionId === "graphql" && /Uncaught/.test(String(l.message)))
+        .length >= 1,
+      true,
+      "the unhandled rejection is reported, not swallowed (Chrome would throw here instead)"
+    );
+  }
+);
+
 suite(
   "a background context cannot be claimed from a page",
   { timeout: 90000 },
@@ -496,10 +574,19 @@ suite(
       "probe.js": `
         const MARKER = "__ROZENITE_PROBE__";
         const grab = (url) => fetch(url, { cache: "no-store" })
-          .then((r) => r.text().then((t) => ({ url, status: r.status, body: t.slice(0, 60) })),
-                (e) => ({ url, rejected: String(e.message) }));
+          .then(
+            (r) => r.text().then((t) => ({
+              url,
+              status: r.status,
+              csp: r.headers.get("content-security-policy"),
+              body: t.slice(0, 900),
+            })),
+            (e) => ({ url, rejected: String(e.message) })
+          );
         Promise.all([
           grab("/__rozenite_background__"),
+          grab("/__rozenite_background__?script=own.js&type=module"),
+          grab("/__rozenite_background__?script=../b.local/secret.js"),
           grab("/../b.local/secret.js"),
           fetch("rozenite://b.local/secret.js", { cache: "no-store" })
             .then((r) => r.text().then((t) => ({ siblingStatus: r.status, body: t.slice(0, 80) })),
@@ -517,6 +604,10 @@ suite(
       "manifest.json": JSON.stringify({ name: "B", version: "1", manifest_version: 3 }),
       "secret.js": "export const secret = 'sibling-extension-content';",
     });
+    fs.writeFileSync(
+      path.join(extensionsDir, "a.local", "own.js"),
+      "console.log('a-local-script');\n"
+    );
 
     const run = await runHarness({
       binary,
@@ -536,18 +627,33 @@ suite(
     );
 
     assert.ok(data.results, `the probe reported (exit ${run.code})`);
-    const [bootstrap, traversal, sibling] = data.results;
+    const [shadowed, ownBootstrap, crossBootstrap, traversal, sibling] = data.results;
 
-    // The reserved path is reserved in BOTH directions: a folder that ships a real
-    // file named `__rozenite_background__` cannot pre-empt the host's own generated
-    // document — the request is refused rather than served from disk.
-    assert.match(String(bootstrap.url || ""), /__rozenite_background__/);
+    // 1. The reserved path is reserved in BOTH directions: a folder that ships a
+    //    real file named `__rozenite_background__` cannot pre-empt the host's own
+    //    generated document — that request is refused, never served from disk.
+    assert.equal(shadowed.status, 404, JSON.stringify(shadowed));
     assert.ok(
-      !/SHADOWED/.test(String(bootstrap.body || "")),
-      `a real file cannot shadow the bootstrap path: ${JSON.stringify(bootstrap)}`
+      !/SHADOWED/.test(String(shadowed.body || "")),
+      `a real file cannot shadow the bootstrap path: ${JSON.stringify(shadowed)}`
     );
 
-    // Path traversal: `..` never escapes the requesting extension's folder.
+    // 2. The generated document: no inline script (the CSP would refuse it), the
+    //    extension's own CSP header on the response, and a same-origin src=.
+    assert.equal(ownBootstrap.status, 200, JSON.stringify(ownBootstrap));
+    assert.match(String(ownBootstrap.body || ""), /<script src="own\.js" type="module">/);
+    assert.ok(
+      !/<script(?![^>]*\bsrc=)[^>]*>[^<]/i.test(String(ownBootstrap.body || "")),
+      "the synthesized document contains no inline script"
+    );
+    assert.match(String(ownBootstrap.csp || ""), /script-src 'self'/, "CSP rides the response");
+
+    // 3. `?script=` is resolved through the containment rules, never trusted: a
+    //    traversal there is refused exactly like a direct request to that file.
+    assert.equal(crossBootstrap.status, 404, JSON.stringify(crossBootstrap));
+    assert.ok(!/sibling-extension-content/.test(String(crossBootstrap.body || "")));
+
+    // 4. Path traversal on a plain file request.
     assert.match(String(traversal.url || ""), /\.\./, "the traversal request was attempted");
     assert.equal(
       traversal.status === 404 || Boolean(traversal.rejected),
@@ -555,13 +661,13 @@ suite(
       `../ stays inside the extension: ${JSON.stringify(traversal)}`
     );
 
-    // OBSERVED, and asserted so it cannot be mistaken for a guard: a page in one
-    // extension can `fetch()` a sibling extension's file and read the body. The
-    // traversal guard stops a path from escaping its folder inside one request;
-    // it was never a same-origin check, and this is unchanged by the move from
-    // registerFileProtocol to protocol.handle (measured both ways, same 200 and
-    // same body). docs/LIMITATIONS.md records the gap; closing it needs per-origin
-    // isolation for the scheme, which this shell does not have.
+    // 5. OBSERVED, and asserted so it cannot be mistaken for a guard: a page in one
+    //    extension can `fetch()` a sibling extension's file and read the body. The
+    //    traversal guard stops a path from escaping its folder inside one request;
+    //    it was never a same-origin check, and this is unchanged by the move from
+    //    registerFileProtocol to protocol.handle (measured both ways: same 200, same
+    //    body). docs/LIMITATIONS.md records the gap; closing it needs per-origin
+    //    isolation for the scheme, which this shell does not have.
     assert.equal(
       sibling.siblingStatus,
       200,
