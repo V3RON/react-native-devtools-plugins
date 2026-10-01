@@ -96,9 +96,24 @@ stays alive. `src/main/index.js` owns that rule in one place:
   shutdown would hang with the app lingering invisibly;
 - `will-quit` closes the worker windows.
 
-So closing the DevTools window quits the app and takes the workers with it, on every
-platform. Chrome would keep them alive; this shell does not, because there is nothing here
-to keep them *for*.
+What that means per platform, stated rather than smoothed over, because the existing
+platform rule survives and it changes the answer:
+
+| | Closing the DevTools window |
+| --- | --- |
+| **non-mac** | the app quits and the workers go with it |
+| **macOS** | the app stays alive in the dock **with the workers still running**; a dock click creates a fresh DevTools window (`activate` counts application windows, not all windows) and the surviving workers are simply still there |
+
+The macOS half is the closer match to Chrome — an extension's background outlives a closed
+DevTools window — and it falls out of the platform convention this shell already followed,
+rather than being a separate decision about workers. Chrome keeps a worker alive on
+Windows/Linux too, so the non-mac row is a genuine divergence; it follows from "the DevTools
+window *is* the app here", which is the premise the whole shell rests on.
+
+Only the predicate behind this is asserted (`host.isWorkerWindow`, plus a source-shape check
+that the quit rule uses it and does not quit on macOS). The full quit sequence is **not**
+covered headlessly: the harness ends its run with `app.exit(0)`, which bypasses `will-quit`
+entirely.
 
 ## Verified
 

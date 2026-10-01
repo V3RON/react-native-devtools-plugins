@@ -177,10 +177,6 @@ const createBackgroundHost = ({
       else if (record.value === 2) log.warn(text);
       else log.log(text);
     });
-    // An uncaught error that never reaches the console (a crashed renderer, a
-    // rejected top-level module load reported as a page error) is still a death
-    // worth naming.
-    win.webContents.on("render-process-gone", () => {});
     return win;
   };
 

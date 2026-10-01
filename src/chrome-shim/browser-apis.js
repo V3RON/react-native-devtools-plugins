@@ -144,7 +144,4 @@ const createNotifications = ({ onStubCall = () => {} } = {}) => {
   };
 };
 
-const cb_or = (candidate, fallback) =>
-  typeof candidate === "function" ? candidate : fallback;
-
 module.exports = { createAction, createNotifications };

@@ -9,6 +9,8 @@
 // Run: npm test
 const test = require("node:test");
 const assert = require("node:assert");
+const fs = require("node:fs");
+const path = require("node:path");
 
 const {
   createInstallState,
@@ -377,4 +379,39 @@ test("isWorkerWindow knows its own windows — the shutdown rule depends on it",
   host.attach();
   assert.strictEqual(host.isWorkerWindow(host.windows[0].id), true);
   assert.strictEqual(host.isWorkerWindow(999), false, "the frontend window is not a worker");
+});
+
+// The quit rule itself cannot be driven headlessly (the harness ends its run with
+// app.exit, which skips will-quit), so the rule's SHAPE is pinned here: the two
+// decisions that matter are "hidden windows do not count" and "macOS does not quit",
+// and both were easy to get silently wrong.
+test("src/main/index.js's quit rule excludes worker windows and respects macOS", () => {
+  const source = fs.readFileSync(
+    path.join(__dirname, "..", "src", "main", "index.js"),
+    "utf8"
+  );
+  // One raw window enumeration only, inside the predicate that filters workers out —
+  // if a quit path ever enumerates windows directly, hidden workers keep the app alive.
+  assert.strictEqual(
+    (source.match(/BrowserWindow\.getAllWindows\(\)/g) || []).length,
+    1,
+    "getAllWindows is used in exactly one place: the worker-filtered predicate"
+  );
+  assert.match(source, /host\.isWorkerWindow\(win\.id\)/);
+
+  // `activate` recreates the DevTools window when none is left — counting hidden
+  // workers there would mean a dock click doing nothing.
+  const activate = source.slice(source.indexOf('app.on("activate"'));
+  assert.match(activate.slice(0, 300), /userWindows\(\)\.length === 0/);
+
+  // Closing the DevTools window must quit on non-mac even though worker windows are
+  // still open (window-all-closed never fires there), and must NOT quit on mac.
+  const created = source.slice(source.indexOf('app.on("browser-window-created"'));
+  assert.match(created, /userWindows\(\)\.length === 0/);
+  assert.match(created.slice(0, 600), /process\.platform !== "darwin"/);
+
+  // Worker windows are destroyed on the way out rather than left as the last thing
+  // standing between the app and exit.
+  const willQuit = source.slice(source.indexOf('app.on("will-quit"'));
+  assert.match(willQuit, /closeAll\(\)/);
 });
