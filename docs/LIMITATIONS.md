@@ -139,6 +139,13 @@
   shim (`src/chrome-shim/permission-gate.js`). Deviation from Chrome, stated: Chrome omits
   an undeclared namespace entirely, this shell keeps the namespace and fails the call
   (shape-first rule, [OVERVIEW.md](OVERVIEW.md)).
+- **`chrome.permissions.request` grants nothing.** `contains`/`getAll` report exactly what
+  the manifest declares (the host's own verdict), and `request` resolves `true` only for
+  permissions already declared — `false` for anything else, with one console line. There is
+  no prompt to show and no grant to record: capability is decided from the manifest on disk,
+  so an accepting `request` could only defer the refusal to the first real call. `remove`
+  resolves and changes nothing; `onAdded`/`onRemoved` are registrable and never fire, because
+  nothing in this shell changes a grant ([features/SMALL-SHIMS.md](features/SMALL-SHIMS.md)).
 - **Per-extension CSP.** Every `rozenite://` response carries that extension's
   `content_security_policy`; an extension declaring none gets Chrome's MV3 default
   (`script-src 'self'; object-src 'self'`, plus `wasm-unsafe-eval` when it has a service

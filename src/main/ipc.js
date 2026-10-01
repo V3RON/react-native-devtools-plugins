@@ -17,7 +17,7 @@ const { createMessageRouter } = require("./message-router");
 const { evalInPage, reloadInPage } = require("./inspected-window");
 const { createNetworkService } = require("./network-service");
 const { sendCommand, onEvent, status: bridgeStatus } = require("./cdp-bridge");
-const { createPermissionGate } = require("../shared/permissions");
+const { createPermissionGate, API_PERMISSIONS } = require("../shared/permissions");
 const {
   SHOW_CONTEXT_MENU,
   PREF_REGISTER,
@@ -122,7 +122,12 @@ const grantedPermissions = (event) => {
     return {};
   }
   const granted = {};
-  for (const permission of ["storage", "tabs", "webRequest", "notifications"]) {
+  // Every permission the shim's own table knows about, so a namespace added later
+  // is reported — and therefore gated — without anyone extending an array here.
+  // Under-reporting has one dangerous direction: `chrome.permissions.getAll`
+  // answers from this map, so a permission in the table but not here would be
+  // reported as NOT granted for a manifest that declares it.
+  for (const permission of new Set(Object.values(API_PERMISSIONS))) {
     granted[permission] = gate.has(permission);
   }
   return granted;

@@ -34,6 +34,8 @@ const { createMessagingClient } = require("./messaging");
 const { createDevtools } = require("./devtools");
 const { createTabs } = require("./tabs");
 const { createAction, createNotifications } = require("./browser-apis");
+const { createPermissionsApi } = require("./permissions-api");
+const { declaredPermissions } = require("../shared/permissions");
 const {
   gateCallbackNamespace,
   gateWebRequest,
@@ -68,6 +70,15 @@ const createChromeNamespace = ({
   };
 
   const runtime = createRuntime({ extensionId, getManifest, platform, lastError });
+
+  // What this extension actually holds, from the HOST's verdict when there is one
+  // (RUNTIME_REGISTER read the manifest from disk) and from the manifest otherwise.
+  // May be a promise while that verdict is in flight — `chrome.permissions` waits
+  // rather than guessing (src/chrome-shim/permissions-api.js).
+  const declaredPermissionsList = () =>
+    permissions && typeof permissions.declaredList === "function"
+      ? permissions.declaredList()
+      : declaredPermissions(getManifest());
 
   let handleDelivery = () => {};
   if (transport) {
@@ -156,6 +167,18 @@ const createChromeNamespace = ({
       ),
       onChanged,
     },
+
+    // [ACCEPT-AND-GRANT, truthful] `chrome.permissions` reports what this extension
+    // really holds and grants nothing new: capability is decided from the manifest
+    // on disk (src/main/ipc.js), so a request() that answered "true" for an
+    // undeclared permission would only move the failure to the first real call.
+    // Ungated, like Chrome's — an extension may always ask what it holds.
+    // docs/features/SMALL-SHIMS.md + docs/LIMITATIONS.md record the divergence.
+    permissions: createPermissionsApi({
+      declared: declaredPermissionsList,
+      onUnsupportedRequest: (message) =>
+        logger.warn(`[chrome.permissions] ${message}`),
+    }),
 
     // [STUB — issue #4 owns making this real] `chrome.action`: registrable,
     // inert. Its whole reason for existing is that MV3 workers reference

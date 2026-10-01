@@ -33,8 +33,23 @@ Chrome and stays ungated here.
 
 ## `chrome.permissions`
 
-`contains/request/remove/getAll/onAdded/onRemoved` → report **everything declared as
-granted**. Trivial, unblocks feature-detection code paths.
+**✅ Real as a report, accept-and-grant as a promise** (`src/chrome-shim/permissions-api.js`).
+
+| Method | Status |
+| --- | --- |
+| `contains` / `getAll` | **real** — exactly the permissions the manifest declares, from the HOST's verdict (`RUNTIME_REGISTER` read the manifest from disk), not from `runtime.getManifest()` a page can overwrite. An undeclared permission reports `false`, so this is safe to sit in front of feature-detection code rather than switch it on. |
+| `request` | **accept-and-grant** — resolves `true` when everything requested is already declared (Chrome's own no-prompt fast path) and `false` otherwise, with one console line. See the divergence below. |
+| `remove` | resolves, changes nothing — Chrome cannot remove a required permission either, and fires `onRemoved` for neither. |
+| `onAdded` / `onRemoved` | registrable, **never fire** — nothing here changes a grant, so there is no transition to report. |
+| `host_permissions` | absent from every answer, like `src/shared/permissions.js`: they buy network reach, not API access. |
+
+**The divergence, stated plainly:** this shell cannot *grant* anything a manifest did
+not declare, because permission enforcement (issue #10) decides capability from the
+manifest **on disk** — `src/main/delivery-scope.js` in main and
+`src/chrome-shim/permission-gate.js` in the frame. `request` accepting a call is shape
+fidelity, not new capability. Answering `true` for an undeclared permission would be
+worse than answering `false`: the extension would proceed and be refused at the first
+real call, with `lastError` naming a permission it was just told it held.
 
 ## `chrome.tabs` / `chrome.windows` (subset)
 

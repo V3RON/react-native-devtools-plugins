@@ -22,7 +22,7 @@ needed. Legend and tiers: [../README.md](../README.md). Last reviewed: 2026-10-0
 | [Content scripts (bridge-style)](CONTENT-SCRIPTS.md) | ❌ (design done) | 2 | dispatch channel, runtime messaging |
 | [Background worker](BACKGROUND-WORKER.md) (MV3 service worker) | 🟨 always-on hidden context: script executes, lifecycle fires, worker is a messaging peer; MV3 eviction skipped | 2 | — |
 | [webRequest](WEBREQUEST.md) (`chrome.webRequest`) | 🟨 observe-only, 7 of 9 events from the real CDP model; filters + `ResourceType` real | 2 | — (blocking needs CDP `Fetch`) |
-| [`chrome.permissions`](SMALL-SHIMS.md) — "everything declared is granted" shim | ❌ | 2 | runtime messaging |
+| [`chrome.permissions`](SMALL-SHIMS.md) — "everything declared is granted" shim | 🟨 accept-and-grant: reports the host's real verdict, `request` grants nothing new | 2 | — |
 | [`chrome.tabs`/`windows` subset](SMALL-SHIMS.md) — one synthetic tab = inspected target | ❌ | 2 | runtime messaging |
 | [`chrome.notifications`](SMALL-SHIMS.md) → Electron `Notification` | ❌ registrable shell only, so a worker can load | 2 | — |
 | [`chrome.alarms`](SMALL-SHIMS.md) → timers | ❌ | 2 | ~~background worker~~ host exists now |

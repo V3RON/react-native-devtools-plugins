@@ -34,6 +34,11 @@ const API_PERMISSIONS = {
 // Namespaces Chrome's DevTools extensions may use without declaring anything.
 // Keeping this explicit stops "not in the table" from silently meaning "needs
 // a permission nobody declared".
+//
+// `permissions` is here because it is self-referential in Chrome too: an extension
+// may always ask what it holds (src/chrome-shim/permissions-api.js). So may
+// `alarms`-adjacent shells that invent nothing: `sidePanel` needs no permission in
+// Chrome and this shell renders no panel drawer, so there is nothing to gate.
 const UNGATED_APIS = [
   "runtime",
   "i18n",
@@ -41,6 +46,9 @@ const UNGATED_APIS = [
   "commands",
   "contextMenus",
   "extension",
+  "permissions",
+  "sidePanel",
+  "windows",
 ];
 
 /** The permission an API namespace needs, or null when it needs none. */
@@ -115,6 +123,23 @@ const createPermissionGate = (getManifest) => {
         return settled().then((m) => declaredPermissions(m).includes(permission));
       }
       return declaredPermissions(manifest).includes(permission);
+    },
+    /**
+     * Resolves once the verdict exists (immediately when it already does), so a
+     * caller that must not guess can await it. `chrome.permissions` is the
+     * consumer: an answer about what is granted is only honest after the host's
+     * verdict landed, and before that the truthful statement is "not yet known".
+     */
+    whenSettled() {
+      return settled().then(() => true);
+    },
+    /** The declared list, or a promise for it while the verdict is in flight. */
+    declaredList() {
+      const manifest = known();
+      if (manifest) {
+        return declaredPermissions(manifest);
+      }
+      return settled().then((m) => declaredPermissions(m));
     },
     /** The manifest arrived: release every waiter with the real answer. */
     manifestLoaded() {
