@@ -478,6 +478,26 @@ test("the app is never shown a second debugger connection", async (t) => {
   await reloaded.close();
 });
 
+test("stopping while detached stays stopped — no late upstream attach", async (t) => {
+  const { metro, bridge, listenPort } = await makeWorld(t, {
+    metro: { targetAvailable: false },
+  });
+  const frontend = connectFrontend(listenPort);
+  await frontend.open();
+  await new Promise((resolve) => setTimeout(resolve, 40)); // mid-poll
+
+  await bridge.stop();
+  metro.setTargetAvailable(true); // the app "appears" after shutdown
+  await new Promise((resolve) => setTimeout(resolve, 200));
+
+  assert.strictEqual(metro.accepted(), 0, "no socket opened after stop()");
+  assert.strictEqual(bridge.isAttached(), false);
+  await assert.rejects(
+    () => bridge.sendCommand("Runtime.evaluate", { expression: "1" }),
+    /not running|no CDP session/
+  );
+});
+
 test("external relay mode binds nothing and refuses host commands", async (t) => {
   const { bridge, listenPort } = await makeWorld(t, { bridge: { enabled: false } });
   await assert.rejects(

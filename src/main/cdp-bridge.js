@@ -277,6 +277,11 @@ const createCdpBridge = (options = {}) => {
           await sleep(pollIntervalMs); // device/page may have changed
           continue;
         }
+        if (stopped) {
+          // stop() landed while we were connecting: don't adopt this socket.
+          socket.close();
+          return;
+        }
         upstream = socket;
         socket.on("message", onUpstreamMessage);
         socket.on("close", (code, reason) => {
