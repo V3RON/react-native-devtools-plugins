@@ -98,7 +98,14 @@ const createMessagingClient = ({ extensionId, transport, runtimeEvents, lastErro
   };
 
   // ── Ports ────────────────────────────────────────────────────────────────
-  const makePort = ({ portId, name, initiator }) => {
+  const makePort = ({ portId, name, initiator, upgradeable = false }) => {
+    // An initiated port starts on a local placeholder id and Chrome's
+    // `postMessage` is legal immediately after `connect()`. The real id only
+    // exists when connect()'s round-trip resolves, so posts made in that window
+    // are queued and flushed rather than dropped on an id the router has never
+    // heard of.
+    const queue = upgradeable ? [] : null;
+    let closed = false;
     const port = {
       name,
       portId,
@@ -109,11 +116,43 @@ const createMessagingClient = ({ extensionId, transport, runtimeEvents, lastErro
       // Read port.portId late: for initiated ports it upgrades from the
       // local placeholder to the router-assigned id once connect() resolves.
       disconnect: () => {
+        closed = true;
+        if (queue) {
+          queue.length = 0; // nothing queued may escape a closed port
+        }
         if (ports.delete(port.portId)) {
           transport.portClose({ portId: port.portId });
         }
       },
-      postMessage: (message) => transport.portPost({ portId: port.portId, message }),
+      postMessage: (message) => {
+        if (!queue) {
+          return transport.portPost({ portId: port.portId, message });
+        }
+        if (closed || String(port.portId).startsWith("pending-")) {
+          if (!closed) {
+            queue.push(message);
+          }
+          return undefined;
+        }
+        return transport.portPost({ portId: port.portId, message });
+      },
+      // Internal: connect() resolved, flush what was posted early.
+      _adoptRealId: (realPortId) => {
+        port.portId = realPortId;
+        if (closed) {
+          // disconnect() ran while the id was still a placeholder; the router's
+          // port exists by now, so close it instead of adopting it quietly.
+          transport.portClose({ portId: realPortId });
+          return;
+        }
+        ports.set(realPortId, port);
+        if (!queue) {
+          return;
+        }
+        for (const message of queue.splice(0, queue.length)) {
+          transport.portPost({ portId: realPortId, message });
+        }
+      },
     };
     return port;
   };
@@ -127,7 +166,11 @@ const createMessagingClient = ({ extensionId, transport, runtimeEvents, lastErro
     const name = connectInfo && connectInfo.name ? connectInfo.name : "";
     // Local placeholder port immediately (Chrome returns synchronously); the
     // real portId/round-trip resolves underneath.
-    const port = makePort({ portId: `pending-${nextLocalPortId++}`, name });
+    const port = makePort({
+      portId: `pending-${nextLocalPortId++}`,
+      name,
+      upgradeable: true,
+    });
     transport
       .connect({ name })
       .then((result) => {
@@ -136,8 +179,7 @@ const createMessagingClient = ({ extensionId, transport, runtimeEvents, lastErro
           port.onDisconnect._fire(port);
           return;
         }
-        port.portId = result.portId;
-        ports.set(result.portId, port);
+        port._adoptRealId(result.portId);
       })
       .catch(() => {
         port.lastError = { message: "Could not establish connection." };

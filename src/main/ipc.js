@@ -1,6 +1,13 @@
 // IPC handler registration. Delegates state/services; no logic here.
+//
+// Every channel is async (`ipcMain.handle` + `invoke`) — the house rule in
+// src/shared/ipc.js, unconditional since the injected-script channel went away.
+// The two `sendSync` handlers that used to sit at the top of this function were
+// the whole point of that exception: they handed extension frames a
+// frontend-supplied script to `new Function`. `chrome.devtools.*` is implemented
+// shell-side now (docs/features/DEVTOOLS-PANELS.md), so there is nothing to
+// deliver synchronously and no arbitrary-code-evaluation channel left.
 const { ipcMain } = require("electron");
-const injectedScripts = require("./injected-scripts");
 const preferences = require("./preferences");
 const windowOps = require("./window");
 const { showContextMenu } = require("./context-menu");
@@ -10,9 +17,8 @@ const { createMessageRouter } = require("./message-router");
 const { evalInPage, reloadInPage } = require("./inspected-window");
 const { createNetworkService } = require("./network-service");
 const { sendCommand, onEvent, status: bridgeStatus } = require("./cdp-bridge");
+const { createPermissionGate } = require("../shared/permissions");
 const {
-  STORE_INJECTED_SCRIPT,
-  GET_INJECTED_SCRIPT,
   SHOW_CONTEXT_MENU,
   PREF_REGISTER,
   PREF_GET,
@@ -65,25 +71,62 @@ const networkService = createNetworkService({
 // main process derives from the frame itself.
 const principals = new Map();
 
+// frameKey -> the declared permissions that mattered when the frame registered.
+// The network handlers enforce the `webRequest` grant from here, so a frame that
+// ignores the answer in its RUNTIME_REGISTER reply still gets no data.
+const grants = new Map();
+
+/**
+ * The declared permissions a frame's extension holds, decided in main from the
+ * manifest on disk — never from anything the frame sends. This matters: the
+ * naive implementation reads `chrome.runtime.getManifest()` inside the frame,
+ * and a page-world script can overwrite that function. Handing the verdict back
+ * from RUNTIME_REGISTER means the gate's input is host state
+ * (docs/features/EXTENSION-MANAGEMENT.md).
+ */
+const grantedPermissions = (event) => {
+  let gate;
+  try {
+    const { hostname } = new URL(event.senderFrame.url);
+    gate = createPermissionGate(() => extensionServer.loadManifest(hostname));
+  } catch {
+    return {};
+  }
+  const granted = {};
+  for (const permission of ["storage", "tabs", "webRequest", "notifications"]) {
+    granted[permission] = gate.has(permission);
+  }
+  return granted;
+};
+
 let unregisterRouterFrame; // set below to avoid closure-order issues
 
-const makeFrameSender = (key, webContents, frame, frameId, channel = RUNTIME_DELIVER) => ({
-  kind,
-  payload,
-}) => {
-  try {
-    if (webContents.isDestroyed() || (frame && frame.isDestroyed())) {
-      throw new Error("frame gone");
+const makeFrameSender =
+  (key, webContents, frame, channel = RUNTIME_DELIVER, filter = null) =>
+  ({ kind, payload }) => {
+    // Permission-scoped deliveries (src/main/delivery-scope.js): a frame whose
+    // extension does not declare `webRequest` is not sent the lifecycle steps
+    // that only chrome.webRequest consumes. Everything else flows.
+    if (filter && !filter(payload)) {
+      return;
     }
-    webContents.sendToFrame([webContents.id, frameId], channel, {
-      kind,
-      payload,
-    });
-  } catch {
-    // detached frame: retire it so pending legs/ports settle
-    unregisterRouterFrame(key);
-  }
-};
+    try {
+      if (webContents.isDestroyed() || (frame && frame.isDestroyed())) {
+        throw new Error("frame gone");
+      }
+      // WebFrameMain.send addresses the principal we registered, which is the
+      // only form that is correct by construction here. Verified in a headless
+      // Electron 38 run with an out-of-process `rozenite://` iframe:
+      // `webContents.sendToFrame([webContents.id, event.frameId], …)` returns
+      // false and delivers NOTHING — that tuple is [processId, routingId], not
+      // [webContentsId, frameId], so the message went to a process that has no
+      // such frame. `frame.send(…)` is what lands.
+      frame.send(channel, { kind, payload });
+    } catch {
+      // detached frame: retire it so pending legs/ports settle
+      unregisterRouterFrame(key);
+    }
+  };
 
 // Resolve the calling frame's key, or null if it is not (or no longer) the
 // principal registered under it.
@@ -93,18 +136,7 @@ const resolveFrameKey = (event) => {
 };
 
 const registerIpcHandlers = () => {
-  // Deliberate sendSync exception (see src/shared/ipc.js house rule):
-  // the injected script must be installed before extension page scripts run.
-  ipcMain.on(STORE_INJECTED_SCRIPT, (event, origin, script) => {
-    injectedScripts.set(origin, script);
-    event.returnValue = true;
-  });
-
-  ipcMain.on(GET_INJECTED_SCRIPT, (event, origin) => {
-    event.returnValue = injectedScripts.get(origin);
-  });
-
-  // ── async channels (house rule: everything new goes through here) ──────
+  // ── async channels (the house rule; there is nothing else) ───────────────
 
   ipcMain.handle(SHOW_CONTEXT_MENU, (_event, { x, y, items }) => {
     showContextMenu(windowOps.getCurrentWindow(), { x, y, items });
@@ -142,6 +174,7 @@ const registerIpcHandlers = () => {
   // ── runtime messaging (docs/features/RUNTIME-MESSAGING.md) ──────────────
   unregisterRouterFrame = (key) => {
     principals.delete(key);
+    grants.delete(key);
     router.unregisterFrame(key);
     // A frame that goes away also stops being a network subscriber; the model
     // stops asking the backend for Network events once no frame wants them.
@@ -159,19 +192,26 @@ const registerIpcHandlers = () => {
     } catch {
       return { ok: false };
     }
-    if (!extensionId || !extensionServer.resolveExtensionFile(extensionId, "")) {
+    if (!extensionServer.resolveExtensionFile(extensionId, "")) {
       return { ok: false };
     }
     const key = `${event.sender.id}:${event.frameId}`;
     principals.set(key, frame);
+    // Which declared permissions this frame's extension has, decided from the
+    // manifest on disk and handed back once, at registration. The frame's shim
+    // uses it for lastError reporting; the network handlers below enforce the
+    // `webRequest` grant themselves, so a frame that ignores the answer still
+    // gets no data (docs/features/EXTENSION-MANAGEMENT.md).
+    const granted = grantedPermissions(event);
+    grants.set(key, granted);
     router.registerFrame({
       key,
       extensionId,
       url: frame.url,
-      send: makeFrameSender(key, event.sender, frame, event.frameId),
+      send: makeFrameSender(key, event.sender, frame),
     });
     event.sender.once("destroyed", () => unregisterRouterFrame(key));
-    return { ok: true };
+    return { ok: true, granted };
   });
 
   const registeredHandle = (channel, handler) =>
@@ -260,9 +300,14 @@ const registerIpcHandlers = () => {
       return null;
     }
     const frame = event.senderFrame;
+    // The inner payload kind is the lifecycle step (request | sendHeaders |
+    // response | completed | error | navigated | status); the outer wrapper is
+    // always "network" (src/main/network-service.js).
+    const filter = (payload) =>
+      deliveryAllowed(grants.get(key), payload && payload.kind);
     return {
       key,
-      send: makeFrameSender(key, event.sender, frame, event.frameId, NETWORK_DELIVER),
+      send: makeFrameSender(key, event.sender, frame, NETWORK_DELIVER, filter),
     };
   };
 
