@@ -10,6 +10,12 @@
 // both. That is the constraint this table encodes, and the reason the two
 // entries below are identical today.
 //
+// An extension's background context is the one exception: it is the main frame of
+// a hidden window of its own (src/main/background-host.js), so it has its own
+// WebContents and COULD be given its own policy. It is given this one anyway —
+// see extensionFramePreferences for why that is a decision rather than an
+// oversight.
+//
 // Per-entry decisions were measured with Electron 38 (headless, `show: false`)
 // against a real `rozenite://<id>/…` frame loading the production preload:
 //
@@ -64,10 +70,17 @@ const basePreferences = ({ preloadPath }) => ({
 const frontendPreferences = ({ preloadPath }) => basePreferences({ preloadPath });
 
 /**
- * Preferences for extension frames. Identical to the frontend's by necessity
- * today (same WebContents); kept as its own function so the day extension
- * frames move to their own WebContentsView/partition, the two policies stop
- * being one policy and this file documents the split.
+ * Preferences for extension frames.
+ *
+ * Two kinds of frame consume this today, and they do NOT share a WebContents any
+ * more: an extension's devtools page and panels are iframes inside the frontend
+ * (same WebContents, so the policy is unavoidably the frontend's), while an
+ * extension's background context is the main frame of its own hidden window
+ * (src/main/background-host.js) and so could be given a different policy.
+ *
+ * It is not given one, on purpose: a worker must not be able to reach anything a
+ * panel cannot, and the day someone wants them to differ is the day this function
+ * stops being an alias — which is the only reason it exists separately.
  */
 const extensionFramePreferences = ({ preloadPath }) => basePreferences({ preloadPath });
 

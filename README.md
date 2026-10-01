@@ -46,12 +46,19 @@ Notes:
   buttons). Its Metro server also serves the patched RN DevTools frontend ("rozenite")
   the Electron shell loads; the frontend itself is not part of this repo.
 - "Installed" extensions are unpacked extension folders in `extensions/`, served under
-  the custom `rozenite://<extension-id>/...` protocol. Folders whose manifest declares a
-  `devtools_page` are scanned, launched and panel-hosted by the shell itself — no
-  frontend-fork knowledge required (docs/features/DEVTOOLS-PANELS.md):
-  - `extensions/sample-extension/` — minimal panel test case
+  the custom `rozenite://<extension-id>/...` protocol. The shell scans the folder itself —
+  no frontend-fork knowledge required:
+  - a manifest with `devtools_page` gets a hidden devtools page and its `panels.create`
+    calls become real tabs (docs/features/DEVTOOLS-PANELS.md);
+  - a manifest with `background.service_worker` (or legacy `background.scripts`) also gets an
+    **always-on background context** — a hidden window per extension running that script
+    against the same `chrome.*` shim, with `runtime.onInstalled`/`onStartup` firing
+    (docs/features/BACKGROUND-WORKER.md). Worker output is relayed to the shell's terminal,
+    prefixed with the extension id.
+  - `extensions/sample-extension/` — minimal panel test case (devtools page, no background)
   - `extensions/graphql/` — GraphQL Network Inspector (unpacked Chrome Web Store build)
-  - `extensions/altair/` — Altair GraphQL Client (unpacked Chrome Web Store build)
+  - `extensions/altair/` — Altair GraphQL Client (unpacked Chrome Web Store build; its
+    background is an ES module)
 - `src/tools/fake-cdp.js` — standalone CDP proxy that points the frontend at a real Chrome tab
   instead of an RN app (`npm run fake-cdp`, needs Chrome with `--remote-debugging-port=9222`;
   run the shell with `DEVTOOLS_CDP_BRIDGE=off` so the port is free).

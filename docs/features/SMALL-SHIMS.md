@@ -2,13 +2,34 @@
 
 | | |
 | --- | --- |
-| **Status** | ❌ none implemented yet |
+| **Status** | 🟨 `chrome.action` + `chrome.notifications` exist as registrable **no-op shells** so a worker can load; nothing implemented for real |
 | **Tier** | 2 |
 | **Blocked by** | [RUNTIME-MESSAGING.md](RUNTIME-MESSAGING.md) (messaging router + contract rules apply to all of these) |
 
 Cheap, independent wins. All must follow the house rules from
 [RUNTIME-MESSAGING.md](RUNTIME-MESSAGING.md) (promise+callback, `lastError`, real Event
 objects) and the stubbing rule of thumb from [../OVERVIEW.md](../OVERVIEW.md).
+
+**What already exists, and exactly what is still owed.** The background context arrived before
+these APIs did, and an MV3 worker that names `chrome.action.onClicked` or
+`chrome.notifications.create` at module scope dies at LOAD — an ESM worker's top-level
+statements run before anything can guard them. So `src/chrome-shim/browser-apis.js` ships both
+as inert shells, marked `[STUB — issue #4 owns making this real]`. Each of these is a real
+behavior that does not exist and must be built, not discovered:
+
+| Shell | What it does today | What it must do |
+| --- | --- | --- |
+| `action.onClicked` | registrable, **never fires** | needs a tab/target model to hand the listener |
+| `action.setIcon` / `setBadgeText` / `setBadgeBackgroundColor` / `setBadgeTextColor` / `setTitle` / `setPopup` / `getPopup` / `enable` / `disable` / `create` | accept the call, resolve `undefined`/`""`, render nothing | a toolbar surface, or an explicit "no toolbar here" decision |
+| `notifications.create` | shows nothing, calls back with **no id** (an id for a notification that does not exist would be a promise of a click that never comes) + one console line | Electron `Notification`, and the id Chrome allocates |
+| `notifications.update` / `clear` / `getAll` | `false` / `false` / `{}` | real registry |
+| `notifications.onClicked` / `onClosed` / `onButtonClicked` | registrable, **never fire** | fire from the real notification |
+| `notifications.getPermissionLevel` | answers `"granted"` (so an extension does not go ask the user for a permission this host would then have to honor) | the real system state |
+| `notifications.PermissionLevel` | Chrome's constants, including its `unspecifed` typo | — |
+
+`notifications` is permission-gated like Chrome's (an extension that does not declare the
+permission gets `lastError`, not a silent no-op — asserted); `action` needs no permission in
+Chrome and stays ungated here.
 
 ## `chrome.permissions`
 

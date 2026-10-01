@@ -32,18 +32,21 @@ docs/
 │   │                                        frontend→backend CDP = the shell's bridge
 │   ├── RUNTIME-MESSAGING.md               🟨 chrome.runtime, Ports, + the cross-cutting
 │   │                                        contract rules (lastError, promise/callback, Events)
-│   ├── EXTENSION-MANAGEMENT.md            🟡 manifest parsing, ids, install/reload
-│   │                                        + manifest-key support matrix
+│   ├── EXTENSION-MANAGEMENT.md            🟨 manifest parsing, ids, background scan, install
+│   │                                        version record + manifest-key support matrix
 │   ├── DEVTOOLS-PANELS.md                 🟨 panels.create/theme/events, elements sidebars
 │   ├── DEVTOOLS-NETWORK.md                🟨 devtools.network on CDP Network.* (HAR, bodies)
 │   ├── INSPECTED-WINDOW.md                🟨 eval → Runtime.evaluate (state debuggers)
 │   ├── STORAGE-AND-I18N.md                🟨 storage areas status + _locales support
 │   ├── CONTENT-SCRIPTS.md                 ❌ bridge-runner design: CDP injection +
 │   │                                        Runtime.addBinding transport, two-species split
-│   ├── BACKGROUND-WORKER.md               ❌ MV3 service worker as always-on hidden frame
+│   ├── BACKGROUND-WORKER.md               🟨 MV3 service worker as an always-on hidden
+│   │                                        window: lifecycle events, router peer, the
+│   │                                        hosting route rejected and why
 │   ├── WEBREQUEST.md                      🟨 observe-only (7 of 9 events), non-blocking only
-│   ├── SMALL-SHIMS.md                     ❌ Tier-2 one-offs: permissions, tabs,
+│   ├── SMALL-SHIMS.md                     🟨 Tier-2 one-offs: permissions, tabs,
 │   │                                        notifications, alarms, downloads, action, options_ui
+│   │                                        (+ exactly what the action/notifications shells owe)
 │   └── TIER3-OMITTED.md                   🚫 deliberately omitted browser APIs +
 │                                            "no TypeError kills panels" acceptance test
 └── api/

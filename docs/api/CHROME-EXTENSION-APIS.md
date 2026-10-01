@@ -30,7 +30,7 @@ Per-namespace plans live in [../features/README.md](../features/README.md).
 
 | API | Real Chrome surface | Verdict here |
 | --- | --- | --- |
-| `runtime` | `id`, `getURL`, `sendMessage`, `connect` (Port: `postMessage/onMessage/onDisconnect`, transferables), `onMessage`, `getManifest`, `reload`, `openOptionsPage`, `getBackgroundPage`, `lastError`, `onInstalled`, `onStartup`, `onUpdateAvailable`; omitted: `requestUpdate`, `connectNative`, `sendMessageExternal` | ✅ identity/manifest/platform + `sendMessage` + Ports are real (host router, extension-scoped); `lastError` scoped, promise+callback on all methods. Remaining: Port transferables (JSON-only today), lifecycle producers + `getBackgroundPage` (needs background host), `reload`/`openOptionsPage` inert → [RUNTIME-MESSAGING.md](../features/RUNTIME-MESSAGING.md) |
+| `runtime` | `id`, `getURL`, `sendMessage`, `connect` (Port: `postMessage/onMessage/onDisconnect`, transferables), `onMessage`, `getManifest`, `reload`, `openOptionsPage`, `getBackgroundPage`, `lastError`, `onInstalled`, `onStartup`, `onUpdateAvailable`; omitted: `requestUpdate`, `connectNative`, `sendMessageExternal` | ✅ identity/manifest/platform + `sendMessage` + Ports are real (host router, extension-scoped); `lastError` scoped, promise+callback on all methods; **`onInstalled` (`install`/`update`) and `onStartup` fire** (produced by the background host). Remaining: Port transferables (JSON-only today); `getBackgroundPage` is `undefined` — Chrome's answer too, for an MV3 service worker; `reload`/`openOptionsPage` inert; `onUpdateAvailable`/`onSuspend` never fire → [RUNTIME-MESSAGING.md](../features/RUNTIME-MESSAGING.md) |
 | `storage` | `local/session/sync/managed`, `onChanged`; StorageArea `get/set/remove/clear/getBytesInUse/getKeys`, `QUOTA_BYTES` | ✅ local/sync real (electron-store), session per-frame in-memory; managed + cross-frame `onChanged` remain → [STORAGE-AND-I18N.md](../features/STORAGE-AND-I18N.md) |
 | `extension` (legacy) | `getURL`, `getViews`, `getBackgroundPage`, `lastError`, `isWritableFileSystem`, `inIncognitoContext`, `sendRequest/onRequest` (dead) | 🔧 thin aliases; omit `sendRequest/onRequest` |
 | `i18n` | `getMessage`, `getUILanguage`, `acceptLanguages`, `detectLanguage` | 🔧 read `_locales/*.json` from the extension dir → [STORAGE-AND-I18N.md](../features/STORAGE-AND-I18N.md) |
@@ -58,5 +58,8 @@ every namespace added from here on:
    many others only work through Ports.
 5. **`runtime.getURL` returns the `rozenite://` URL** — Altair's `tabs.js`
    regex-parses it to derive the extension id; keep hostname == extension id.
-6. **Background context**: `chrome.*` must exist there too — today there is no background
-   context at all → [BACKGROUND-WORKER.md](../features/BACKGROUND-WORKER.md).
+6. **Background context**: `chrome.*` must exist there too — ✅ it does now, and it is the
+   *same* shim, the same permission gate and an ordinary router seat as any panel, in a hidden
+   window per extension → [BACKGROUND-WORKER.md](../features/BACKGROUND-WORKER.md). The
+   browser APIs a worker asks for (`tabs`, `notifications`, `action`, `alarms`) are what is
+   still missing.

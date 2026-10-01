@@ -2,16 +2,27 @@
 
 **Extension model**
 
-- No extension lifecycle UI: no install/uninstall/reload or permissions model. Manifest
+- No extension lifecycle UI: no install/uninstall/reload or permissions prompt. Manifest
   parsing + enumeration are the shell's job now (`src/main/extensions.js` scans
-  `extensions/`, hosts devtools pages and panels — see
-  [features/DEVTOOLS-PANELS.md](features/DEVTOOLS-PANELS.md)), so the frontend needs no
+  `extensions/` for devtools pages **and** backgrounds and hosts both — see
+  [features/DEVTOOLS-PANELS.md](features/DEVTOOLS-PANELS.md) and
+  [features/BACKGROUND-WORKER.md](features/BACKGROUND-WORKER.md)), so the frontend needs no
   hardcoded extension list. Dropping a folder in `extensions/` and (re)loading the
   frontend installs an extension; there is no watcher or UI.
-- No extension lifecycle beyond iframe hosting: **no background service workers**
-  (GraphQL's and Altair's `background.js` never run), no content-script injection, no
-  `action`/popup, options UI, `tabs`, `notifications`, or permission system, even though
-  the manifests request them.
+- **Background service workers run now** — as an always-on hidden `BrowserWindow` per
+  extension, against the same `chrome.*` shim, with `runtime.onInstalled`/`onStartup` firing
+  and the worker as an ordinary messaging peer (`src/main/background-host.js`,
+  [features/BACKGROUND-WORKER.md](features/BACKGROUND-WORKER.md)). Proven headless in a real
+  Electron process, including against the shipped `graphql` and `altair` folders. What this
+  is **not**: it is not Chrome's MV3 lifecycle — nothing evicts the worker when idle and
+  nothing has to wake it, so `onSuspend`/`onUpdateAvailable` never fire and a worker that
+  would have been torn down in Chrome keeps running here. That is a superset for a devtools
+  host and a divergence from Chrome's resource model at the same time.
+- Still missing from the extension model: content-script injection, a working
+  `action`/popup, options UI, `tabs`, `notifications`, `alarms`, a `chrome.permissions`
+  prompt. `action` and `notifications` exist as **registrable no-op shells** so that a worker
+  naming them at module scope can load at all; they show nothing and their events never fire
+  ([features/SMALL-SHIMS.md](features/SMALL-SHIMS.md)).
 - DevTools pages are only "loaded" as iframes; no real separation between devtools page
   and panel frames like Chrome has.
 
@@ -32,12 +43,21 @@
   ([features/DEVTOOLS-NETWORK.md](features/DEVTOOLS-NETWORK.md)).
 - Network history is a bounded ring (500 settled records, in-flight requests never dropped);
   an evicted record's body then honestly reports itself as unavailable rather than stale.
-- `chrome.tabs.*` is an **inert shell** (`query()` → `[]`, events never fire —
-  `src/chrome-shim/tabs.js`), enough for Altair's `tabs.query` consumers to render its
-  monitor panel. The background worker itself does not run
-  yet, so `runtime.onInstalled` has no producer ([features/BACKGROUND-WORKER.md](features/BACKGROUND-WORKER.md)).
-  `runtime.sendMessage`/Ports between extension frames DO work now
-  ([features/RUNTIME-MESSAGING.md](features/RUNTIME-MESSAGING.md)).
+- `chrome.tabs.*` is an **inert shell** (`query()` → `[]`, `create()` resolves `undefined` and
+  opens nothing, events never fire — `src/chrome-shim/tabs.js`), enough for Altair's
+  `tabs.query` consumers to render its monitor panel. The background worker runs
+  ([features/BACKGROUND-WORKER.md](features/BACKGROUND-WORKER.md)), so `runtime.onInstalled`
+  and `onStartup` now have a producer; making `tabs.create` actually open something is
+  outstanding. `runtime.sendMessage`/Ports between extension frames — including to and from
+  the worker — work ([features/RUNTIME-MESSAGING.md](features/RUNTIME-MESSAGING.md)).
+- **`chrome.tabs.create` inside a worker without the `tabs` permission fails differently than
+  in Chrome.** GraphQL Network Inspector declares `["webRequest","storage"]` and no `tabs`, and
+  its `onInstalled` handler calls `chrome.tabs.create`. Chrome would not inject `chrome.tabs`
+  at all there, so that line throws; this shell keeps the namespace, so the call instead
+  rejects with a permission error and sets `runtime.lastError`, and the worker keeps running.
+  Observed live: the worker logs the denial and survives
+  (`tests/background-worker-electron.test.js`). Shape-first rule,
+  [OVERVIEW.md](OVERVIEW.md).
 - `chrome.devtools.panels.create` is real and shell-driven
   ([features/DEVTOOLS-PANELS.md](features/DEVTOOLS-PANELS.md)), and so are
   `devtools.inspectedWindow.eval` and `.reload` (CDP `Runtime.evaluate` / `Page.reload`
@@ -91,7 +111,25 @@
     preload does not run at all, so no `chrome.*` exists. It is load-bearing, not leftover.
   - Extension frames share the frontend's `WebContents`, so they share its one
     `webPreferences` object. Splitting them (own `WebContentsView`/partition) is the step
-    that would let the two frame classes have different policies.
+    that would let the two frame classes have different policies. An extension's background
+    context already HAS its own `WebContents` (a hidden window) and is given the same policy
+    anyway: a worker must not reach more than a panel can
+    (`src/main/frame-security.js` records why that is a decision).
+- **Hidden worker windows are no better sandboxed than panels.** `sandbox: false` applies to
+  them too, so "one hidden window per extension" buys lifecycle separation (a frontend reload
+  does not kill the worker) and a separate renderer process — it does **not** buy a sandbox, a
+  separate partition, or isolation the frontend-hosted iframes lacked. Nothing in the worker
+  context is privileged, but nothing is more contained either.
+- **The `rozenite://` scheme has no per-extension origin isolation, and that is measured, not
+  assumed.** The traversal guard stops a path from escaping its own folder inside one request,
+  asserted from inside a real extension frame (`../` → 404; a bootstrap `?script=../sibling/x`
+  → 404). It was never a same-origin check: a page in extension A can
+  `fetch("rozenite://B/file.js")` and read the body. Verified under BOTH the old
+  `registerFileProtocol` handler and the current `protocol.handle` one — identical 200 with the
+  real contents — so the migration did not open this. Closing it needs per-origin isolation for
+  the scheme (per-extension privileged origins, or an origin check in the handler), which this
+  shell does not have. Asserted in `tests/background-worker-electron.test.js` so the gap cannot
+  quietly be read as a guard.
 - `sandbox: false` also means a **renderer compromise is a Node compromise**: the guards
   here limit what an extension page can *ask* for, not what a compromised renderer can do.
 - **Permissions now gate capability.** An extension calling an API whose permission it did
@@ -108,10 +146,12 @@
   strict default is, with one console line naming the extension. Verified live: an inline
   `<script>` in an extension page does not run.
 
-**Bottom line:** the proof-of-concept shows the hosting + storage + panel plumbing works
-with real GraphQL tooling, and the network data behind `devtools.network` / `webRequest` is
-now real CDP rather than a stub — but the app-side half of that path has never been walked
-against a device from this checkout, and the shell is still far from a product: no
-lifecycle model, sandbox still off, deep coupling to an unmerged frontend fork.
+**Bottom line:** the proof-of-concept shows the hosting + storage + panel + background-worker
+plumbing works with real GraphQL tooling — an extension's `background.js` now executes, its
+lifecycle events fire, and it is a messaging peer — and the network data behind
+`devtools.network` / `webRequest` is real CDP rather than a stub. But the app-side half of that
+network path has never been walked against a device from this checkout, and the shell is still
+far from a product: no install/reload UI, no content scripts, no MV3 worker lifecycle, sandbox
+still off, deep coupling to an unmerged frontend fork.
 The path forward is in [ROADMAP.md](ROADMAP.md); per-functionality state is in
 [features/README.md](features/README.md).
