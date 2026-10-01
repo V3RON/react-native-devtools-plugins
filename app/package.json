@@ -1,0 +1,25 @@
+{
+  "name": "devtools-poc-app",
+  "version": "1.0.0",
+  "main": "index.ts",
+  "dependencies": {
+    "@rozenite/network-activity-plugin": "^2.4.0",
+    "expo": "~57.0.26",
+    "expo-status-bar": "~57.0.1",
+    "react": "19.2.3",
+    "react-native": "0.86.3"
+  },
+  "devDependencies": {
+    "@rozenite/metro": "^2.4.0",
+    "@types/react": "~19.2.2",
+    "typescript": "~6.0.3"
+  },
+  "scripts": {
+    "start": "expo start",
+    "start:rozenite": "WITH_ROZENITE=true expo start",
+    "android": "expo start --android",
+    "ios": "expo start --ios",
+    "web": "expo start --web"
+  },
+  "private": true
+}

@@ -8,7 +8,9 @@
     "start": "electron .",
     "test": "node --test \"tests/**/*.test.js\"",
     "fake-cdp": "node src/tools/fake-cdp.js",
-    "rn-cdp": "node src/tools/rn-cdp.js"
+    "rn-cdp": "node src/tools/rn-cdp.js",
+    "app:install": "npm --prefix app install",
+    "app:start": "npm --prefix app run start:rozenite"
   },
   "dependencies": {
     "electron-store": "^10.1.0",
