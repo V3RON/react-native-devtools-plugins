@@ -16,6 +16,7 @@ const panelHost = require("./panel-host");
 const { createMessageRouter } = require("./message-router");
 const { evalInPage, reloadInPage } = require("./inspected-window");
 const { createNetworkService } = require("./network-service");
+const { getContentBridge, attachContentBridge } = require("./content-bridge");
 const { sendCommand, onEvent, status: bridgeStatus } = require("./cdp-bridge");
 const { createPermissionGate, API_PERMISSIONS } = require("../shared/permissions");
 const tabHost = require("./tab-host");
@@ -54,6 +55,7 @@ const {
   TABS_TARGET_INFO,
   TABS_OPEN,
   TABS_CLOSE,
+  TABS_SEND_TO_APP,
   NOTIFICATION_SHOW,
   NOTIFICATION_CLEAR,
   NOTIFICATION_PERMISSION,
@@ -68,6 +70,28 @@ const {
 
 // ── runtime messaging router wiring ─────────────────────────────────────────
 const router = createMessageRouter();
+
+let contentBridgeInstance = null;
+
+/**
+ * The content bridge, on first need. It cannot be built at module load: it wants the
+ * router above, and attaching it starts a scan of the extensions folder. The app
+ * (src/main/index.js) and the Electron test harness both get here through this one
+ * accessor, so `chrome.tabs.sendMessage` always reports against a real bridge — and,
+ * when nothing is injected, the reason it is really not injected
+ * (docs/features/CONTENT-SCRIPTS.md).
+ */
+const startContentBridge = () => {
+  if (!contentBridgeInstance) {
+    try {
+      contentBridgeInstance = attachContentBridge({ router });
+    } catch (error) {
+      console.warn(`[content-scripts] could not start: ${error.message}`);
+      return null;
+    }
+  }
+  return contentBridgeInstance;
+};
 
 // ── the CDP network model, shared by devtools.network and webRequest ────────
 // (docs/features/DEVTOOLS-NETWORK.md). One model for every frame; a frame asks
@@ -501,6 +525,55 @@ const registerIpcHandlers = () => {
       .catch((error) => ({ ok: false, error: error && error.message }));
   });
 
+  // ── chrome.tabs.sendMessage (GitHub issue #5's other half) ────────────────
+  // Issue #12 refused to wire this because there was no receiver, and routing it into
+  // the extension's own `runtime.onMessage` would have let an extension message itself
+  // and call the success "a page answered". Issue #5 supplied the real receiver — the
+  // extension's allowlisted content script, inside the inspected app — so the message
+  // now goes THERE, through the same router seat a panel uses.
+  //
+  // The addressed app context is THIS frame's own extension's (`senderFrame` hostname),
+  // never one the payload names, and the sender descriptor the app sees is built by the
+  // router from the verified calling frame. An un-injected extension is a failure with a
+  // reason, not a resolved `undefined`.
+  ipcMain.handle(TABS_SEND_TO_APP, (event, details = {}) => {
+    const fromKey = tabsCaller(event) ? resolveFrameKey(event) : null;
+    if (!fromKey) {
+      return { ok: false, error: "tabs: permission 'tabs' is not declared" };
+    }
+    // The production shell started it in src/main/index.js; a harness that never ran
+    // that file gets it built here, against the same router, so the answer is always
+    // "what this shell really did" rather than "the bridge was never started".
+    const bridge = getContentBridge() || startContentBridge();
+    if (!bridge) {
+      return {
+        ok: false,
+        error:
+          "tabs.sendMessage: this shell has no content bridge running, so nothing can receive this message",
+      };
+    }
+    let extensionId;
+    try {
+      extensionId = new URL(event.senderFrame.url).hostname;
+    } catch {
+      return { ok: false, error: "tabs.sendMessage: the calling frame has no extension id" };
+    }
+    const target = bridge.tabTarget({ extensionId });
+    if (!target.ok) {
+      return { ok: false, error: target.error };
+    }
+    const send = router.sendTo({ fromKey, targetKey: target.frameKey, message: details.message });
+    if (!send.ok) {
+      return { ok: false, error: send.error };
+    }
+    // A rejection here IS the honest answer: the app context said "nothing is listening
+    // in here" (or vanished mid-delivery), which is Chrome's connection failure. Resolving
+    // `{ok: true, response: undefined}` for that would claim a delivery that never happened.
+    return send.promise
+      .then((response) => ({ ok: true, response }))
+      .catch((error) => ({ ok: false, error: error.message }));
+  });
+
   // ── chrome.notifications (docs/features/SMALL-SHIMS.md) ────────────────────
   // The `notifications` permission is enforced HERE as well as in the frame's gate:
   // a frame that ignored its RUNTIME_REGISTER reply must not be able to raise a
@@ -673,4 +746,4 @@ const registerIpcHandlers = () => {
   );
 };
 
-module.exports = { registerIpcHandlers, subscribeRouterFrames };
+module.exports = { registerIpcHandlers, subscribeRouterFrames, startContentBridge };

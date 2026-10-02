@@ -27,13 +27,14 @@
 // this host for. Whatever the policy says, the created descriptor reports the outcome
 // truthfully in `openedVia`: "external", "window", or null for nothing opened.
 //
-// `tabs.sendMessage` stays honest on purpose: there is no content-script context to
-// receive it (docs/features/CONTENT-SCRIPTS.md is the next layer, issue #5), so it
-// resolves `undefined` with one console line and is NOT routed into this extension's
-// own runtime mesh. Wiring it there would let an extension message itself and report
-// success as if a page had answered — precisely the thing a devtools extension would
-// then trust. Chrome's answer here is a connection failure; that difference is a
-// stated deviation, not a claim of success.
+// `tabs.sendMessage` now has a real receiver (issue #5): the content script of THIS
+// extension running in the inspected target. The host delivers through the same message
+// mesh a panel uses (`src/main/content-bridge.js` → `src/main/message-router.js`), so the
+// invariant issue #12 established still holds — a tab message is never routed into this
+// extension's own `runtime.onMessage` listeners, because the receiver genuinely is the
+// app, and an extension cannot answer for it. When nothing is injected the call FAILS
+// with Chrome's own connection error rather than resolving `undefined`: a resolved
+// undefined is what an extension would read as "the page answered nothing".
 const { createEvent } = require("./event");
 const { promiseOrCallback } = require("./async-style");
 const {
@@ -62,6 +63,10 @@ const isAbsolute = (url) => /^[a-z][a-z0-9+.-]*:/i.test(String(url));
  *        open something; absent = the shell's policy is that nothing opens
  * @param {(handle: any) => (boolean|Promise<boolean>)} [deps.closeTab] close what
  *        `openTab` opened, by the handle it reported
+ * @param {(details: {message: unknown}) => Promise<{ok: boolean, response?: unknown, error?: string}>}
+ *        [deps.sendToApp] deliver to THIS extension's content script in the inspected
+ *        target (issue #5). Absent means this context has no route to the app at all,
+ *        which is reported as a failure, not as an empty success.
  * @param {(message: string) => void} [deps.onUnsupported] honest one-off reports
  * @param {{setError: function, clearError: function}} [deps.lastError] Chrome-scoped
  *        lastError holder, so a failure this model raises ("No tab with id") is
@@ -73,6 +78,7 @@ const createTabs = ({
   resolveUrl = (inner) => String(inner ?? ""),
   openTab = null,
   closeTab = null,
+  sendToApp = null,
   onUnsupported = () => {},
   lastError = null,
 } = {}) => {
@@ -235,18 +241,50 @@ const createTabs = ({
     return tab;
   };
 
-  let sendMessageReported = false;
-  const sendTabMessage = async () => {
-    if (!sendMessageReported) {
-      sendMessageReported = true;
-      onUnsupported(
-        "tabs.sendMessage has no content-script context to deliver to, so it resolves undefined and " +
-          "is NOT routed to this extension's own runtime.onMessage listeners — an extension must not " +
-          "be able to message itself and call that a page. Delivery arrives with content scripts " +
-          "(docs/features/CONTENT-SCRIPTS.md)."
+  /**
+   * `chrome.tabs.sendMessage(tabId, message, options?, callback?)`.
+   *
+   * The addressable "tab" in this shell is the inspected target, and the only script
+   * that can be in it is THIS extension's own allowlisted content script — so the id is
+   * checked against the synthetic tab (Chrome's `No tab with id` for anything else) and
+   * the message goes to the host, which never routes it to another extension's listeners.
+   * A failure is Chrome's failure: a rejected promise / `runtime.lastError`, never a
+   * resolved `undefined` an extension could mistake for an empty answer.
+   */
+  const sendTabMessage = async (...args) => {
+    const requested = args.length > 0 ? args[0] : undefined;
+    const id =
+      requested && typeof requested === "object" && requested.id !== undefined
+        ? Number(requested.id)
+        : Number(requested);
+    if (!Number.isInteger(id)) {
+      throw noSuchTab(requested);
+    }
+    if (id !== tabId && !createdTabs.has(id)) {
+      throw noSuchTab(requested);
+    }
+    if (id !== tabId) {
+      // A tab this shell opened is a BrowserWindow with no content script in it, so the
+      // truth is "nothing is listening there", not an invented delivery.
+      throw new Error(
+        `tabs.sendMessage: tab ${id} is a tab this shell opened, not the inspected target, ` +
+          "so it has no content script to receive this message."
       );
     }
-    return undefined;
+    if (!sendToApp) {
+      throw new Error(
+        "tabs.sendMessage: this context has no route to the inspected target, so nothing can " +
+          "receive this message. docs/features/CONTENT-SCRIPTS.md is the content-script opt-in."
+      );
+    }
+    const outcome = await sendToApp({ message: args[1] });
+    if (!outcome || outcome.ok !== true) {
+      throw new Error(
+        (outcome && outcome.error) ||
+          "Could not establish connection. Receiving end does not exist."
+      );
+    }
+    return outcome.response;
   };
 
   const noValue = (callback) => promiseOrCallback(() => undefined, callback);
@@ -297,7 +335,11 @@ const createTabs = ({
     // [HONEST NO-RECEIVERS] resolves undefined, no runtime.lastError — see the
     // header for why that is the honest answer and not Chrome's connection error.
     sendMessage: (...args) =>
-      promiseOrCallback(sendTabMessage, args.find((arg) => typeof arg === "function")),
+      promiseOrCallback(
+        () => sendTabMessage(...args),
+        args.find((arg) => typeof arg === "function"),
+        lastError || undefined
+      ),
 
     // Chrome answers with a data URL. A PNG-shaped string here would be a fabricated
     // screenshot, so the answer is undefined: no capture, no image.

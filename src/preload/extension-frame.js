@@ -47,6 +47,7 @@ const {
   NETWORK_DELIVER,
   TABS_TARGET_INFO,
   TABS_OPEN,
+  TABS_SEND_TO_APP,
   TABS_CLOSE,
   NOTIFICATION_SHOW,
   NOTIFICATION_CLEAR,
@@ -225,6 +226,14 @@ const chrome = createChromeNamespace({
   closeTabById: (handle) =>
     asRegisteredCaller(() => ipcRenderer.invoke(TABS_CLOSE, { handle })).then(
       (closed) => Boolean(closed)
+    ),
+  // chrome.tabs.sendMessage -> this frame's OWN extension's content script in the
+  // inspected target (issue #5). The extension id comes from this frame's url in main,
+  // never from here, so a frame cannot address another extension's script. A refusal
+  // keeps its reason: the shim turns it into Chrome's connection failure.
+  sendToApp: ({ message }) =>
+    asRegisteredCaller(() => ipcRenderer.invoke(TABS_SEND_TO_APP, { message })).then(
+      (reply) => reply || { ok: false, error: "tabs.sendMessage: the host did not answer" }
     ),
   // chrome.notifications -> the host's Electron Notification. The OWNER of a
   // notification is recorded in main from this frame's own identity, so the click

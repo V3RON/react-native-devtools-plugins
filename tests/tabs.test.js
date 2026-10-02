@@ -269,18 +269,24 @@ test("update reports what it cannot do, and never fabricates an activation", asy
   assert.strictEqual(activated, 0, "onActivated does not fire without a change");
 });
 
-test("tabs.sendMessage resolves undefined, says why once, and never reaches runtime.onMessage", async () => {
-  const storage = createExtensionStorage({ createBackend: () => createMemoryBackend() });
+// Issue #12 refused to wire `tabs.sendMessage` at all, because this host had no receiver
+// and routing it into the extension's own mesh would have let an extension message itself
+// and report the success as "a page answered". Issue #5 supplied the real receiver — the
+// extension's allowlisted content script, inside the inspected app. These are the same two
+// guarantees #12 pinned, restated for a call that can now succeed:
+//   (a) the message still NEVER travels through this extension's runtime mesh;
+//   (b) a call that reaches nothing FAILS with a reason. `undefined` is the shape of "the
+//       page answered nothing", and reporting that for a silent app is a lie.
+const makeMessagingChrome = ({ sendToApp, onMeshSend }) => {
   const notes = [];
   const chrome = createChromeNamespace({
     extensionId: "probe.local",
     getManifest: () => ({ permissions: ["tabs"] }),
-    storage,
+    storage: createExtensionStorage({ createBackend: () => createMemoryBackend() }),
     networkBridge: { webRequest: {}, network: {} },
+    sendToApp,
     transport: {
-      sendMessage: () => {
-        throw new Error("tabs.sendMessage must NOT route through the runtime mesh");
-      },
+      sendMessage: () => onMeshSend(),
       respond: () => Promise.resolve(),
       connect: () => Promise.resolve({ ok: false }),
       portPost: () => Promise.resolve(),
@@ -288,14 +294,124 @@ test("tabs.sendMessage resolves undefined, says why once, and never reaches runt
     },
     logger: { warn: (m) => notes.push(m), error: () => {}, log: () => {} },
   });
+  return { chrome, notes };
+};
+
+// The same id chrome.devtools.inspectedWindow.tabId reports for this extension.
+const APP_TAB = tabIdFor("probe.local");
+
+test("tabs.sendMessage goes to the app context, never into this extension's own mesh", async () => {
+  const delivered = [];
+  const { chrome } = makeMessagingChrome({
+    sendToApp: (details) => {
+      delivered.push(details);
+      return Promise.resolve({ ok: true, response: { from: "the app" } });
+    },
+    onMeshSend: () => {
+      throw new Error("tabs.sendMessage must NOT route through the runtime mesh");
+    },
+  });
   let received = 0;
   chrome.runtime.onMessage.addListener(() => received++);
-  assert.strictEqual(await chrome.tabs.sendMessage(4242, { hi: true }), undefined);
+
+  assert.deepStrictEqual(await chrome.tabs.sendMessage(APP_TAB, { hi: true }), { from: "the app" });
+  assert.deepStrictEqual(delivered, [{ message: { hi: true } }]);
   await new Promise((r) => setTimeout(r, 5));
   assert.strictEqual(received, 0, "an extension cannot message itself and call that a page");
-  assert.ok(
-    notes.some((n) => /no content-script context/.test(String(n))),
-    `the reason is reported: ${JSON.stringify(notes)}`
+
+  // Callback style gets the same value and no error. (`runtime.lastError` is only a live
+  // getter in a real frame — see tests/extension-frame-electron.test.js — so the falsiness
+  // of the holder is what a unit-test namespace can honestly show.)
+  let callbackArgs = null;
+  chrome.tabs.sendMessage(APP_TAB, { hi: 2 }, (response) => {
+    callbackArgs = [response, chrome.runtime.lastError];
+  });
+  await new Promise((r) => setTimeout(r, 5));
+  assert.deepStrictEqual(callbackArgs[0], { from: "the app" });
+  assert.ok(!callbackArgs[1], "a delivered message sets no lastError");
+});
+
+test("a refused tabs.sendMessage fails with its reason, and still never self-messages", async () => {
+  const { chrome } = makeMessagingChrome({
+    sendToApp: () =>
+      Promise.resolve({
+        ok: false,
+        error: 'tabs.sendMessage: no content script of "probe.local" is running in the inspected target',
+      }),
+    onMeshSend: () => {
+      throw new Error("a refused tab send must still not touch the runtime mesh");
+    },
+  });
+  let received = 0;
+  chrome.runtime.onMessage.addListener(() => received++);
+  await assert.rejects(
+    () => chrome.tabs.sendMessage(APP_TAB, { hi: true }),
+    /no content script of "probe\.local" is running/
+  );
+  await new Promise((r) => setTimeout(r, 5));
+  assert.strictEqual(received, 0, "failure does not route it into the mesh either");
+});
+
+/**
+ * The failure paths of the shim itself, against `createTabs` with a real lastError holder
+ * — the same shape a frame has. `createChromeNamespace` exposes `runtime.lastError` as a
+ * plain null (the live getter is installed by the frame preload), so it cannot show the
+ * scoping being asserted here.
+ */
+const makeFailingTabs = ({ sendToApp, lastError }) =>
+  createTabs({ tabId: APP_TAB, sendToApp, lastError, onUnsupported: () => {} });
+
+const makeHolder = (sink) => ({
+  setError: (error) => sink.push(error),
+  clearError: () => sink.push(null),
+});
+
+test("tabs.sendMessage: every way it can fail, and how the caller is told", async () => {
+  // 1. nothing injected: the host's refusal becomes Chrome's connection failure, for both
+  //    calling conventions, with lastError scoped to the callback.
+  const seen = [];
+  const tabs = makeFailingTabs({
+    sendToApp: () =>
+      Promise.resolve({
+        ok: false,
+        error: "Could not establish connection. Receiving end does not exist.",
+      }),
+    lastError: makeHolder(seen),
+  });
+  await assert.rejects(
+    () => tabs.sendMessage(APP_TAB, { hi: true }),
+    /Receiving end does not exist/
+  );
+
+  let callbackArgs = null;
+  await new Promise((resolve) =>
+    tabs.sendMessage(APP_TAB, { hi: true }, (response) => {
+      // Chrome's callback-style failure gets NO value and reads the error off lastError,
+      // which is why the holder's contents during the call are what matters here.
+      callbackArgs = { response, inFlight: seen[seen.length - 1] };
+      resolve();
+    })
+  );
+  assert.strictEqual(callbackArgs.response, undefined, "no value alongside the error");
+  assert.match(String(callbackArgs.inFlight && callbackArgs.inFlight.message), /Receiving end/);
+  assert.strictEqual(seen[seen.length - 1], null, "and lastError is cleared afterwards");
+
+  // 2. a context with no route to the app at all says so, rather than answering undefined.
+  const unrouted = makeFailingTabs({ sendToApp: null, lastError: null });
+  await assert.rejects(
+    () => unrouted.sendMessage(APP_TAB, { hi: true }),
+    /no route to the inspected target/
+  );
+
+  // 3. an id that is not the inspected target is Chrome's own error.
+  await assert.rejects(() => unrouted.sendMessage(4242, { hi: true }), /No tab with id: 4242/);
+
+  // 4. a tab this shell opened really exists but has no content script in it, and says so
+  //    instead of pretending the message landed.
+  const opened = await unrouted.create({ url: "https://example.com" });
+  await assert.rejects(
+    () => unrouted.sendMessage(opened.id, { hi: true }),
+    /is a tab this shell opened, not the inspected target/
   );
 });
 

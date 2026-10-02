@@ -71,6 +71,7 @@ const createChromeNamespace = ({
   permissions,
   getTargetInfo = () => ({ attached: false }),
   openTabIn = null,
+  sendToApp = null,
   closeTabById = null,
   showNotification = null,
   hideNotification = null,
@@ -244,6 +245,9 @@ const createChromeNamespace = ({
         resolveUrl: (innerPath) => buildExtensionURL(extensionId, innerPath),
         openTab: openTabIn,
         closeTab: closeTabById,
+        // issue #5: the receiver `tabs.sendMessage` addresses is this extension's own
+        // content script in the inspected target, and the host does the delivering.
+        sendToApp,
         onUnsupported: (message) => logger.warn(`[chrome.tabs] ${message}`),
         // The pair, not the bare cell. `createTabs` documents `{setError, clearError}` and
         // its own unit tests pass exactly that, so this call site was the one place the
