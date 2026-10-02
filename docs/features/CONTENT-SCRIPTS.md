@@ -2,7 +2,7 @@
 
 | | |
 | --- | --- |
-| **Status** | 🟡 implemented behind an explicit opt-in (`DEVTOOLS_CONTENT_SCRIPTS`), default OFF — see [Implemented: what the design left open](#implemented-what-the-design-left-open); real-device evidence still outstanding |
+| **Status** | 🟨 implemented behind an explicit opt-in (`DEVTOOLS_CONTENT_SCRIPTS`, default OFF) and **observed on a real device** — see [Live run](#live-run-the-definition-of-done-observed-on-a-device); that run also found two fidelity gaps, recorded there |
 | **Tier** | 2 — but strategically the most important Tier-2 item |
 | **Blocked by** | [RUNTIME-MESSAGING.md](RUNTIME-MESSAGING.md) (real now); the CDP transport is real too ([src/main/cdp-bridge.js](../../src/main/cdp-bridge.js)) |
 | **Code** | [src/main/content-scripts.js](../../src/main/content-scripts.js) (registry), [src/main/content-gate.js](../../src/main/content-gate.js) (opt-in), [src/main/content-bridge.js](../../src/main/content-bridge.js) (runner + app-side loader) |
@@ -99,6 +99,8 @@ A bridge-style content script from an unpacked extension is injected into a runn
 app on attach, hooks a global, and relays app → devtools-panel messages over the existing
 CDP connection, with zero app-code changes.
 
+**Met, and observed:** [Live run: the definition of done, observed on a device](#live-run-the-definition-of-done-observed-on-a-device).
+
 ## Implemented: what the design left open
 
 The design above is what shipped, with four decisions it left open now settled. Each is
@@ -165,7 +167,193 @@ injected, and that is stated in the report rather than left to be discovered.
 
 `npm test` covers the registry, the gate, the loader's semantics (executed in a `node:vm`
 "app"), and the host's protocol behaviour against a scripted CDP backend. None of that is
-evidence that a script ran inside a real Hermes context: no device run is recorded for this
-feature yet, and the `document`-free, `ISOLATED`-world-less, pre-attach-blind limitations
-below are properties of the backend, not things a unit test can discharge. Recording one
-real run against a real app is what closes the definition of done above.
+evidence that a script ran inside a real Hermes context — and the `document`-free,
+`ISOLATED`-world-less, pre-attach-blind limitations below are properties of the backend, not
+things a unit test can discharge. The device run recorded below is what closes the definition
+of done; the limitations are backend facts it does not claim to have tested.
+
+## Live run: the definition of done, observed on a device
+
+Verified 2026-10-02 against a real Hermes context on Android. The DoD's four claims each have
+a quoted line below, and each was read back through a channel that does not depend on the
+feature proving itself.
+
+### The app
+
+The emulator had only **Expo Go 55.0.7**, and this project is **SDK 57**, so Expo Go cannot
+open it at all:
+
+```
+ErrorActivity message: This project requires a newer version of Expo Go.
+```
+
+A dev client is therefore the only route. `npx expo run:android` generated `app/android/`
+(gitignored) and built it:
+
+```
+BUILD SUCCESSFUL in 2m 13s
+160 actionable tasks: 149 executed, 11 from cache
+```
+
+One setup step is worth recording, because it is what stood between a fresh dev client and an
+attached session. The app chooses its dev server from `PackagerConnectionSettings`, whose
+default is baked in at build time (`--port 8081` here, while this machine also runs *another
+project's* Metro there). With an empty `127.0.0.1:8099` on Metro and the app running, nothing
+registered; setting the `debug_http_host` shared preference of the debug build to this
+project's Metro is what produced a target:
+
+```
+<string name="debug_http_host">127.0.0.1:8099</string>
+```
+
+Metro's port was moved to 8099 precisely so that other project's 8081 stayed untouched.
+
+That produced a real CDP target on Metro — `type: "node"`, which is exactly what the bridge's
+discovery filters for — with no dev-menu interaction and no app-code change:
+
+```
+"title": "com.aitwar.devtoolspoc (unknown Android SDK built for arm64)"
+"description": "React Native Bridgeless [C++ connection]"
+```
+
+### The fixture
+
+An MV3 extension in a temporary folder (not `extensions/`), `permissions: ["tabs"]`, a
+`background.service_worker`, and `content_scripts` matching `<all_rn_targets>`. Its content
+script hooks a global, sends to the worker, and answers a tab message:
+
+```js
+globalThis.__ROZENITE_LIVE__ = "hooked";
+chrome.runtime.sendMessage({ from: "content-script", marker: "DELAYED" }, callback);
+chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
+  sendResponse({ from: "content-script", saw: message });
+});
+```
+
+The shell was launched against that folder with the extension allowlisted. `DEVTOOLS_CDP_PORT`
+and `DEVTOOLS_METRO_PORT` are set because this machine already had a long-running `rn-cdp.js`
+on the 9223 default and a foreign Metro on 8081:
+
+```bash
+DEVTOOLS_EXTENSIONS_DIR=<tmp>/ext-root DEVTOOLS_CONTENT_SCRIPTS=live-fixture \
+DEVTOOLS_METRO_PORT=8099 DEVTOOLS_CDP_PORT=9224 \
+DEVTOOLS_FRONTEND_URL="http://127.0.0.1:8099/rozenite/rn_fusebox.html?ws=localhost:9224" \
+npm start
+```
+
+### 1. The gate let it through, and the runner injected it
+
+```
+[content-scripts] live-fixture[0]: live-fixture: allowlisted via "live-fixture"
+[content-scripts] live-fixture[0]: injected content.js
+```
+
+### 2. The global really exists *inside the app*
+
+Not taken on the log line's word: a plain WebSocket CDP client dialled the bridge's own port
+and evaluated in the app's context — the same `Runtime.evaluate` the product uses, driven from
+outside it:
+
+```
+RESULT: {"result":{"type":"string","value":"string|hooked"}}
+```
+
+The loader arrived too, in the app's own words:
+
+```
+{"binding":"function","loader":"object","proto":1}
+```
+
+### 3. The app → host leg (`Runtime.bindingCalled`) — the leg `6f31a7c` subscribed
+
+The app-side callback saw a real answer, with no `lastError`:
+
+```
+{"response":{"from":"background-worker","got":"DELAYED"},"lastError":null}
+```
+
+and the worker, whose console is the shell's stdout, printed what it received:
+
+```
+[live-fixture] [fixture-worker] received from app: {"from":"content-script","marker":"DELAYED"}
+```
+
+To show that the payload rode the *binding* rather than some incidental channel, an
+independent client called the reserved function straight from app code, bypassing the loader's
+`chrome.runtime` entirely, and the host still received it:
+
+```
+globalThis.__rozeniteContentBridgeDispatch(JSON.stringify({t:"send",x:"live-fixture",s:"live-fixture#direct",m:{marker:"DIRECT_BINDING_PROBE"}}))
+```
+```
+[live-fixture] [fixture-worker] received from app: {"from":"app-code-direct-binding","marker":"DIRECT_BINDING_PROBE"}
+```
+
+### 4. `chrome.tabs.sendMessage` reached the app and got its answer back
+
+```
+[live-fixture] [fixture-worker] tabs.sendMessage DELIVERED: {"from":"content-script","saw":{"from":"worker","probe":"ROZENITE_LIVE_TAB_PROBE"}}
+```
+
+The app confirmed it was the one that answered, and recorded the synthetic `sender.tab` the
+host attaches. Trimmed for width, but the title is the real target's, not `about:blank`:
+
+```
+{"id":39849, … "title":"com.aitwar.devtoolspoc (unknown Android SDK built for arm64)","url":"about:blank","status":"complete"}
+```
+
+### The default-closed gate, in the same live setup
+
+Same app, same fixture folder, `DEVTOOLS_CONTENT_SCRIPTS` unset:
+
+```
+[content-scripts] DEVTOOLS_CONTENT_SCRIPTS is unset, so NO content script is injected (docs/features/CONTENT-SCRIPTS.md)
+[content-scripts] live-fixture[0]: live-fixture: not allowlisted. Nothing is injected unless DEVTOOLS_CONTENT_SCRIPTS names "live-fixture" or "<all_rn_targets>" (current: unset — the default, and the safe one)
+```
+
+Zero `injected content.js` lines that run, and the app itself, read back over CDP, was clean:
+
+```
+{"hooked":"undefined","loader":"undefined","binding":"undefined"}
+```
+
+The refusal a `tabs.sendMessage` gets with nothing injected is the expected default, and it
+says why:
+
+```
+[live-fixture] [fixture-worker] tabs.sendMessage REFUSED: tabs.sendMessage: no content script of "live-fixture" is running in the inspected target, so nothing can receive this message. docs/features/CONTENT-SCRIPTS.md is the opt-in; its current state here is not injected (nothing allowlisted)
+```
+
+### Two things the run showed that the tests could not
+
+**A script that sends in the same tick it is injected usually does not reach the worker.** The
+fixture sent twice per injection — immediately, and 2.5 s later. Across three shell runs and
+twelve injections, the delayed send arrived 11 times and the immediate one once. The app's
+own callback for a lost send reported
+
+```
+{"response":"<undefined>","lastError":null}
+```
+
+which is precisely the shape this host reserves for "a listener answered nothing" — not for
+"nobody was reached". So the message is swallowed silently rather than reported as a failure.
+It is timing-dependent (the worker takes its mesh seat during shell startup, injection happens
+during attach, and the order is not fixed), so an extension that sends from its first statement
+can lose that message without any error to notice. Nothing was changed for this.
+
+**The same entry is injected several times per live session** — four `injected content.js`
+lines in each of three runs, alongside the deferred first pass, the attach, and the
+`Runtime.executionContextCreated` re-injections (the fourth pass was not separately
+attributed). 2.5 s of the fixture's own timer made each injection observable as exactly one
+delayed send, which is how the count was read. `refresh()` is
+documented as idempotent and its verdicts really are stable, and the loader's merge-not-replace
+did keep exactly one listener in the app throughout — but re-evaluating a script whose *own*
+side effects are not idempotent is not idempotent from the app's point of view. Not fixed here.
+
+### What the run did *not* exercise
+
+`css` (no-op by design), `"world": "MAIN"` as a separate file, Ports from a content script,
+multiple extensions injecting one app, and re-injection after an app reload (the
+`executionContextCreated` path did fire once, when the frontend connected, and injection did
+re-run). The limitations above are unchanged by this run: the script still has no `document`,
+no isolated world, and no way to hook code that ran before attach.
