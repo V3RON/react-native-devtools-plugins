@@ -45,7 +45,13 @@ const createRuntime = ({ extensionId, getManifest, platform, lastError }) => {
 
     getManifest: () => getManifest(),
 
-    // [STUB until bucket 3] background host does not exist yet.
+    // Chrome's answer here is honest and narrow: the background page's `window`
+    // object. There is no window to hand out — the background context this shell
+    // hosts is a hidden BrowserWindow whose WebContents the host does not expose
+    // to other frames, and a devtools page in Chrome can only reach a real
+    // background PAGE (MV2) window. So `undefined`, which is what Chrome returns
+    // for an MV3 extension too: a service worker has no page to return either.
+    // Nothing is fabricated (docs/features/BACKGROUND-WORKER.md).
     getBackgroundPage: () => undefined,
 
     getPlatformInfo: (callback) => promiseOrCallback(() => ({ ...platform }), callback),

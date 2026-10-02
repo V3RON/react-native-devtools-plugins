@@ -2,7 +2,7 @@
 
 | | |
 | --- | --- |
-| **Status** | 🟨 partial — scan + manifest parse + panel hosting + per-extension CSP + permission enforcement in the shell; no lifecycle UI |
+| **Status** | 🟨 partial — scan (devtools pages **and** backgrounds) + manifest parse + per-extension CSP + permission enforcement + an install/version record in the shell; no lifecycle UI |
 | **Tier** | 1 |
 | **Blocked by** | — |
 
@@ -36,6 +36,14 @@ exposes them at `chrome-extension://<id>/`, and drives each declared execution c
   `runtime.lastError` + a rejected promise. Only `permissions` counts, like Chrome's
   `permissions.contains()` — `host_permissions` is network reach, `optional_permissions`
   are by definition not granted.
+- **Background contexts are discovered and run.** `scanBackgroundExtensions()`
+  (`src/main/extensions.js`) lists folders declaring `background.service_worker` or a
+  non-empty `background.scripts` — independently of the devtools-page scan, so an extension
+  with both is hosted twice, as Chrome does. The host also remembers which extension
+  **versions** it has seen (`src/main/install-state.js`, `electron-store` under `userData`);
+  that is what turns "the manifest's version changed" into `runtime.onInstalled`
+  (`install` / `update`) versus `onStartup`. It is the closest thing this shell has to an
+  install record, and a fresh `--user-data-dir` correctly looks like a fresh install.
 - Deviation worth stating: Chrome does not inject an undeclared namespace at all
   (`chrome.tabs === undefined`); this shell keeps the shape and fails the call, per the
   shape-first stubbing rule in [OVERVIEW.md](../OVERVIEW.md).
@@ -56,7 +64,7 @@ exposes them at `chrome-extension://<id>/`, and drives each declared execution c
 | --- | --- |
 | `manifest_version: 3`, `name`, `version`, `description`, `icons` | Parse and honor |
 | `devtools_page` | **Core** — spawn hidden frame per extension |
-| `background.service_worker` | Run as always-on hidden Electron frame → [BACKGROUND-WORKER.md](BACKGROUND-WORKER.md) |
+| `background.service_worker` / `background.scripts` | **Run** as an always-on hidden context (`src/main/background-host.js`), honoring `type: "module"`; `service_worker` wins over `scripts[0]` → [BACKGROUND-WORKER.md](BACKGROUND-WORKER.md) |
 | `storage`, `alarms`, `notifications` permissions | Declared ⇒ granted, and now **enforced**: an undeclared API fails the call instead of working |
 | `host_permissions`, `webRequest` | `webRequest` enforced at the transport (deliveries are scoped to the declaration in `src/main/delivery-scope.js`); `host_permissions` still grant nothing beyond the RN app's own CDP reach |
 | `content_scripts` | Runner per [CONTENT-SCRIPTS.md](CONTENT-SCRIPTS.md) (bridge-style only) |

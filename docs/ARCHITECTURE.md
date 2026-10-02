@@ -33,7 +33,10 @@ into the frontend's main world, never `require`d at runtime.
 
 ### Electron main process (`src/main/`)
 
-- `index.js` — lifecycle wiring only (`start()` the bridge on ready, `stop()` on quit).
+- `index.js` — lifecycle wiring only (`start()` the bridge on ready, `stop()` on quit), plus
+  the one place that decides **what counts as an application window**: the hidden background
+  worker windows are not user-closable, so they neither keep the app alive nor block
+  `activate` (see `docs/features/BACKGROUND-WORKER.md` § App shutdown).
   `window.js` — BrowserWindow + frontend load.
   `config.js` — frontend URL (`http://127.0.0.1:8081/rozenite/rn_fusebox.html?ws=localhost:9223`),
   extensions dir, CDP-bridge knobs; all env-overridable: `DEVTOOLS_FRONTEND_URL`,
@@ -70,6 +73,30 @@ into the frontend's main world, never `require`d at runtime.
   guarded against path traversal. **Installing an extension = dropping its unpacked
   folder into `extensions/`.** Every response carries that extension's CSP
   (`src/shared/csp.js`): its own `content_security_policy`, or Chrome's MV3 default.
+  The handler is **`protocol.handle`**, not the deprecated `registerFileProtocol`, because
+  one response kind has no bytes on disk: the reserved path
+  `rozenite://<id>/__rozenite_background__?script=<path>&type=<classic|module>` returns a
+  **synthesized bootstrap document** for an extension's background context. It has to be
+  generated — the extension folder is a read-only install — and its only body content is one
+  same-origin `<script src=…>`, because the CSP this server itself enforces
+  (`script-src 'self'`) would refuse the inline script the alternative implies. Files are
+  served through `net.fetch(pathToFileURL(…))` so Chromium picks the MIME type (a module
+  script with the wrong type is a hard load failure), with the CSP header re-applied.
+  Reserved paths are reserved in both directions, so a real file cannot shadow the bootstrap
+  and `?script=` cannot name a file outside the extension — it goes through the same
+  containment check as any other request.
+- `background-host.js` — one hidden `BrowserWindow` (`show: false`) per extension that
+  declares a background (`docs/features/BACKGROUND-WORKER.md`). It is **a third execution
+  context**, next to the frontend's main frame and the extension iframes inside it: the
+  worker's document is the main frame of its own window, so `src/preload/index.js` dispatches
+  on the **protocol first** (an extension page is an extension page whether it is an iframe or
+  a window's top frame) and the worker gets the same shim, gate, and `RUNTIME_REGISTER` seat
+  as a panel. `did-fail-load`, `render-process-gone`, `unresponsive` and the worker's console
+  are relayed with the extension id, with Electron 38's string log-levels normalized to a
+  number — a level that silently reads as `log` is how a dead worker stops being reportable.
+- `install-state.js` — which extension versions the host has seen (`{version, installedAt}`
+  in `electron-store`, under `userData`), and therefore whether a worker's first event is
+  `onInstalled{install}`, `onInstalled{update}`, or `onStartup`.
 - `frame-security.js` — the one place webPreferences are decided, with the measured
   reasons for each option. `ipc.js` registers every channel and gates each call on the
   calling frame (`event.senderFrame` + `event.frameId`, pinned to the principal that
@@ -82,11 +109,15 @@ into the frontend's main world, never `require`d at runtime.
 
 ### Security model (`src/main/frame-security.js`)
 
-One `webPreferences` object per `WebContents`, and every extension page is an iframe
-inside the frontend's own frame tree (`src/frontend/panel-bridge.js` creates them), so
-today the frontend and the extension frames necessarily share one policy. What that
-policy is, and what each option was measured to do (Electron 38, headless, a real
-`rozenite://` frame loading the production preload):
+One `webPreferences` object per `WebContents`. Every extension **iframe** (devtools page,
+panels) lives inside the frontend's own frame tree — `src/frontend/panel-bridge.js` creates
+them — so the frontend and those frames necessarily share one policy, and that is what
+`basePreferences` encodes. An extension's **background context** has its own `WebContents` and
+could therefore have a different policy; it uses the same table anyway, deliberately: the two
+contexts must not differ in what they can reach, and `extensionFramePreferences()` exists so
+that any future split is a decision rather than an accident. What the policy is, and what each
+option was measured to do (Electron 38, headless, a real `rozenite://` frame loading the
+production preload):
 
 | Option | Value | Why |
 | --- | --- | --- |
@@ -124,7 +155,9 @@ device nor the frontend to be observable.
 
 ### Extension-iframe preload (`src/preload/extension-frame.js`)
 
-Any iframe loaded under `rozenite:` (hostname = extension id) gets, in order:
+Any iframe loaded under `rozenite:` (hostname = extension id) gets, in order — and this is
+also what an extension's **background context** gets, since that is a `rozenite:` document in
+a hidden window of its own:
 
 - the **`chrome` namespace** assembled by `src/chrome-shim`, merged onto `window.chrome`
   (its `devtools.inspectedWindow.eval` / `.reload` are wired to the async `DEVTOOLS_EVAL`
@@ -135,6 +168,10 @@ Any iframe loaded under `rozenite:` (hostname = extension id) gets, in order:
   seeded from the grants `RUNTIME_REGISTER` derives from the manifest **on disk** — so the
   verdict is the host's, and a page-world script cannot widen it by replacing
   `chrome.runtime.getManifest`;
+- a **startup delivery queue** on `RUNTIME_DELIVER`, flushed at `DOMContentLoaded`. The host
+  pushes a frame's first delivery (a lifecycle event, for a worker) the instant it registers,
+  which is during preload evaluation — before the page's listeners exist. Chrome has the same
+  rule for the same reason;
 - nothing else. No raw `ipcRenderer`, no injected-script fetch, no Node globals: the page
   world has named channels only.
 
@@ -156,8 +193,16 @@ Pure modules; `index.js` assembles the namespace from injected deps:
   webRequest mapping and Chrome's URL-pattern matching, pure.
 - `runtime.js` + `messaging.js` — identity (`id`/`getURL`/`getManifest`/platform) and
   real `sendMessage`/Ports, relayed by the host message router
-  ([REAL, extension-scoped]; lifecycle events await the background host).
+  ([REAL, extension-scoped]); `onInstalled`/`onStartup` are produced by the background host
+  ([features/BACKGROUND-WORKER.md](features/BACKGROUND-WORKER.md)). `getBackgroundPage()`
+  stays `undefined`, which is also Chrome's answer for an MV3 extension.
   `event.js` provides Chrome-semantics Event objects shared across the shim.
+- `browser-apis.js` — `chrome.action` and `chrome.notifications` as **registrable no-op
+  shells** ([STUB — issue #4 owns making this real]): they exist so an MV3 worker that names
+  them at module scope can load at all (an ESM worker's top-level statements run first, so a
+  missing namespace kills the whole context). No button, badge, popup or notification;
+  `notifications.create` calls back with **no id** and neither event ever fires.
+  `notifications` is permission-gated like Chrome's, `action` is ungated like Chrome's.
 - `devtools.js` — `chrome.devtools.*`: real `panels.create` (host-driven tabs), real
   `inspectedWindow.eval` against an injected `evalInPage` host dependency
   ([features/INSPECTED-WINDOW.md](features/INSPECTED-WINDOW.md)), `panels.network.getHAR`
@@ -219,5 +264,33 @@ One upstream session serves the frontend **and** host commands: the app never le
 about a second debugger, and the frontend never sees a command it did not send. One
 `Network.enable` session likewise serves the frontend's own Network panel, Rozenite's
 middleware, and every extension frame — the model accumulates once in main and fans out.
+
+## Execution contexts, current
+
+| Context | Where it runs | Frame tree | Created by |
+| --- | --- | --- | --- |
+| DevTools frontend | main frame of the visible `BrowserWindow` | its own | `window.js` |
+| devtools page, panel pages | `rozenite://` iframes | **the frontend's** | `src/frontend/panel-bridge.js` |
+| **background context** (MV3 worker) | main frame of a hidden `BrowserWindow`, one per extension | **its own** | `src/main/background-host.js` |
+| injected content scripts | not implemented | — | — |
+
+```
+ frontend window (visible)                      extension windows (show:false, one per extension)
+ ┌──────────────────────────────┐               ┌─────────────────────────────────────────────┐
+ │ main frame: the frontend     │               │ main frame:                                  │
+ │   iframe rozenite://<id>/…  │               │  rozenite://<id>/__rozenite_background__      │
+ │   iframe rozenite://<id>/…  │               │    ?script=<path>&type=<classic|module>       │
+ └──────────────┬───────────────┘               └──────────────────────┬──────────────────────┘
+                │  extension-frame preload: chrome.* shim + gate  (identical on both sides)     │
+                └──────────────────────────┬───────────────────────────────────────────────────┘
+                                           ▼  RUNTIME_REGISTER / RUNTIME_DELIVER — one path, no bypass
+                  main: message-router  ◄──  background-host (lifecycle)  ◄──  install-state
+```
+
+The split is deliberate: a worker does **not** live in the frontend's frame tree, so reloading
+the frontend does not take the extension's background down with it
+([features/BACKGROUND-WORKER.md](features/BACKGROUND-WORKER.md)). Both context kinds are
+ordinary router peers, addressed by the `WebFrameMain` the principal check already verified,
+and both derive their extension identity from the frame's own URL — never from payload.
 
 Target status per functionality: [features/README.md](features/README.md).

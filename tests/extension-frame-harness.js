@@ -39,6 +39,11 @@ const TIMEOUT_MS = Number(arg("timeout") || 25000);
 // wait for a log line instead.
 const waitFor = arg("wait-for");
 const SETTLE_MS = Number(arg("settle") || 900);
+// Start the production background host too (src/main/background-host.js). Off by
+// default so every pre-existing run of this harness is unchanged.
+const withBackgroundHost = ["on", "true", "1"].includes(arg("background-host"));
+// Which extension id's CSP to report in the `harness` line.
+const reportedExtensionId = arg("extension-id") || "probe.local";
 
 // Must precede requiring config: it captures DEVTOOLS_EXTENSIONS_DIR at module
 // load and the file server resolves against it. Production code unchanged,
@@ -56,6 +61,8 @@ const production = require("../src/main/extension-server");
 const { registerIpcHandlers } = require("../src/main/ipc");
 const { frontendPreferences } = require("../src/main/frame-security");
 const config = require("../src/main/config");
+const { createBackgroundHost } = require("../src/main/background-host");
+const { createInstallState } = require("../src/main/install-state");
 
 // Production privileges, once, before ready.
 production.registerExtensionSchemePrivileges();
@@ -76,6 +83,22 @@ app
     Store.initRenderer();
     registerIpcHandlers();
     const policyFor = production.registerExtensionProtocol();
+
+    // The production background host, in the process that will actually hold it
+    // (src/main/index.js does the same, after the protocol and the IPC handlers).
+    // The install state is the real one, in userData — which is how a second run
+    // with the same --user-data-dir sees an already-installed extension.
+    const host = withBackgroundHost
+      ? createBackgroundHost({
+          installState: createInstallState(new Store({ name: "extension-installs" })),
+          onWorkerConsole: (record) => note({ kind: "worker-console", ...record }),
+          log: {
+            log: (message) => note({ kind: "background-log", level: "log", message }),
+            warn: (message) => note({ kind: "background-log", level: "warn", message }),
+            error: (message) => note({ kind: "background-log", level: "error", message }),
+          },
+        })
+      : null;
 
     // Loopback "frontend": an http:// page hosting the extension frames, which is
     // what src/frontend/panel-bridge.js does for real panels.
@@ -166,8 +189,9 @@ app
         preload: "<production preload>",
       },
       // What the production file server decides to serve for this extension id —
-      // the same function the protocol callback uses.
-      servedCsp: policyFor("probe.local"),
+      // the same function the protocol handler uses.
+      servedCsp: policyFor(reportedExtensionId),
+      backgroundHost: Boolean(host),
       electronVersion: process.versions.electron,
       chromeVersion: process.versions.chrome,
     });
@@ -178,6 +202,13 @@ app
         .catch((error) => note({ kind: "load-rejected", message: error.message })),
       new Promise((resolve) => setTimeout(resolve, 8000)),
     ]);
+
+    // The background host starts AFTER the protocol and IPC handlers exist, which
+    // is the same ordering src/main/index.js uses, and — deliberately — not
+    // because the frontend window loaded: it does not depend on it.
+    if (host) {
+      host.attach();
+    }
 
     const readBack = () => {
       try {
@@ -196,7 +227,9 @@ app
       const lines = readBack();
       if (waitFor) {
         return lines.some(
-          (line) => line.kind === "console" && String(line.message).includes(waitFor)
+          (line) =>
+            ["console", "worker-console", "background-log"].includes(line.kind) &&
+            String(line.message).includes(waitFor)
         );
       }
       return lines.some((line) => line.kind === "probe" && line.data && line.data.ports);
@@ -209,6 +242,9 @@ app
     await new Promise((resolve) => setTimeout(resolve, SETTLE_MS));
 
     note({ kind: "frames", frames: frameDump() });
+    if (host) {
+      note({ kind: "background-windows", windows: host.list() });
+    }
     server.close();
     app.exit(0);
   })

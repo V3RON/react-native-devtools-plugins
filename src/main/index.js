@@ -1,6 +1,6 @@
 // Electron main-process entry point: bootstrap and lifecycle wiring only.
 // State and services live in ./ipc, ./extension-server, ./cdp-bridge,
-// ./network-service.
+// ./network-service, ./background-host.
 const { app, BrowserWindow } = require("electron");
 const { default: Store } = require("electron-store");
 const { createWindow } = require("./window");
@@ -10,6 +10,7 @@ const {
   registerExtensionSchemePrivileges,
   registerExtensionProtocol,
 } = require("./extension-server");
+const { attachBackgroundHost, getBackgroundHost } = require("./background-host");
 
 Store.initRenderer();
 
@@ -32,12 +33,35 @@ app.whenReady().then(() => {
 
   createWindow();
 
+  // An extension's background context (docs/features/BACKGROUND-WORKER.md) after
+  // the protocol it loads from and after the IPC handlers its preload calls —
+  // but independent of the frontend window: in Chrome, closing DevTools does not
+  // kill the worker, and here the worker does not live in the frontend's frame
+  // tree either.
+  attachBackgroundHost();
+
   app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
+    if (userWindows().length === 0) {
       createWindow();
     }
   });
 });
+
+// Windows the user can actually see and close. A background worker window is
+// `show: false`: nobody can close it, so it must not be the reason the shell
+// stays alive after the last DevTools window is gone (docs/features/
+// BACKGROUND-WORKER.md §App shutdown).
+let quitting = false;
+app.on("before-quit", () => {
+  quitting = true;
+});
+
+const userWindows = () => {
+  const host = getBackgroundHost();
+  return BrowserWindow.getAllWindows().filter(
+    (win) => !(host && host.isWorkerWindow(win.id))
+  );
+};
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") {
@@ -45,6 +69,22 @@ app.on("window-all-closed", () => {
   }
 });
 
+// `window-all-closed` alone is not enough here: with hidden worker windows still
+// open it never fires, and the app would linger invisibly forever. So the same
+// decision is made when the last *user* window closes. One place owns the rule,
+// and it is the place that already owns `window-all-closed`.
+app.on("browser-window-created", (_event, win) => {
+  win.on("closed", () => {
+    if (!quitting && process.platform !== "darwin" && userWindows().length === 0) {
+      app.quit();
+    }
+  });
+});
+
 app.on("will-quit", () => {
   cdpBridge.stop().catch(() => {});
+  const host = getBackgroundHost();
+  if (host) {
+    host.closeAll();
+  }
 });

@@ -54,7 +54,10 @@ browser; no for things that do — and that's a product decision, not a technica
 5. devtools-network            (real requests/bodies on Network.* → the GraphQL
                                 inspector is real; highest-leverage item left)
 6. storage session + i18n + small-shims   (crash → degrade for many extensions)
-7. background-worker           (unlocks webRequest consumers, alarms, notifications)
+7. ~~background-worker~~ (unlocks webRequest consumers, alarms, notifications)  ✅ live —
+   always-on hidden context per extension, lifecycle events fire, worker is a router peer
+   (`docs/features/BACKGROUND-WORKER.md`); the browser APIs it wants (`tabs`,
+   `notifications`, `alarms`) are the next thing that actually unblocks anything
 8. content-bridge runner       (app-facing extensions with zero app-code changes)
 9. panels.elements sidebars, sources, device discovery, save/workspace, i18n polish
 ```
@@ -82,3 +85,10 @@ Independent of order, fix first: ~~**preferences persistence**~~ ✅ done
   guards limit what an extension page can *ask* for — a renderer compromise is still a Node
   compromise, which is why the background worker and content-script injection are stacked
   *after* this rather than before it.
+  **Deviation, recorded:** the background worker landed *before* `sandbox: true`. It was
+  stacked after this guardrail on purpose and the stack order was overridden, so the state is
+  stated rather than glossed: the worker context is a separate hidden renderer, **not** a
+  sandboxed one, and it has no more isolation than a panel iframe ever had
+  (`docs/LIMITATIONS.md` §Security). What it does not have is a privileged channel either — it
+  reaches the host through the same validated `RUNTIME_REGISTER`/`RUNTIME_DELIVER` path a panel
+  uses. Content-script injection is still held until sandbox lands.

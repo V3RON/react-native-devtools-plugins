@@ -56,6 +56,11 @@ Altair, Lighthouse, Wiztree…) actually rely on, in rough order of importance:
   discovery, re-attach, host commands multiplexed by message id onto the frontend's
   session), which makes `chrome.devtools.inspectedWindow.eval` return real values from a
   running app — the first working bridge to the target.
+- An extension's `background.js` **runs**. Each extension that declares a background gets an
+  always-on hidden window against the same shim, with `runtime.onInstalled`/`onStartup` firing
+  and the worker as an ordinary messaging peer — which is the context GraphQL's and Altair's
+  real logic lives in (`src/main/background-host.js`,
+  [features/BACKGROUND-WORKER.md](features/BACKGROUND-WORKER.md)).
 
 See [LIMITATIONS.md](LIMITATIONS.md) for what this prototype is *not*.
 

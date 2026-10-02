@@ -33,6 +33,7 @@ const { createRuntime } = require("./runtime");
 const { createMessagingClient } = require("./messaging");
 const { createDevtools } = require("./devtools");
 const { createTabs } = require("./tabs");
+const { createAction, createNotifications } = require("./browser-apis");
 const {
   gateCallbackNamespace,
   gateWebRequest,
@@ -155,6 +156,32 @@ const createChromeNamespace = ({
       ),
       onChanged,
     },
+
+    // [STUB — issue #4 owns making this real] `chrome.action`: registrable,
+    // inert. Its whole reason for existing is that MV3 workers reference
+    // `chrome.action.onClicked.addListener` at module scope, and an ESM worker
+    // that throws at load has no background context at all (Altair's does).
+    // No button, no badge, no popup, and onClicked never fires. Ungated, like
+    // Chrome's (src/shared/permissions.js lists `action` as needing nothing).
+    action: createAction(),
+
+    // [STUB — issue #4 owns making this real] `chrome.notifications`: `create`
+    // shows NOTHING and names nothing; onClicked never fires. Gated on the
+    // declared `notifications` permission like Chrome's (Altair declares it;
+    // an extension that does not gets lastError, not a silent no-op).
+    notifications: gateCallbackNamespace(
+      createNotifications({
+        onStubCall: (message) =>
+          logger.warn(`[chrome.notifications] ${message}`),
+      }),
+      {
+        api: "notifications",
+        check: (api) => gate.check(api),
+        setLastError,
+        onDenied: (method, error) =>
+          reportDenied(`${method}: ${error.message}`, "notifications"),
+      }
+    ),
   };
 
   // Host -> frame delivery entry point (non-enumerable: not part of the
