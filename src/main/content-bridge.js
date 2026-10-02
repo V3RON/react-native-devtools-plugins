@@ -291,7 +291,17 @@ const loaderSource = ({
       sendMessage: function () {
         var args = Array.prototype.slice.call(arguments);
         var callback = typeof args[args.length - 1] === "function" ? args.pop() : undefined;
-        if (typeof args[0] === "string" && args.length >= 2) args.shift();
+        // A string-first argument is Chrome's CROSS-extension address, the one form of
+        // this call that carries an extension id. This shell cannot honour it (see the
+        // host's "case send"), so the id is consumed here only so the message is still
+        // read correctly, and travels as "to" for the host to refuse. Dropping it and
+        // delivering to this extension's own peers would be the worst answer available:
+        // the sender's own contexts would reply and it would look like the addressee did.
+        // (No backticks in here: this whole loader is one template literal.)
+        var target = null;
+        if (typeof args[0] === "string" && args.length >= 2) {
+          target = args.shift();
+        }
         var message = args.shift();
         var seq = ch.nextSeq();
         var settled = false;
@@ -314,7 +324,9 @@ const loaderSource = ({
           }
         };
         ch.pending[seq] = finish;
-        var ok = sendToHost({ t: "send", x: ch.id, s: seq, m: message });
+        var envelope = { t: "send", x: ch.id, s: seq, m: message };
+        if (target !== null) envelope.to = target;
+        var ok = sendToHost(envelope);
         if (!ok) {
           finish(undefined, errorOf("Could not establish connection. Receiving end does not exist."));
         } else {
@@ -332,8 +344,14 @@ const loaderSource = ({
       },
       connect: function (first, second) {
         var name = "";
-        if (typeof first === "string" && second && typeof second === "object") name = second.name || "";
-        else if (first && typeof first === "object") name = first.name || "";
+        var target = null;
+        // Chrome's two signatures are connect(connectInfo) and connect(extensionId,
+        // connectInfo), so a string first argument is ALWAYS the cross-extension address —
+        // never a port name. It is carried, not swallowed; see sendMessage above.
+        if (typeof first === "string") {
+          target = first;
+          if (second && typeof second === "object") name = second.name || "";
+        } else if (first && typeof first === "object") name = first.name || "";
         var local = "port:" + ch.nextSeq();
         var port = {
           name: name,
@@ -358,7 +376,9 @@ const loaderSource = ({
           _key: function () { return local; }
         };
         ch.ports[local] = port;
-        var ok = sendToHost({ t: "port-connect", x: ch.id, s: local, n: name });
+        var openEnvelope = { t: "port-connect", x: ch.id, s: local, n: name };
+        if (target !== null) openEnvelope.to = target;
+        var ok = sendToHost(openEnvelope);
         if (!ok) port._close("Could not establish connection.");
         return port;
       },
@@ -985,6 +1005,25 @@ const createContentBridge = ({
           await answerApp(extensionId, envelope.s, undefined, "no messaging router is running");
           return;
         }
+        // A content script addressing ANOTHER extension is Chrome's
+        // `externally_connectable` feature, which this shell has no model for: there is no
+        // page-origin to match against a target's declared matches, because an RN target is
+        // not a URL. Addressing your OWN id is not that feature — a content script is part
+        // of its own extension — so only a foreign id is refused. Delivering it to the
+        // sender's own peers instead would be the worst answer of the three: the sender's
+        // own contexts would reply and the script would believe the other extension did.
+        if (typeof envelope.to === "string" && envelope.to !== extensionId) {
+          await answerApp(
+            extensionId,
+            envelope.s,
+            undefined,
+            `${NO_RECEIVER} "${extensionId}" addressed extension ${JSON.stringify(envelope.to)}, ` +
+              "and a content script may only message its own extension here: that cross-extension " +
+              "path is Chrome's externally_connectable feature, which needs a page origin to match " +
+              "against, and an RN target has no URL."
+          );
+          return;
+        }
         const record = state.get(extensionId);
         // `evaluating` is the in-flight case, and it counts: this envelope could only have
         // been sent by a script the app is running right now (see `injectExtension`).
@@ -1028,6 +1067,24 @@ const createContentBridge = ({
       }
       case "port-connect": {
         if (!router) return;
+        // Same rule, same reason: `connect(extensionId, …)` is externally_connectable, and
+        // a port opened to the sender's own peers would be answered as if it were the
+        // addressee. `port-drop` is how the loader learns to fire onDisconnect with a
+        // lastError, so the script sees a closed port rather than a phantom conversation.
+        if (typeof envelope.to === "string" && envelope.to !== extensionId) {
+          await evaluateInApp(
+            dispatchExpression({
+              t: "port-drop",
+              x: extensionId,
+              s: envelope.s,
+              p: `Cannot connect to extension ${JSON.stringify(envelope.to)}: a content script may ` +
+                "only connect to its own extension here. That path is Chrome's " +
+                "externally_connectable feature, which needs a page origin to match against, and " +
+                "an RN target has no URL.",
+            })
+          );
+          return;
+        }
         const result = router.connect({ fromKey: key, name: envelope.n || "" });
         if (!result.ok) {
           await evaluateInApp(

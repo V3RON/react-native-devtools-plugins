@@ -473,27 +473,33 @@ With all three in place, the same fixture, same device, same command:
 The immediate send is delivered rather than merely reported honestly — the worker received
 `IMMEDIATE`, which the run measured at 1/12 before.
 
-**A Chrome-fidelity divergence found here, deliberately NOT fixed.** An injected script can
-call `chrome.runtime.sendMessage("other-extension", msg)`, and the app-side loader
-**discards that target id**: it keeps only its own extension id in the envelope, so the host
-routes the message to *the sender's own* extension's peers. Measured directly, the wire envelope
-for `chrome.runtime.sendMessage("other-extension.local", {hi:1})` from `ext-a` is
+**A Chrome-fidelity divergence found here, and since fixed.** An injected script could call
+`chrome.runtime.sendMessage("other-extension", msg)` while the app-side loader **discarded that
+target id**, keeping only its own extension id in the envelope:
 
 ```
 {"t":"send","x":"ext-a","s":"ext-a#1","m":{"hi":1}}
 ```
 
-— the named extension is simply gone. In the live no-peer run that produced the mild symptom
-(the call rejects with Chrome's "Receiving end does not exist.", because this extension had no
-peer either), but the underlying behaviour is wrong: once a peer of the *sender's* extension
-exists, a message aimed at a different extension is delivered to the sender's own worker and
-panels, while Chrome addresses the named extension. The frame-side shim
-(`src/chrome-shim/messaging.js`) does this correctly, rejecting any target id that is not the
-caller's own, and `tests/content-loader.test.js` now pins the app-side flattening so it cannot
-be forgotten. Not fixed here because doing it properly means extending the envelope protocol —
-carry the target, and decide it host-side, where the caller's real extension id is host state
-rather than something the app asserted — and an app-side-only check would be the shell
-claiming knowledge of a mesh the app cannot see. Left for a human to place on the right layer.
+The live run showed the mild symptom (Chrome's "Receiving end does not exist.", because that
+extension had no peer either), but the behaviour underneath was worse than the symptom: as soon
+as a peer of the *sender's* extension exists, a message aimed at a different extension is
+delivered to the sender's own worker and panels, and answered — which reads to the script
+exactly like the addressee replying. A wrong answer is more expensive than a refusal.
+
+Fixed as this section prescribed: the loader now carries the address instead of dropping it
+(`to` on the envelope, for `sendMessage` **and** `connect` — Chrome's `connect(extensionId,
+connectInfo)` has the same shape, where a string first argument is the address and never a port
+name), and the decision is made host-side, where the caller's real extension id is host state
+rather than something the app asserted. A foreign `to` is refused, naming the extension that
+was actually being asked; a port open to one is closed with that reason rather than opened onto
+the wrong peers.
+
+Refusing is also the Chrome-faithful answer, not a shortcut: that call form is gated on
+`externally_connectable`, which cannot exist in this shell — the grant matches a page origin
+against the target's declared `matches`, and an RN target has no URL to match. Addressing
+your **own** extension id is a different case and still works: a content script is part of its
+own extension, so `to` equal to the sender's id is treated as unaddressed.
 
 **2. One entry is evaluated once per app context.**
 

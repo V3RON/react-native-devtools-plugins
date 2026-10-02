@@ -422,20 +422,48 @@ test("the host's \"no receiver\" arrives as lastError + a rejected promise, not 
   ]);
 });
 
-test("the app-side loader flattens a named target extension — a known divergence, pinned", () => {
-  // Chrome addresses `sendMessage(extensionId, message)` to THAT extension and fails if it
-  // has no receiver. This loader keeps only its own id on the envelope, so the host ends up
-  // fanning the message out to the SENDER's peers. The frame-side client
-  // (src/chrome-shim/messaging.js) rejects a foreign id instead. This is deliberately NOT
-  // fixed here — the right fix is the envelope protocol, host-side, where the caller's real
-  // extension id is host state — but the behaviour is pinned so it cannot be forgotten.
-  // Recorded in docs/features/CONTENT-SCRIPTS.md, "After the run".
+// This used to be the pinned divergence: the loader dropped the named target, so a message
+// aimed at ANOTHER extension was fanned out to the SENDER's peers and answered as if the
+// addressee had replied. Its own comment said the fix belonged in the envelope protocol,
+// host-side — this is that fix. The id now travels as `to`, and src/main/content-bridge.js's
+// "case send" refuses a foreign id rather than delivering it locally (see the protocol suite).
+test("a named target extension travels on the envelope instead of vanishing", () => {
   const app = makeApp();
   app.install("ext-a", ["a.js"], "1;");
   app.evaluate(`chrome.runtime.sendMessage("other-extension.local", {hi: 1});`);
   assert.deepStrictEqual(envelopes(app), [
-    { t: "send", x: "ext-a", s: "ext-a#1", m: { hi: 1 } },
-  ], "the named target is gone; the envelope carries the SENDER's extension id");
+    { t: "send", x: "ext-a", s: "ext-a#1", m: { hi: 1 }, to: "other-extension.local" },
+  ]);
+});
+
+test("an unaddressed send carries no target, and self-addressing changes nothing", () => {
+  const app = makeApp();
+  app.install("ext-a", ["a.js"], "1;");
+  app.evaluate(`chrome.runtime.sendMessage({hi: 1});`);
+  // Chrome lets a content script address its OWN extension id, and that is not the
+  // externally_connectable feature — so the host must not refuse it. `to` equal to the
+  // sender's id is treated as unaddressed there, and nothing here needs to special-case it.
+  app.evaluate(`chrome.runtime.sendMessage("ext-a", {hi: 2});`);
+  const sent = envelopes(app);
+  assert.strictEqual("to" in sent[0], false, "unaddressed: no target claimed");
+  assert.strictEqual(sent[0].m.hi, 1, "and the message is the message");
+  assert.deepStrictEqual(sent[1], { t: "send", x: "ext-a", s: "ext-a#2", m: { hi: 2 }, to: "ext-a" });
+});
+
+// Chrome's connect(connectInfo) vs connect(extensionId, connectInfo): a string first
+// argument is the address, never a port name. Getting this wrong would name a port
+// "other-extension.local" and open it to the sender's own peers.
+test("connect's string first argument is the target, not the port name", () => {
+  const app = makeApp();
+  app.install("ext-a", ["a.js"], "1;");
+  app.evaluate(
+    `chrome.runtime.connect("other-extension.local", {name: "relay"});
+     chrome.runtime.connect({name: "own"});`
+  );
+  const [addressed, plain] = envelopes(app);
+  assert.deepStrictEqual([addressed.t, addressed.n, addressed.to], ["port-connect", "relay", "other-extension.local"]);
+  assert.strictEqual("to" in plain, false, "the object form stays unaddressed");
+  assert.strictEqual(plain.n, "own");
 });
 
 // ── binary + oversized payloads ───────────────────────────────────────────────

@@ -501,6 +501,69 @@ test("the app→host leg is wired to the real CDP notification, not just the tes
   world.bridge.dispose();
 });
 
+// The dangerous one: an app script addressing ANOTHER extension used to have that address
+// dropped by the loader, so the message reached the SENDER's own peers and got answered —
+// which reads to the script exactly like the addressee replying. Answering "no" is cheap;
+// answering WRONG is not. Chrome gates this on externally_connectable, which cannot exist
+// here (matching needs a page origin, and an RN target is not a URL).
+test("a cross-extension send from the app is refused, never answered by the sender's own peers", async () => {
+  const world = makeWorld({ allowlist: ALL_RN_TARGETS });
+  const panel = world.makePanel(); // same extension as the app = the peer the bug would use
+  panel.setResponder(({ requestId }) =>
+    world.router.resolveDelivery({ fromKey: panel.key, requestId, response: { from: "panel" } })
+  );
+  await world.bridge.attach();
+
+  world.backend.emit(
+    "Runtime.bindingCalled",
+    binding({ t: "send", x: "ext-a", s: "ext-a#1", m: { hi: 1 }, to: "ext-b" })
+  );
+  await settleApp();
+  assert.deepStrictEqual(panel.received, [], "the sender's own contexts are not asked to answer");
+  const answers = dispatched(world).filter((envelope) => envelope.t === "response");
+  assert.strictEqual(answers.length, 1);
+  assert.match(String(answers[0].e), /externally_connectable/);
+  assert.match(String(answers[0].e), /"ext-b"/, "and it names who was actually being asked");
+  assert.strictEqual(answers[0].m, undefined, "no response value is offered alongside the error");
+  world.bridge.dispose();
+});
+
+test("addressing your own extension id is not the cross-extension case, and still delivers", async () => {
+  const world = makeWorld({ allowlist: ALL_RN_TARGETS });
+  const panel = world.makePanel();
+  panel.setResponder(({ requestId }) =>
+    world.router.resolveDelivery({ fromKey: panel.key, requestId, response: { from: "panel" } })
+  );
+  await world.bridge.attach();
+
+  world.backend.emit(
+    "Runtime.bindingCalled",
+    binding({ t: "send", x: "ext-a", s: "ext-a#1", m: { hi: 1 }, to: "ext-a" })
+  );
+  await settleApp();
+  assert.strictEqual(panel.received.length, 1, "a script may message its own extension");
+  const answers = dispatched(world).filter((envelope) => envelope.t === "response");
+  assert.deepStrictEqual(answers.map((a) => [a.x, a.s, a.m]), [["ext-a", "ext-a#1", { from: "panel" }]]);
+  world.bridge.dispose();
+});
+
+test("a cross-extension Port open is closed with a reason instead of opened to the wrong peers", async () => {
+  const world = makeWorld({ allowlist: ALL_RN_TARGETS });
+  const panel = world.makePanel();
+  await world.bridge.attach();
+
+  world.backend.emit(
+    "Runtime.bindingCalled",
+    binding({ t: "port-connect", x: "ext-a", s: "port:1", n: "relay", to: "ext-b" })
+  );
+  await settleApp();
+  assert.deepStrictEqual(panel.received, [], "no port leg is opened onto the sender's peers");
+  const drops = dispatched(world).filter((envelope) => envelope.t === "port-drop");
+  assert.strictEqual(drops.length, 1, "the app's port is closed rather than left phantom-open");
+  assert.match(String(drops[0].p), /externally_connectable/);
+  world.bridge.dispose();
+});
+
 test("a malformed or hostile binding payload cannot break the host", async () => {
   const world = makeWorld({ allowlist: ALL_RN_TARGETS });
   await world.bridge.attach();
