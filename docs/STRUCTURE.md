@@ -16,7 +16,8 @@ docs/
 ├── ARCHITECTURE.md                        How the current prototype works:
 │                                          • src/ layout and layering rule
 │                                          • main services, preloads, chrome-shim, fake-cdp
-│                                          • rozenite:// protocol, injected-script channel
+│                                          • rozenite:// protocol, security model /
+│                                            per-frame webPreferences + measured rationale
 │                                          • data-flow diagram
 ├── LIMITATIONS.md                         What the prototype is NOT (extension model, API
 │                                          fidelity, frontend coupling, security)

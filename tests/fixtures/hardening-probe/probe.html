@@ -1,0 +1,14 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>hardening-probe: page-world report</title>
+    <!-- External, not inline: this fixture's own manifest declares the MV3
+         default and the test asserts inline scripts really are refused.
+         The messaging peer is a SIBLING frame, hosted by the harness' host page
+         exactly as the real frontend hosts a devtools page and a panel. -->
+    <script src="/probe.js" defer></script>
+  </head>
+  <body>
+    <h1>hardening probe</h1>
+  </body>
+</html>

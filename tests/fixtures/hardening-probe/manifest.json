@@ -1,0 +1,10 @@
+{
+  "name": "Hardening Probe",
+  "description": "Fixture for tests/extension-frame-electron.test.js — declares no permissions, so the shell must refuse its storage/tabs/webRequest calls.",
+  "version": "1.0",
+  "manifest_version": 3,
+  "devtools_page": "probe.html",
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'"
+  }
+}

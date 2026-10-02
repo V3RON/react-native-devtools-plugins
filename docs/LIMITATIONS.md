@@ -72,19 +72,46 @@
 
 **Security & robustness**
 
-- Extensions get `ipcRenderer` directly + node integration in subframes, `webSecurity:
-  false`, sandbox off: any extension folder has full Node/Electron privileges. No
-  isolation or permission gating.
-- Injected scripts: in-memory `Map` (lost on restart), origin-keyed, evaluated via
-  `new Function`, delivered over synchronous IPC. The sync delivery is a deliberate
-  exception (the script must exist before extension page scripts run — Chrome injects
-  synchronously for the same reason); everything else follows the async-IPC house rule
-  in `src/shared/ipc.js`. `new Function` on a host-stored script is the remaining
-  hazard to replace with a validated per-extension IPC layer.
+- Extension pages have **no Node or Electron surface**: `webSecurity: true`,
+  `contextIsolation: true`, `nodeIntegration: false`, `allowRunningInsecureContent: false`,
+  no raw `ipcRenderer` exposure, and no `new Function` on a host-stored script. Measured
+  in a real Electron process (headless) against a `rozenite://` frame running the
+  production preload — page-world `require` / `process` / `Buffer` / `ipcRenderer` are
+  `undefined`, messaging and Ports still round-trip, and `chrome.*` keeps its shape
+  (`tests/extension-frame-electron.test.js`). Preferences live in one place,
+  `src/main/frame-security.js`, with the measurements behind each choice.
+- Still open, deliberately documented rather than fixed:
+  - **`sandbox: false`.** A sandboxed preload can only `require` Electron's built-in
+    subset, not this repo's preload modules — enabling it means shipping one bundled,
+    self-contained preload file, i.e. the build step this PoC deliberately does not have.
+    Isolation today therefore rests on context isolation plus the fact that the preload
+    exposes only named, validated channels. Frame records show whether a frame is in a
+    separate renderer process; while sandbox is off, that is all the isolation that exists.
+  - **`nodeIntegrationInSubFrames: true` stays** — measured: with it off the extension-frame
+    preload does not run at all, so no `chrome.*` exists. It is load-bearing, not leftover.
+  - Extension frames share the frontend's `WebContents`, so they share its one
+    `webPreferences` object. Splitting them (own `WebContentsView`/partition) is the step
+    that would let the two frame classes have different policies.
+- `sandbox: false` also means a **renderer compromise is a Node compromise**: the guards
+  here limit what an extension page can *ask* for, not what a compromised renderer can do.
+- **Permissions now gate capability.** An extension calling an API whose permission it did
+  not declare gets a failing call (`runtime.lastError` + rejected promise) and, for
+  `webRequest`, no deliveries at all — enforced twice, in main (`src/main/delivery-scope.js`
+  decides from the manifest **on disk**, so a frame cannot talk itself into data) and in the
+  shim (`src/chrome-shim/permission-gate.js`). Deviation from Chrome, stated: Chrome omits
+  an undeclared namespace entirely, this shell keeps the namespace and fails the call
+  (shape-first rule, [OVERVIEW.md](OVERVIEW.md)).
+- **Per-extension CSP.** Every `rozenite://` response carries that extension's
+  `content_security_policy`; an extension declaring none gets Chrome's MV3 default
+  (`script-src 'self'; object-src 'self'`, plus `wasm-unsafe-eval` when it has a service
+  worker). A declared policy that weakens `script-src`/`object-src` is not served — the
+  strict default is, with one console line naming the extension. Verified live: an inline
+  `<script>` in an extension page does not run.
 
 **Bottom line:** the proof-of-concept shows the hosting + storage + panel plumbing works
 with real GraphQL tooling, and the network data behind `devtools.network` / `webRequest` is
 now real CDP rather than a stub — but the app-side half of that path has never been walked
 against a device from this checkout, and the shell is still far from a product: no
-lifecycle/permission model, deep coupling to an unmerged frontend fork. The path forward is
-in [ROADMAP.md](ROADMAP.md); per-functionality state is in [features/README.md](features/README.md).
+lifecycle model, sandbox still off, deep coupling to an unmerged frontend fork.
+The path forward is in [ROADMAP.md](ROADMAP.md); per-functionality state is in
+[features/README.md](features/README.md).

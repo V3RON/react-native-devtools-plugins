@@ -6,7 +6,8 @@ Per-namespace plans live in [../features/README.md](../features/README.md).
 
 ## A. DevTools-only namespaces (must be complete — nothing works otherwise)
 
-- **`devtools.panels`** — `create` 🟨 via frontend injected script; `Panel` events,
+- **`devtools.panels`** — `create` 🟨 shell-driven (`chrome.devtools.*` is implemented in
+  `src/chrome-shim/devtools.js`, not by a frontend-injected script); `Panel` events,
   `themeName/themeChanged`, `elements` sidebar panes, `sources`, `performance` ❌ →
   [features/DEVTOOLS-PANELS.md](../features/DEVTOOLS-PANELS.md). `recorder` 🚫.
   `openExtensionInDevtools(descriptor)` 🔧 (install flow).

@@ -20,7 +20,6 @@
 
 const { contextBridge, ipcRenderer, webFrame } = require("electron");
 const {
-  STORE_INJECTED_SCRIPT,
   HOST_EVENT,
   SHOW_CONTEXT_MENU,
   PREF_REGISTER,
@@ -94,15 +93,19 @@ const InspectorFrontendHost = {
     return null;
   },
 
-  // ── [REAL] injected-script channel ───────────────────────────────────────
-  // The channel the fork uses to ship chrome.devtools.* implementations into
-  // extension frames — see docs/ARCHITECTURE.md.
+  // ── [STUB] injected-script channel (deliberately inert) ──────────────────
+  // The fork's channel for shipping a `chrome.devtools.*` implementation into
+  // extension frames. It no longer exists here: `chrome.devtools.*` is
+  // implemented shell-side (src/chrome-shim/devtools.js), so there is no script
+  // to hand over, and the host will not evaluate one it is handed — the path
+  // used to store the string and `new Function` it in every frame of that origin
+  // (docs/features/DEVTOOLS-PANELS.md, src/shared/ipc.js house rule).
+  // Accepting and ignoring the call keeps the frontend's call site working.
   async setInjectedScriptForOrigin(origin, script) {
-    try {
-      ipcRenderer.sendSync(STORE_INJECTED_SCRIPT, origin, script);
-    } catch (error) {
-      console.error("[Preload] Failed to store injected script:", error);
-    }
+    // async like the previous implementation, so a frontend that awaits it is
+    // not surprised by an undefined return.
+    void origin;
+    void script;
   },
 
   // ── [REAL/simple] clipboard, tabs, files ─────────────────────────────────

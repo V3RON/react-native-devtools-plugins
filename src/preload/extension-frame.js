@@ -1,18 +1,23 @@
 // Extension-frame preload: runs inside every `rozenite://<extension-id>/...`
 // iframe. Wires concrete transports/backends into the pure chrome-shim and
-// installs, in order (see docs/ARCHITECTURE.md):
+// installs the chrome.* namespace (see docs/ARCHITECTURE.md).
 //
-//   1. the frontend-provided injected script for this origin — evaluated
-//      before page scripts, defines chrome.devtools.* (the fork's channel);
-//   2. the chrome.* namespace (src/chrome-shim), whose network APIs ride the
-//      host's CDP network model over async IPC
-//      (src/main/network-service.js, docs/features/DEVTOOLS-NETWORK.md);
-//   3. the two delivery channels: runtime messaging and network events.
+// What is deliberately NOT here any more:
 //
-// SECURITY DEBT (docs/LIMITATIONS.md): exposing ipcRenderer raw and
-// evaluating scripts via new Function gives extension frames full Node
-// privileges. Must be replaced by a validated, per-extension IPC layer
-// before the API surface grows further.
+//   - no raw `ipcRenderer` exposure. The frame gets named, validated channels
+//     only; the page world has no Node-level IPC handle (asserted by
+//     tests/extension-frame-electron.test.js and live in
+//     extensions/sample-extension/panel.html).
+//   - no injected-script fetch + `new Function`. The stock frontend no longer
+//     ships a per-origin script, because chrome.devtools.* is implemented
+//     shell-side in src/chrome-shim/devtools.js
+//     (docs/features/DEVTOOLS-PANELS.md), so the whole channel — including its
+//     two sendSync exceptions — is gone. `InspectorFrontendHost
+//     .setInjectedScriptForOrigin` is a documented no-op.
+//
+// The frame talks to main through `invoke` only, and the two push channels
+// (RUNTIME_DELIVER, NETWORK_DELIVER) are the only things main sends here. The
+// host derives this frame's identity from the frame itself, never from payload.
 
 const { contextBridge, ipcRenderer } = require("electron");
 const { default: Store } = require("electron-store");
@@ -22,8 +27,8 @@ const {
   createMemoryBackend,
   createNetworkBridge,
 } = require("../chrome-shim");
+const { createGrantGate } = require("../shared/permissions");
 const {
-  GET_INJECTED_SCRIPT,
   RUNTIME_GET_MANIFEST,
   RUNTIME_REGISTER,
   RUNTIME_SEND_MESSAGE,
@@ -48,9 +53,8 @@ const extensionId = window.location.hostname; // id == hostname: load-bearing
 const CHROME_OS = { darwin: "mac", win32: "win", linux: "linux" };
 const CHROME_ARCH = { x64: "x86-64", arm64: "arm64", ia32: "x86-32" };
 
-// chrome.runtime.getManifest: loaded from the host (id derived main-side
-// from this frame's URL). Resolves well before any extension code runs;
-// degrade to {} meanwhile.
+// chrome.runtime.getManifest: loaded from the host (id derived main-side from
+// this frame's URL). Degraded to {} meanwhile, as before.
 let manifestCache = {};
 ipcRenderer
   .invoke(RUNTIME_GET_MANIFEST)
@@ -58,6 +62,20 @@ ipcRenderer
     manifestCache = manifest || {};
   })
   .catch(() => {});
+const getManifest = () => manifestCache;
+
+// Declared permissions gate capability (docs/features/EXTENSION-MANAGEMENT.md).
+// The verdict this frame is gated on is the HOST's: RUNTIME_REGISTER read the
+// manifest from disk. Gating on that reply rather than on
+// chrome.runtime.getManifest() means a page-world script cannot widen its own
+// permissions by replacing a function it can reach.
+//
+// `grants` is undefined until that reply lands, and while it is the gate's
+// `check`/`has` return a promise instead of guessing — denying a permission the
+// extension does hold (page scripts run before IPC resolves) would be a bug
+// worse than the few-millisecond window it protects.
+let grants;
+const permissions = createGrantGate(() => grants);
 
 // electron-store -> chrome-shim StorageBackend adapter.
 // NOTE: one Store instance per frame per area races on the shared JSON file;
@@ -85,7 +103,11 @@ const storage = createExtensionStorage({
 // Every call waits for RUNTIME_REGISTER, because the host derives this frame's
 // identity from the registered principal — an unregistered frame is not entitled
 // to the app's traffic.
-const registered = ipcRenderer.invoke(RUNTIME_REGISTER).catch(() => ({ ok: false }));
+const registered = ipcRenderer.invoke(RUNTIME_REGISTER).then((reply) => {
+  grants = (reply && reply.granted) || {};
+  permissions.manifestLoaded();
+  return reply || { ok: false };
+});
 const asNetworkCaller = (call) => registered.then(() => call());
 
 const networkBridge = createNetworkBridge({
@@ -117,7 +139,7 @@ const transport = {
 
 const chrome = createChromeNamespace({
   extensionId,
-  getManifest: () => manifestCache,
+  getManifest,
   platform: {
     os: CHROME_OS[process.platform] || "linux",
     arch: CHROME_ARCH[process.arch] || "unknown",
@@ -125,6 +147,11 @@ const chrome = createChromeNamespace({
   storage,
   networkBridge,
   transport,
+  // Declared permissions gate capability (docs/features/EXTENSION-MANAGEMENT.md).
+  // The verdict this frame is gated on is the host's — RUNTIME_REGISTER read the
+  // manifest from disk — so a page-world script cannot widen it by replacing
+  // chrome.runtime.getManifest.
+  permissions,
   // chrome.devtools.panels.create -> host -> real frontend tab
   // (docs/features/DEVTOOLS-PANELS.md, src/main/panel-host.js).
   onPanelCreated: ({ title, pagePath }) => {
@@ -159,23 +186,17 @@ const chrome = createChromeNamespace({
 ipcRenderer.on(RUNTIME_DELIVER, (_event, delivery) => chrome.handleDelivery(delivery));
 
 // Network deliveries (devtools.network events + webRequest listeners). The host
-// wraps them as {kind, payload}; the shim consumes the payload shape.
+// wraps them as {kind, payload}; the shim consumes the payload shape. A frame
+// whose extension does not declare `webRequest` is never sent the lifecycle
+// steps that only webRequest consumes (src/main/delivery-scope.js).
 ipcRenderer.on(NETWORK_DELIVER, (_event, delivery) =>
   networkBridge.handleDelivery(delivery && delivery.payload ? delivery.payload : delivery)
 );
 
-// 1. Injected script for this origin (may not exist yet for some frames).
-const script = ipcRenderer.sendSync(GET_INJECTED_SCRIPT, window.location.origin);
-if (script) {
-  contextBridge.executeInMainWorld({
-    func: new Function(`${script}(0)`),
-  });
-}
-
-// 2. chrome.* namespace. The merge runs in the main world: keep any
-// chrome.* the injected frontend script defined (chrome.devtools.*), deep-
-// merge runtime and devtools, and re-establish `lastError` as a LIVE getter —
-// contextBridge cloning evaluates getters only once (chrome-shim/runtime.js).
+// chrome.* namespace. The merge runs in the main world: deep-merge runtime and
+// devtools onto anything already present and re-establish `lastError` as a LIVE
+// getter — contextBridge cloning evaluates getters only once
+// (chrome-shim/runtime.js).
 contextBridge.exposeInMainWorld("chromeElectron", chrome);
 contextBridge.executeInMainWorld({
   func: () => {
@@ -190,6 +211,3 @@ contextBridge.executeInMainWorld({
     window.chrome = merged;
   },
 });
-
-// 3. Security-debt exposure (see header).
-contextBridge.exposeInMainWorld("ipcRenderer", ipcRenderer);

@@ -1,0 +1,13 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>hardening-probe: messaging peer</title>
+    <!-- The probe frame answers through THIS frame, so a messaging round-trip
+         really crosses two frames via the host router. No inline scripts: this
+         extension's CSP default refuses them. -->
+    <script src="/peer.js" defer></script>
+  </head>
+  <body>
+    <h1>hardening probe peer</h1>
+  </body>
+</html>

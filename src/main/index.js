@@ -1,6 +1,6 @@
 // Electron main-process entry point: bootstrap and lifecycle wiring only.
-// State and services live in ./injected-scripts, ./ipc, ./extension-server,
-// ./cdp-bridge.
+// State and services live in ./ipc, ./extension-server, ./cdp-bridge,
+// ./network-service.
 const { app, BrowserWindow } = require("electron");
 const { default: Store } = require("electron-store");
 const { createWindow } = require("./window");

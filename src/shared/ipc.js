@@ -1,16 +1,15 @@
 // Single source of truth for IPC channel names shared between the main
 // process and the preloads.
 //
-// House rule: new channels are async (`invoke`/`handle` or `send`/`on`).
-// The only surviving sendSync channels are STORE/GET_INJECTED_SCRIPT, where
-// synchronous semantics are required (the injected script must be installed
-// before extension page scripts run — same reason Chrome injects sync).
+// House rule (unconditional): every channel is async
+// (`ipcMain.handle` + `ipcRenderer.invoke`). There are no `sendSync` channels
+// left — the last two (`STORE_/GET_INJECTED_SCRIPT`, which let the frontend
+// hand an arbitrary script to extension frames) were deleted together with the
+// `new Function` that evaluated them: `chrome.devtools.*` is implemented
+// shell-side (src/chrome-shim/devtools.js), so the fork's injected-script
+// channel has no consumer (docs/features/DEVTOOLS-PANELS.md).
 
 module.exports = {
-  /** (origin, script) -> stores the frontend-provided injected script. */
-  STORE_INJECTED_SCRIPT: "store-injected-script",
-  /** (origin) -> returns the stored injected script for that origin. */
-  GET_INJECTED_SCRIPT: "get-injected-script",
   // ── dispatch channel (docs/features/DISPATCH-CHANNEL.md) ────────────────
   /** main -> main-frame preload -> window.InspectorFrontendAPI[name](...args) */
   HOST_EVENT: "host-event",

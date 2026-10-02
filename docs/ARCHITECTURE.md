@@ -68,15 +68,44 @@ into the frontend's main world, never `require`d at runtime.
 - `extension-server.js` — registers the privileged custom scheme **`rozenite://`**
   mapping `rozenite://<extension-id>/<path>` → `extensions/<extension-id>/<path>`,
   guarded against path traversal. **Installing an extension = dropping its unpacked
-  folder into `extensions/`.**
-- `injected-scripts.js` + `ipc.js` — in-memory per-origin "injected script" store
-  exchanged over synchronous IPC.
+  folder into `extensions/`.** Every response carries that extension's CSP
+  (`src/shared/csp.js`): its own `content_security_policy`, or Chrome's MV3 default.
+- `frame-security.js` — the one place webPreferences are decided, with the measured
+  reasons for each option. `ipc.js` registers every channel and gates each call on the
+  calling frame (`event.senderFrame` + `event.frameId`, pinned to the principal that
+  registered it), and consults `delivery-scope.js` so a frame only receives deliveries
+  its declared permissions cover.
 - `message-router.js` — the runtime-messaging relay: registry of live extension frames
   (identity derived main-side from the frame itself), `sendMessage` fan-out with
   Chrome response-settling, Port lifecycle. `dispatch.js` + `context-menu.js` — the
   host→frontend dispatch channel and its first consumer.
-- Window settings deliberately relaxed: `webSecurity: false`, `sandbox: false`,
-  `nodeIntegrationInSubFrames: true`.
+
+### Security model (`src/main/frame-security.js`)
+
+One `webPreferences` object per `WebContents`, and every extension page is an iframe
+inside the frontend's own frame tree (`src/frontend/panel-bridge.js` creates them), so
+today the frontend and the extension frames necessarily share one policy. What that
+policy is, and what each option was measured to do (Electron 38, headless, a real
+`rozenite://` frame loading the production preload):
+
+| Option | Value | Why |
+| --- | --- | --- |
+| `webSecurity` | `true` | `rozenite://` iframes still load inside the `http://127.0.0.1:8081` frontend, because the scheme is registered `standard` + `supportFetchAPI` + `bypassCSP`. The old off-switch was never what made panel hosting work. |
+| `contextIsolation` | `true` | the page world gets `chrome` through `contextBridge` only |
+| `nodeIntegration` | `false` | no `require`/`process`/`Buffer` in any page world (asserted) |
+| `allowRunningInsecureContent` | `false` | with `webSecurity` on, otherwise a secure extension page could pull `http://` subresources |
+| `nodeIntegrationInSubFrames` | `true` | **load-bearing**: with it off the extension-frame preload never runs, so no `chrome.*` exists at all |
+| `sandbox` | `false` | **still open**: a sandboxed preload cannot `require` this repo's preload modules, so enabling it means shipping one bundled preload file — a build step this PoC does not have |
+
+So an extension page reaches the host only through named, validated `invoke` channels,
+and each channel re-derives identity from the calling frame. The remaining gaps are
+listed honestly in [LIMITATIONS.md](LIMITATIONS.md): sandbox off, one shared
+`webPreferences`, and therefore a renderer compromise still being a Node compromise.
+
+The end-to-end assertions for all of this live in `tests/extension-frame-electron.test.js`
++ `tests/extension-frame-harness.js`, which boots a production-shaped shell headlessly
+(`show: false`, `DEVTOOLS_CDP_BRIDGE=off`, no Metro) — an extension frame needs neither a
+device nor the frontend to be observable.
 
 ### Main-frame preload (`src/preload/frontend-host.js`)
 
@@ -86,24 +115,28 @@ into the frontend's main world, never `require`d at runtime.
   [api/INSPECTOR-FRONTEND-HOST.md](api/INSPECTOR-FRONTEND-HOST.md). `isHostedMode()`
   returns `true`. Bridged via `contextBridge`, merged into `window.InspectorFrontendHost`
   via `executeInMainWorld`.
-- Key repurposed method: `setInjectedScriptForOrigin(origin, script)` — the frontend hands
-  the host a script per origin; stored in the main process (`sendSync`). This is the
-  channel the fork uses to ship its `chrome.devtools.*` implementation into extension frames.
+- `setInjectedScriptForOrigin(origin, script)` is a documented **no-op**. It used to be the
+  channel through which the frontend fork shipped a `chrome.devtools.*` implementation into
+  extension frames, to be stored in main and `new Function`'d into every frame of that
+  origin. `chrome.devtools.*` is now implemented shell-side in `src/chrome-shim/devtools.js`,
+  so the channel, its in-memory store, and the two `sendSync` exceptions that carried it are
+  all gone — which makes the async-IPC house rule in `src/shared/ipc.js` unconditional.
 
 ### Extension-iframe preload (`src/preload/extension-frame.js`)
 
 Any iframe loaded under `rozenite:` (hostname = extension id) gets, in order:
 
-- the stored **injected script** for its origin (fetched via IPC, evaluated with
-  `new Function(script)(0)`) — this defines `chrome.devtools.panels.create` etc. so the
-  extension's devtools page can register panel tabs;
 - the **`chrome` namespace** assembled by `src/chrome-shim`, merged onto `window.chrome`
   (its `devtools.inspectedWindow.eval` / `.reload` are wired to the async `DEVTOOLS_EVAL`
   / `DEVTOOLS_RELOAD` IPC channels, answered by `src/main/inspected-window.js`; its network
   APIs are wired to `NETWORK_SUBSCRIBE` / `NETWORK_GET_HAR` / `NETWORK_GET_STATUS` /
   `NETWORK_GET_BODY`, with `NETWORK_DELIVER` as the host's push channel);
-- currently also a raw `ipcRenderer` exposure (security debt — see
-  [LIMITATIONS.md](LIMITATIONS.md)).
+- a **permission gate** (`src/shared/permissions.js` + `src/chrome-shim/permission-gate.js`)
+  seeded from the grants `RUNTIME_REGISTER` derives from the manifest **on disk** — so the
+  verdict is the host's, and a page-world script cannot widen it by replacing
+  `chrome.runtime.getManifest`;
+- nothing else. No raw `ipcRenderer`, no injected-script fetch, no Node globals: the page
+  world has named channels only.
 
 ### Chrome API shim (`src/chrome-shim/`)
 
@@ -168,10 +201,10 @@ to serve the frontend from another host. Flags: `--metro-host/--metro-port`,
                         ▼
    host ──► CDP BRIDGE (src/main/cdp-bridge.js) ◄──► DevTools frontend (main frame)
             │  sendCommand(method, params) → Promise     │ InspectorFrontendHost.* (preload stubs)
-            │  onEvent(method, handler)                  │ setInjectedScriptForOrigin ──► main map
+            │  onEvent(method, handler)                  │ setInjectedScriptForOrigin ──► no-op
             │                                            ▼
             │  ids ≥ HOST_ID_BASE: consumed here,     extension iframes  rozenite://<id>/<page>
-            │  never forwarded to the frontend;       (preload: injected script + chrome shim)
+            │  never forwarded to the frontend;       (preload: chrome shim, no Node surface)
             │  everything else relays verbatim              ▲
             │                                               │ async IPC
             ├── Runtime.evaluate / Page.reload ◄── main/inspected-window.js

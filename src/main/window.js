@@ -1,6 +1,13 @@
 // BrowserWindow creation and window-level ops for the DevTools frontend.
+//
+// webPreferences come from ./frame-security — one documented place, because
+// there is exactly one webPreferences object per WebContents and every extension
+// page is an iframe inside THIS frame tree (src/frontend/panel-bridge.js creates
+// them), so these settings are the frontend's and the extension frames' at the
+// same time. Read that file before changing anything here.
 const { BrowserWindow } = require("electron");
 const config = require("./config");
+const { frontendPreferences } = require("./frame-security");
 const { setFrontendWebContents } = require("./dispatch");
 const panelHost = require("./panel-host");
 
@@ -10,13 +17,7 @@ const createWindow = () => {
   const win = new BrowserWindow({
     width: 800,
     height: 600,
-    webPreferences: {
-      preload: config.preloadPath,
-      webSecurity: false, // Allow custom protocols in iframes
-      allowRunningInsecureContent: true, // Allow custom protocol content
-      nodeIntegrationInSubFrames: true,
-      sandbox: false,
-    },
+    webPreferences: frontendPreferences({ preloadPath: config.preloadPath }),
   });
 
   win.loadURL(config.frontendURL);

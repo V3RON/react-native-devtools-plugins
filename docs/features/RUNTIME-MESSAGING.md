@@ -46,6 +46,16 @@ the real host inside the app):
 
 Known deviations (deliberate, PoC):
 
+- **Event `hasListener(fn)` does not work from page code.** The `chrome` namespace is
+  published with `contextBridge.exposeInMainWorld`, which *clones* functions, so the
+  callback the page passes to `addListener` is not the identity the shim stores and
+  `hasListener` reports false for it in every state (measured on Electron 38).
+  `addListener` dedupe, `removeListener` and `hasListener` are all real *inside* the
+  shim — this is purely the world boundary. `hasListeners()` needs no identity and is
+  the observable from page code; that is what the end-to-end security test asserts
+  (`tests/extension-frame-electron.test.js`). Fixing it properly means either
+  per-callback wrapper handles or a bundled sandboxed preload, neither of which this
+  PoC has.
 - Port payloads are JSON-only (no structured-clone transferables through contextBridge yet).
 - `sender` carries `{id, url}` — no `tab`/`frame` objects until tabs shims exist.
 - `storage.session` is per-frame in-memory, not extension-wide (Altair only uses it
@@ -88,5 +98,14 @@ Panel ⇄ background round-trip via `sendMessage` (promise + callback) and a lon
 Port with ordered delivery, between two frames of the same extension.
 
 *Progress:* the round-trips are proven between two panel frames (panel ⇄ peer iframe) —
-`sample-extension` exercises exactly this. The "background" qualifier needs the
-background host; the transport itself doesn't care which kind a frame is.
+`sample-extension` exercises exactly this, and now in a headless real-Electron run rather
+than only by hand (`tests/extension-frame-electron.test.js`). The "background" qualifier
+needs the background host; the transport itself doesn't care which kind a frame is.
+
+*Fixed while proving it:* main addressed frames with
+`webContents.sendToFrame([webContents.id, event.frameId], …)`, but that tuple is read as
+`[processId, routingId]`. When the extension frame lands in its own renderer process the
+call delivered **nothing and threw nothing**, so every `sendMessage`/Port delivery to that
+frame was silently dropped. The earlier "proven between two panel frames" claim held only
+for frames sharing a process. Deliveries now go through `WebFrameMain.send` on the object the
+principal check already verified (`src/main/ipc.js`), asserted in `tests/messaging-frames.test.js`.
