@@ -4,7 +4,7 @@
 const { app, BrowserWindow } = require("electron");
 const { default: Store } = require("electron-store");
 const { createWindow } = require("./window");
-const { registerIpcHandlers } = require("./ipc");
+const { registerIpcHandlers, startContentBridge } = require("./ipc");
 const cdpBridge = require("./cdp-bridge");
 const {
   registerExtensionSchemePrivileges,
@@ -39,6 +39,13 @@ app.whenReady().then(() => {
   // kill the worker, and here the worker does not live in the frontend's frame
   // tree either.
   attachBackgroundHost();
+
+  // The content-script runner (docs/features/CONTENT-SCRIPTS.md, GitHub issue #5). It
+  // is inert unless DEVTOOLS_CONTENT_SCRIPTS names an extension, and injecting a script
+  // into the user's app is exactly the kind of thing that must not happen by surprise —
+  // so this line normally only prints why nothing will be injected. It starts AFTER the
+  // IPC handlers (its app context takes a seat in the messaging router they own).
+  startContentBridge();
 
   app.on("activate", () => {
     if (userWindows().length === 0) {

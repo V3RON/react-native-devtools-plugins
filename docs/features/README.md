@@ -1,7 +1,7 @@
 # Feature status matrix
 
 One doc per functionality: status, Chrome API surface, RN mapping, current state, what's
-needed. Legend and tiers: [../README.md](../README.md). Last reviewed: 2026-10-01.
+needed. Legend and tiers: [../README.md](../README.md). Last reviewed: 2026-10-02.
 
 ## Tier 1 — extensions are nonfunctional without these
 
@@ -19,11 +19,11 @@ needed. Legend and tiers: [../README.md](../README.md). Last reviewed: 2026-10-0
 
 | Functionality | Status | Tier | Blocked by |
 | --- | --- | --- | --- |
-| [Content scripts (bridge-style)](CONTENT-SCRIPTS.md) | ❌ (design done) | 2 | dispatch channel, runtime messaging |
+| [Content scripts (bridge-style)](CONTENT-SCRIPTS.md) | 🟨 content-bridge runner real and **observed on a real device** (injection, global hook, app→host over `Runtime.bindingCalled`, `tabs.sendMessage` round-trip), behind `DEVTOOLS_CONTENT_SCRIPTS` (default off, so nothing injects); a send with no receiver reports Chrome's connection failure instead of `undefined`, and one entry is evaluated once per app context — both re-observed on the device | 2 | — |
 | [Background worker](BACKGROUND-WORKER.md) (MV3 service worker) | 🟨 always-on hidden context: script executes, lifecycle fires, worker is a messaging peer; MV3 eviction skipped | 2 | — |
 | [webRequest](WEBREQUEST.md) (`chrome.webRequest`) | 🟨 observe-only, 7 of 9 events from the real CDP model; filters + `ResourceType` real | 2 | — (blocking needs CDP `Fetch`) |
 | [`chrome.permissions`](SMALL-SHIMS.md) — "everything declared is granted" shim | 🟨 accept-and-grant: reports the host's real verdict, `request` grants nothing new | 2 | — |
-| [`chrome.tabs` subset](SMALL-SHIMS.md) — one synthetic tab = inspected target | 🟨 one synthetic tab is real (`query`/`get`/`update`/`create`/`remove`); `sendMessage` has no receiver until content scripts; no `chrome.windows` (no window model) | 2 | content scripts (for `sendMessage`) |
+| [`chrome.tabs` subset](SMALL-SHIMS.md) — one synthetic tab = inspected target | 🟨 one synthetic tab is real (`query`/`get`/`update`/`create`/`remove`); `sendMessage` delivers to this extension's opted-in content script and fails with a reason when there is none; no `chrome.windows` (no window model) | 2 | — |
 | [`chrome.notifications`](SMALL-SHIMS.md) → Electron `Notification` | 🟨 real: shows, allocates the id, `onClicked`/`onClosed` from the real notification; no button events, no real dismiss on Electron 38 | 2 | — |
 | [`chrome.alarms`](SMALL-SHIMS.md) → timers | 🟨 real timers + Chrome's argument rules + `onAlarm`; alarms do not outlive the context (no persistence, always-on worker) | 2 | — |
 | [`chrome.downloads`](SMALL-SHIMS.md) → save dialog | 🟨 real saves over the shell's one export path: ids/states/`totalBytes` from main, `onChanged` from what really happened, `onDeterminingFilename` with Chrome's contract; `show`/`showDefaultFolder` inert | 2 | — |

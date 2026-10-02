@@ -1,0 +1,1103 @@
+// The HOST half of the content bridge (src/main/content-bridge.js), driven against a
+// scripted CDP backend and the REAL message router (src/main/message-router.js).
+//
+// What this proves and what it does not: it proves host-side behaviour — what the shell
+// asks the app to evaluate, in what order, under which gate verdicts, how it correlates
+// replies across two extensions, and how it behaves when the session is gone or a
+// payload is hostile. A scripted backend cannot execute JavaScript, so NOTHING here is
+// evidence that a script ran inside an app; the loader's actual semantics are executed in
+// tests/content-loader.test.js, and the real app run is recorded in
+// docs/features/CONTENT-SCRIPTS.md.
+// Run: npm test
+const test = require("node:test");
+const assert = require("node:assert");
+
+const {
+  BINDING_NAME,
+  DISPATCH_GLOBAL,
+  createContentBridge,
+} = require("../src/main/content-bridge");
+const { parseContentScripts } = require("../src/main/content-scripts");
+const { createMessageRouter } = require("../src/main/message-router");
+const { tabIdFor } = require("../src/chrome-shim/devtools");
+const { ALL_RN_TARGETS } = require("../src/main/content-gate");
+
+/**
+ * A scripted CDP backend: it answers the Runtime methods this layer uses with the
+ * shapes RN's backend really answers (the same shapes tests/cdp-bridge.test.js pins)
+ * and records everything it was asked to evaluate.
+ */
+function makeBackend({
+  attached = true,
+  bindingLive = true,
+  loaderLive = true,
+  evaluationsFail = false,
+  holdEvaluations = false,
+} = {}) {
+  const commands = [];
+  /** method | "*" -> handlers, mirroring the real bridge's dispatch. */
+  const byMethod = new Map();
+  const state = { attached, bindingLive, loaderLive, evaluationsFail, holdEvaluations };
+  /**
+   * A real `Runtime.evaluate` stays open while the app RUNS the script, and that window is
+   * the whole content-bridge protocol's hardest case (an addBinding call made by that
+   * script lands here before the evaluate answers). `holdEvaluations()` reproduces it:
+   * every later evaluate waits until the test releases it.
+   */
+  const held = [];
+  /** What an `expression` is answering, per the switches a test wants to flip. */
+  const truthOf = (expression) => {
+    if (expression.includes(`typeof globalThis[${JSON.stringify(BINDING_NAME)}]`)) {
+      return state.bindingLive;
+    }
+    if (expression.includes(`${DISPATCH_GLOBAL}.__protocol`)) {
+      return state.loaderLive;
+    }
+    // A refusal is only ever about a SCRIPT or a DELIVERY: the probes above still
+    // answer, so a test that says "the app refused" means the injection was refused.
+    if (state.evaluationsFail) return null;
+    return undefined;
+  };
+  const sendCommand = async (method, params = {}) => {
+    commands.push({ method, params });
+    if (!state.attached) {
+      throw Object.assign(new Error(`${method}: no CDP session is attached`), { code: "DETACHED" });
+    }
+    if (method === "Runtime.addBinding") {
+      return {}; // RN answers `{}` (HostTarget.cpp:175-192)
+    }
+    if (method === "Runtime.evaluate") {
+      const answer = truthOf(String(params.expression || ""));
+      if (state.holdEvaluations && String(params.expression || "").includes(`${DISPATCH_GLOBAL}.inject(`)) {
+        // Only the SCRIPT's evaluate is held: the probes around it are ordinary tooling
+        // round-trips, and holding them would stall the pass before it reached the app.
+        await new Promise((resolve) => held.push(resolve));
+      }
+      if (answer === null) {
+        // A tooling-side refusal: `text` only, no `exception` object — which is how
+        // src/main/inspected-window.js maps it to `isError` rather than `isException`.
+        return { exceptionDetails: { text: "EvalError: the app refused the expression" } };
+      }
+      if (answer !== undefined) {
+        // returnByValue, as toEvaluateParams asks for.
+        return { result: { type: "boolean", value: answer } };
+      }
+      return { result: { type: "string", value: "ok" } };
+    }
+    return {};
+  };
+  return {
+    state,
+    commands,
+    sendCommand,
+    evaluates: () => commands.filter((c) => c.method === "Runtime.evaluate"),
+    addBindings: () => commands.filter((c) => c.method === "Runtime.addBinding"),
+    // Faithful to src/main/cdp-bridge.js: a handler sees an event only if it subscribed to
+    // that exact method name or to "*". Fanning everything to every handler — which this
+    // fake used to do — lets a bridge that never subscribed to `Runtime.bindingCalled` pass
+    // every test here, because the tests drove the app→host leg through the seam instead.
+    onEvent: (method, handler) => {
+      if (!byMethod.has(method)) byMethod.set(method, new Set());
+      byMethod.get(method).add(handler);
+      return () => byMethod.get(method)?.delete(handler);
+    },
+    emit: (method, params) => {
+      for (const handler of [...(byMethod.get(method) || []), ...(byMethod.get("*") || [])]) {
+        handler(params || {}, method);
+      }
+    },
+    isAttached: () => state.attached,
+    /** Let the script's `Runtime.evaluate` answer, i.e. let the app finish running it. */
+    releaseEvaluations: () => {
+      const waiting = held.splice(0, held.length);
+      for (const resolve of waiting) resolve();
+    },
+  };
+}
+
+/**
+ * One extension folder's worth of registry data, without touching the filesystem — but
+ * run through the REAL parser, so a test cannot accidentally invent a field the registry
+ * would never produce (an unnormalized entry used to carry `index: undefined`).
+ */
+const fixture = (extensionId, entries = [{ matches: ["https://app.test/*"], js: ["content.js"] }]) => ({
+  extensionId,
+  name: extensionId,
+  entries: parseContentScripts({ content_scripts: entries }).entries,
+  problems: parseContentScripts({ content_scripts: entries }).problems,
+});
+
+const scanOf = (...found) => () => found;
+
+const readerFor = (sources) => ({
+  resolvePaths: (extensionId, entry) => ({
+    js: entry.js.map((innerPath) => ({
+      ok: sources[innerPath] !== undefined,
+      kind: "js",
+      innerPath,
+      reason:
+        sources[innerPath] === undefined
+          ? `js "${innerPath}" is declared in the manifest but is not a file in ${extensionId}`
+          : undefined,
+    })),
+    css: (entry.css || []).map(() => ({ ok: false, kind: "css", innerPath: "x.css", reason: "no css" })),
+  }),
+  readSources: (extensionId, resolved) => {
+    const out = [];
+    const problems = [];
+    for (const file of resolved.js) {
+      if (!file.ok) {
+        problems.push(file.reason);
+        continue;
+      }
+      out.push({ innerPath: file.innerPath, source: sources[file.innerPath] });
+    }
+    return { sources: out, problems };
+  },
+});
+
+function makeWorld(options = {}) {
+  const backend = makeBackend(options.backend || {});
+  const router = createMessageRouter();
+  const logs = [];
+  const found = options.found || [fixture("ext-a")];
+  const sources = options.sources || { "content.js": "globalThis.hooked = true;" };
+  const reader = readerFor(sources);
+  const bridge = createContentBridge({
+    sendCommand: backend.sendCommand,
+    onEvent: backend.onEvent,
+    isAttached: backend.isAttached,
+    scan: options.scan || scanOf(...found),
+    readManifest: options.readManifest || (() => ({ name: "Fixture" })),
+    resolvePaths: reader.resolvePaths,
+    readSources: reader.readSources,
+    allowlist: options.allowlist ?? null,
+    router,
+    targetInfo: options.targetInfo || (() => ({ attached: true, url: "my-app://rn", title: "RN" })),
+    log: { warn: (message) => logs.push(message), error: (m) => logs.push(m), log: (m) => logs.push(m) },
+    requestTimeoutMs: 200,
+    sweepIntervalMs: 0,
+    ...options.bridge,
+  });
+  /**
+   * A panel of the same extension, speaking the router's own frame protocol. `which`
+   * keeps two panels of one extension distinct, the way two real frames are.
+   */
+  const makePanel = (extensionId = "ext-a", which = "panel") => {
+    const key = `${which}:${extensionId}`;
+    const received = [];
+    let respond = null;
+    router.registerFrame({
+      key,
+      extensionId,
+      url: `rozenite://${extensionId}/panel.html`,
+      send: (delivery) => {
+        received.push(delivery);
+        if (respond && delivery.kind === "message") respond(delivery.payload);
+      },
+    });
+    return {
+      key,
+      received,
+      setResponder: (fn) => {
+        respond = fn;
+      },
+      /** Completes one leg exactly the way a real frame's RUNTIME_SEND_RESPONSE does. */
+      answer: ({ requestId, response }) => router.resolveDelivery({ fromKey: key, requestId, response }),
+    };
+  };
+  return {
+    backend,
+    router,
+    bridge,
+    logs,
+    /** What the fake reader serves for a declared inner path; assign to change the bytes. */
+    sources,
+    makePanel,
+  };
+}
+
+const injectedExpressions = (world) =>
+  world.backend
+    .evaluates()
+    .map((command) => String(command.params.expression))
+    .filter((expression) => expression.includes(`${DISPATCH_GLOBAL}.inject(`));
+
+/**
+ * The host->app envelopes this shell asked the app to run, decoded. A
+ * `dispatchExpression` nests two levels of JSON on purpose (a JSON envelope carried by a
+ * JS string literal), so unwrapping means parsing twice — and a test that skipped that
+ * would silently compare against strings and see nothing.
+ */
+const dispatched = (world) =>
+  world.backend
+    .evaluates()
+    .map((command) => String(command.params.expression))
+    .filter((expression) => expression.includes(`${DISPATCH_GLOBAL}.dispatch(`))
+    .map((expression) => {
+      const literal = expression.slice(
+        expression.indexOf(`${DISPATCH_GLOBAL}.dispatch(`) + `${DISPATCH_GLOBAL}.dispatch(`.length,
+        -2
+      );
+      return JSON.parse(JSON.parse(literal));
+    });
+
+const binding = (envelope) => ({ name: BINDING_NAME, payload: JSON.stringify(envelope) });
+
+/**
+ * Let the host finish the work its deliveries turned into. Re-injection is deliberately
+ * debounced through a real timer (a burst of context notifications should re-run it
+ * once), so awaiting microtasks is not enough — this awaits a macrotask too.
+ */
+const settleApp = async () => {
+  for (let i = 0; i < 3; i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+};
+
+// ── the gate is what runs first ───────────────────────────────────────────────
+test("the default injects nothing at all, and the report says why", async () => {
+  const world = makeWorld();
+  const report = await world.bridge.attach();
+  assert.deepStrictEqual(
+    report.map((entry) => [entry.extensionId, entry.injected, entry.pending]),
+    [["ext-a", false, false]]
+  );
+  assert.deepStrictEqual(injectedExpressions(world), [], "no Runtime.evaluate carried a script");
+  assert.strictEqual(world.backend.addBindings().length, 0, "not even the binding is installed");
+  const entry = report[0].entries[0];
+  assert.strictEqual(entry.allowed, false);
+  assert.strictEqual(entry.code, "not-allowlisted");
+  assert.match(entry.reasons.join(" "), /DEVTOOLS_CONTENT_SCRIPTS/);
+  assert.match(entry.notes.join(" "), /has no RN analog/);
+  assert.match(world.logs.join("\n"), /not allowlisted/);
+  world.bridge.dispose();
+});
+
+test("allowlisting an extension is what makes the injection happen", async () => {
+  const world = makeWorld({ allowlist: "ext-a" });
+  const report = await world.bridge.attach();
+  assert.strictEqual(report[0].injected, true);
+  const [injection] = injectedExpressions(world);
+  assert.match(injection, /globalThis\.hooked = true;/, "the manifest's script is the one that went over");
+  assert.match(injection, /__RozeniteContentBridge\.inject\("ext-a", \["content\.js"\]\)/);
+  // The binding is the shell's one reserved name, asked for exactly once per context.
+  assert.deepStrictEqual(
+    world.backend.addBindings().map((c) => c.params),
+    [{ name: BINDING_NAME }]
+  );
+  assert.ok(world.router, "and the app has a seat in the one mesh");
+  world.bridge.dispose();
+});
+
+test("an unattached session is an honest rejection, never a queued lie", async () => {
+  const world = makeWorld({ allowlist: ALL_RN_TARGETS, backend: { attached: false } });
+  const report = await world.bridge.attach();
+  assert.strictEqual(report[0].injected, false);
+  assert.strictEqual(report[0].pending, true);
+  assert.match(report[0].lastError, /no CDP session is attached/);
+  assert.match(report[0].lastError, /not queued/);
+  assert.deepStrictEqual(injectedExpressions(world), []);
+  assert.match(world.logs.join("\n"), /deferred/);
+
+  // Attaching later is what picks it up — the sweep, not a stored promise.
+  world.backend.state.attached = true;
+  world.backend.state.bindingLive = true;
+  const after = await world.bridge.refresh();
+  assert.strictEqual(after[0].injected, true);
+  assert.strictEqual(after[0].pending, false);
+  world.bridge.dispose();
+});
+
+test("an app that never installs the binding gets no script at all", async () => {
+  const world = makeWorld({ allowlist: ALL_RN_TARGETS, backend: { bindingLive: false } });
+  const report = await world.bridge.attach();
+  assert.strictEqual(report[0].injected, false);
+  assert.match(report[0].lastError, /did not install __rozeniteContentBridgeDispatch/);
+  assert.deepStrictEqual(injectedExpressions(world), []);
+  world.bridge.dispose();
+});
+
+test("a script the app refuses is reported with the app's own reason, not swallowed", async () => {
+  const world = makeWorld({
+    allowlist: ALL_RN_TARGETS,
+    backend: { evaluationsFail: true },
+  });
+  const report = await world.bridge.attach();
+  assert.strictEqual(report[0].injected, false);
+  assert.strictEqual(report[0].entries[0].injected, false);
+  assert.match(report[0].entries[0].injectError, /the app refused/);
+  world.bridge.dispose();
+});
+
+test("a declared script that is not on disk is reported, and nothing is injected", async () => {
+  const world = makeWorld({
+    allowlist: ALL_RN_TARGETS,
+    sources: {},
+    found: [fixture("ext-a", [{ matches: ["<all_urls>"], js: ["gone.js"] }])],
+  });
+  const report = await world.bridge.attach();
+  assert.strictEqual(report[0].injected, false);
+  assert.match(report[0].entries[0].problems.join(" "), /gone\.js.*is not a file/);
+  assert.deepStrictEqual(injectedExpressions(world), []);
+  world.bridge.dispose();
+});
+
+// ── re-injection ──────────────────────────────────────────────────────────────
+test("a recreated execution context re-runs injection, and re-installs the binding", async () => {
+  const world = makeWorld({ allowlist: ALL_RN_TARGETS });
+  await world.bridge.attach();
+  assert.strictEqual(injectedExpressions(world).length, 1);
+  assert.strictEqual(world.backend.addBindings().length, 1);
+
+  world.backend.emit("Runtime.executionContextCreated", {
+    context: { id: 2, name: "", origin: "", uniqueId: "2" },
+  });
+  await settleApp();
+  assert.strictEqual(injectedExpressions(world).length, 2, "the script went in again");
+  assert.strictEqual(world.backend.addBindings().length, 2, "a fresh context has no binding handler");
+  world.bridge.dispose();
+});
+
+test("cleared contexts withdraw the app's mesh seat before re-injecting", async () => {
+  const world = makeWorld({ allowlist: ALL_RN_TARGETS });
+  await world.bridge.attach();
+  const panel = world.makePanel();
+  const inFlight = world.router.sendMessage({ fromKey: "panel:ext-a", message: { hi: 1 } });
+
+  world.backend.emit("Runtime.executionContextsCleared", {});
+  await settleApp();
+  // The panel's own leg still settles: the router settles a leg whose frame is gone
+  // rather than hanging the sender.
+  const settled = await Promise.race([
+    inFlight.then(() => "settled").catch(() => "settled"),
+    new Promise((resolve) => setTimeout(() => resolve("hung"), 300)),
+  ]);
+  assert.strictEqual(settled, "settled");
+  assert.ok(injectedExpressions(world).length >= 2, "and injection ran again afterwards");
+  world.bridge.dispose();
+});
+
+test("a session that died while injected withdraws the seat instead of queueing deliveries", async () => {
+  const world = makeWorld({ allowlist: ALL_RN_TARGETS });
+  await world.bridge.attach();
+  assert.strictEqual(world.backend.isAttached(), true);
+  world.backend.state.attached = false;
+  assert.strictEqual(world.bridge.sweep(), false);
+  const panel = world.makePanel();
+  await world.router.sendMessage({ fromKey: "panel:ext-a", message: { hi: 1 } });
+  assert.strictEqual(panel.received.length, 0, "a dead app is not addressed any more");
+  world.bridge.dispose();
+});
+
+// ── the envelope protocol, host side ──────────────────────────────────────────
+test("two extensions' replies are correlated by the id each one used", async () => {
+  const world = makeWorld({
+    allowlist: ALL_RN_TARGETS,
+    found: [fixture("ext-a"), fixture("ext-b", [{ matches: ["https://other.test/*"], js: ["content.js"] }])],
+  });
+  await world.bridge.attach();
+  const panel = world.makePanel();
+  panel.setResponder(({ message, requestId }) => {
+    // Answer out of order, the way two real panels would.
+    world.router.resolveDelivery({
+      fromKey: "panel:ext-a",
+      requestId,
+      response: { saw: message.n, from: "panel" },
+    });
+  });
+  world.router.registerFrame({
+    key: "panel:ext-b",
+    extensionId: "ext-b",
+    url: "rozenite://ext-b/panel.html",
+    send: (delivery) => {
+      if (delivery.kind === "message") {
+        world.router.resolveDelivery({
+          fromKey: "panel:ext-b",
+          requestId: delivery.payload.requestId,
+          response: { only: "ext-b" },
+        });
+      }
+    },
+  });
+
+  await world.bridge.onBindingCalled(
+    binding({ t: "send", x: "ext-b", s: "ext-b#1", m: { n: 20 } })
+  );
+  await world.bridge.onBindingCalled(
+    binding({ t: "send", x: "ext-a", s: "ext-a#1", m: { n: 1 } })
+  );
+  await settleApp();
+  const answers = dispatched(world).filter((envelope) => envelope.t === "response");
+  assert.deepStrictEqual(
+    answers.map((a) => [a.x, a.s, a.m]),
+    [
+      ["ext-b", "ext-b#1", { only: "ext-b" }],
+      ["ext-a", "ext-a#1", { saw: 1, from: "panel" }],
+    ],
+    "each answer went back on the id that asked, to the extension that asked"
+  );
+});
+
+test("an envelope naming an extension that was never injected is refused", async () => {
+  const world = makeWorld({ allowlist: "ext-a" });
+  await world.bridge.attach();
+  const before = world.backend.evaluates().length;
+  await world.bridge.onBindingCalled(binding({ t: "send", x: "evil", s: "evil#1", m: {} }));
+  await world.bridge.onBindingCalled(binding({ t: "send", x: "ext-b", s: "ext-b#1", m: {} }));
+  assert.strictEqual(world.backend.evaluates().length, before, "no delivery was attempted");
+  assert.match(world.logs.join("\n"), /claiming unknown extension/);
+  world.bridge.dispose();
+});
+
+// The whole app→host direction used to be reachable ONLY through the `onBindingCalled`
+// seam: production never subscribed to `Runtime.bindingCalled`, so every injected script
+// could hook everything and still never be heard. Every test here called the seam, so the
+// suite stayed green while the feature's core direction was dead. This drives the same
+// message the way a real app delivers it — as a CDP notification — and is the only test
+// that fails if the subscription is missing.
+test("the app→host leg is wired to the real CDP notification, not just the test seam", async () => {
+  const world = makeWorld({ allowlist: ALL_RN_TARGETS });
+  world.router.registerFrame({
+    key: "panel:ext-a",
+    extensionId: "ext-a",
+    url: "rozenite://ext-a/panel.html",
+    send: (delivery) => {
+      if (delivery.kind === "message") {
+        world.router.resolveDelivery({
+          fromKey: "panel:ext-a",
+          requestId: delivery.payload.requestId,
+          response: { from: "panel" },
+        });
+      }
+    },
+  });
+  await world.bridge.attach();
+
+  world.backend.emit("Runtime.bindingCalled", binding({ t: "send", x: "ext-a", s: "ext-a#1", m: { n: 1 } }));
+  await settleApp();
+  const answers = dispatched(world).filter((envelope) => envelope.t === "response");
+  assert.deepStrictEqual(
+    answers.map((a) => [a.x, a.s, a.m]),
+    [["ext-a", "ext-a#1", { from: "panel" }]],
+    "a notification alone reaches the router and answers back into the app"
+  );
+
+  // The frontend owns a DIFFERENT binding on the same session, and RN dispatches
+  // bindingCalled by name alone, so its React-DevTools traffic arrives here too. It must
+  // be ignored, not parsed as an extension envelope.
+  const before = world.backend.evaluates().length;
+  world.backend.emit("Runtime.bindingCalled", {
+    name: "__FUSEBOX_REACT_DEVTOOLS_DISPATCHER__",
+    payload: JSON.stringify({ domain: "ReactDevTools", message: { id: 1 } }),
+  });
+  await settleApp();
+  assert.deepStrictEqual(
+    dispatched(world).filter((envelope) => envelope.t === "response"),
+    answers,
+    "another session binding's payload never becomes an extension message"
+  );
+  assert.ok(world.backend.evaluates().length >= before);
+  world.bridge.dispose();
+});
+
+// The dangerous one: an app script addressing ANOTHER extension used to have that address
+// dropped by the loader, so the message reached the SENDER's own peers and got answered —
+// which reads to the script exactly like the addressee replying. Answering "no" is cheap;
+// answering WRONG is not. Chrome gates this on externally_connectable, which cannot exist
+// here (matching needs a page origin, and an RN target is not a URL).
+test("a cross-extension send from the app is refused, never answered by the sender's own peers", async () => {
+  const world = makeWorld({ allowlist: ALL_RN_TARGETS });
+  const panel = world.makePanel(); // same extension as the app = the peer the bug would use
+  panel.setResponder(({ requestId }) =>
+    world.router.resolveDelivery({ fromKey: panel.key, requestId, response: { from: "panel" } })
+  );
+  await world.bridge.attach();
+
+  world.backend.emit(
+    "Runtime.bindingCalled",
+    binding({ t: "send", x: "ext-a", s: "ext-a#1", m: { hi: 1 }, to: "ext-b" })
+  );
+  await settleApp();
+  assert.deepStrictEqual(panel.received, [], "the sender's own contexts are not asked to answer");
+  const answers = dispatched(world).filter((envelope) => envelope.t === "response");
+  assert.strictEqual(answers.length, 1);
+  assert.match(String(answers[0].e), /externally_connectable/);
+  assert.match(String(answers[0].e), /"ext-b"/, "and it names who was actually being asked");
+  assert.strictEqual(answers[0].m, undefined, "no response value is offered alongside the error");
+  world.bridge.dispose();
+});
+
+test("addressing your own extension id is not the cross-extension case, and still delivers", async () => {
+  const world = makeWorld({ allowlist: ALL_RN_TARGETS });
+  const panel = world.makePanel();
+  panel.setResponder(({ requestId }) =>
+    world.router.resolveDelivery({ fromKey: panel.key, requestId, response: { from: "panel" } })
+  );
+  await world.bridge.attach();
+
+  world.backend.emit(
+    "Runtime.bindingCalled",
+    binding({ t: "send", x: "ext-a", s: "ext-a#1", m: { hi: 1 }, to: "ext-a" })
+  );
+  await settleApp();
+  assert.strictEqual(panel.received.length, 1, "a script may message its own extension");
+  const answers = dispatched(world).filter((envelope) => envelope.t === "response");
+  assert.deepStrictEqual(answers.map((a) => [a.x, a.s, a.m]), [["ext-a", "ext-a#1", { from: "panel" }]]);
+  world.bridge.dispose();
+});
+
+test("a cross-extension Port open is closed with a reason instead of opened to the wrong peers", async () => {
+  const world = makeWorld({ allowlist: ALL_RN_TARGETS });
+  const panel = world.makePanel();
+  await world.bridge.attach();
+
+  world.backend.emit(
+    "Runtime.bindingCalled",
+    binding({ t: "port-connect", x: "ext-a", s: "port:1", n: "relay", to: "ext-b" })
+  );
+  await settleApp();
+  assert.deepStrictEqual(panel.received, [], "no port leg is opened onto the sender's peers");
+  const drops = dispatched(world).filter((envelope) => envelope.t === "port-drop");
+  assert.strictEqual(drops.length, 1, "the app's port is closed rather than left phantom-open");
+  assert.match(String(drops[0].p), /externally_connectable/);
+  world.bridge.dispose();
+});
+
+test("a malformed or hostile binding payload cannot break the host", async () => {
+  const world = makeWorld({ allowlist: ALL_RN_TARGETS });
+  await world.bridge.attach();
+  const before = world.backend.evaluates().length;
+  for (const payload of [
+    "",
+    "not json",
+    "null",
+    "[]",
+    '{"t": 42}',
+    '{"t": "send"}',
+    '{"t": "send", "x": {"__proto__": {}}, "s": 1, "m": {}}',
+    '{"t": "port-post", "x": "ext-a", "s": "no-such-port", "m": {}}',
+    '{"t": "respond", "x": "ext-a", "s": 999999, "m": "injected-leg-completion"}',
+    '{"t": "__proto__", "x": "ext-a", "s": 1}',
+    `{"t": "send", "x": "ext-a", "s": "ext-a#1", "m": {"big": "${"y".repeat(200000)}"}}`,
+  ]) {
+    await assert.doesNotReject(() => world.bridge.onBindingCalled({ name: BINDING_NAME, payload }));
+  }
+  const text = world.logs.join("\n");
+  assert.match(text, /unparsable binding payload/);
+  assert.match(text, /no envelope type/);
+  assert.match(text, /ignored envelope type "__proto__"/);
+  assert.match(text, /port the router never opened/);
+  assert.strictEqual(
+    ({}) && Object.prototype.polluted === undefined,
+    true,
+    "nothing reached Object.prototype"
+  );
+  // The oversized send IS a legitimate message and reaches the mesh. There is no peer of
+  // ext-a in this world, so the honest answer is the connection failure below — one
+  // answer either way, never silence.
+  await settleApp();
+  const answers = dispatched(world).filter((e) => e.t === "response");
+  assert.strictEqual(answers.length, 1);
+  assert.strictEqual(answers[0].s, "ext-a#1");
+  assert.ok(world.backend.evaluates().length >= before);
+  world.bridge.dispose();
+});
+
+test("a respond envelope settles a router leg exactly like a frame's RUNTIME_SEND_RESPONSE", async () => {
+  const world = makeWorld({ allowlist: ALL_RN_TARGETS });
+  await world.bridge.attach();
+  const panel = world.makePanel();
+  const toApp = world.router.sendTo({
+    fromKey: "panel:ext-a",
+    targetKey: world.bridge.appFrameKey("ext-a"),
+    message: { ask: true },
+  });
+  assert.strictEqual(toApp.ok, true);
+  await settleApp();
+  const delivery = dispatched(world).find((e) => e.k === "message");
+  assert.strictEqual(delivery.s, toApp.requestId, "the router's request id is what the app sees");
+  assert.strictEqual(delivery.p.sender.id, "ext-a", "sender.id is the CALLER's real extension id");
+  assert.strictEqual(delivery.p.sender.url, "rozenite://ext-a/panel.html", "and its real url");
+  // The app context IS the inspected tab, so the message appears to come from it — the
+  // same synthetic tab chrome.tabs.query reports (docs/features/TABS.md).
+  assert.strictEqual(delivery.p.sender.tab.url, "my-app://rn");
+  assert.strictEqual(delivery.p.sender.tab.title, "RN");
+  assert.strictEqual(delivery.p.sender.tab.id, tabIdFor("ext-a"));
+
+  await world.bridge.onBindingCalled(
+    binding({ t: "respond", x: "ext-a", s: toApp.requestId, m: { answered: "from the app" } })
+  );
+  assert.deepStrictEqual(await toApp.promise, { answered: "from the app" });
+  world.bridge.dispose();
+});
+
+// The reason `nr` exists: issue #12 refused to wire tabs.sendMessage rather than let an
+// extension read "nothing answered" as "the page answered nothing". Now that the call is
+// wired, that hazard has to be closed on the host side too.
+test("an app with no listener FAILS a targeted send instead of answering undefined", async () => {
+  const world = makeWorld({ allowlist: ALL_RN_TARGETS });
+  await world.bridge.attach();
+  const panel = world.makePanel();
+  const toApp = world.router.sendTo({
+    fromKey: panel.key,
+    targetKey: world.bridge.appFrameKey("ext-a"),
+    message: { ask: true },
+  });
+  await settleApp();
+
+  await world.bridge.onBindingCalled(
+    binding({
+      t: "respond",
+      x: "ext-a",
+      s: toApp.requestId,
+      nr: true,
+      e: "Could not establish connection. Receiving end does not exist.",
+    })
+  );
+  await assert.rejects(
+    () => toApp.promise,
+    /Receiving end does not exist/,
+    "Chrome's connection failure, not a resolved undefined"
+  );
+  assert.strictEqual(
+    panel.received.length,
+    0,
+    "and the silent app's answer did not become a delivery to the sender"
+  );
+  world.bridge.dispose();
+});
+
+test("a silent leg settles itself without becoming the fan-out's answer", async () => {
+  const world = makeWorld({ allowlist: ALL_RN_TARGETS });
+  await world.bridge.attach();
+  const sender = world.makePanel("ext-a", "sender");
+  // A second real frame that answers LATE, so the app's silent verdict is the only thing
+  // in flight when the mesh decides what the sender will resolve with.
+  const slow = world.makePanel("ext-a", "worker");
+  slow.setResponder((message) => {
+    setTimeout(
+      () => world.router.resolveDelivery({ fromKey: slow.key, requestId: message.requestId, response: "late" }),
+      10
+    );
+    return "late";
+  });
+
+  const fromPanel = world.router.sendMessage({ fromKey: sender.key, message: { ask: true } });
+  await settleApp();
+  const delivery = dispatched(world).find((e) => e.k === "message");
+  assert.ok(delivery, "the app context was asked like any other peer");
+
+  // The app reports "nothing is listening in here" FIRST.
+  await world.bridge.onBindingCalled(
+    binding({ t: "respond", x: "ext-a", s: delivery.s, nr: true, e: "Receiving end does not exist." })
+  );
+  // ...and the mesh still waits for the frame that is actually thinking, then answers
+  // with ITS value. A silent leg that resolved the sender would report success from an
+  // empty page; one that became the response would replace a real answer with a shrug.
+  assert.strictEqual(await fromPanel, "late");
+  world.bridge.dispose();
+});
+
+test("a targeted send stays targeted, and only the app can answer it", async () => {
+  const world = makeWorld({ allowlist: ALL_RN_TARGETS });
+  await world.bridge.attach();
+  const sender = world.makePanel();
+  const sibling = world.makePanel("ext-a", "worker");
+  const toApp = world.router.sendTo({
+    fromKey: sender.key,
+    targetKey: world.bridge.appFrameKey("ext-a"),
+    message: { one: true },
+  });
+  assert.strictEqual(toApp.ok, true);
+  await settleApp();
+  assert.strictEqual(sibling.received.length, 0, "a targeted send does not fan out");
+  assert.strictEqual(sender.received.length, 0, "and it does not loop back to the sender");
+
+  // A sibling frame answering a leg it was not asked about settles nothing: the mesh
+  // only ever hears from the frame it addressed (issue #12's self-answering hazard).
+  sibling.answer({ requestId: toApp.requestId, response: "cross-talk" });
+  sender.answer({ requestId: toApp.requestId, response: "cross-talk" });
+  const settled = await Promise.race([
+    toApp.promise.then(() => "settled"),
+    new Promise((resolve) => setTimeout(() => resolve("waiting"), 20)),
+  ]);
+  assert.strictEqual(settled, "waiting", "so the leg is still open, exactly as Chrome's would be");
+
+  await world.bridge.onBindingCalled(
+    binding({ t: "respond", x: "ext-a", s: toApp.requestId, m: "the app, and only the app" })
+  );
+  assert.strictEqual(await toApp.promise, "the app, and only the app");
+  world.bridge.dispose();
+});
+
+test("tabs.sendMessage's receiver: refused while nothing is injected, routed once there is", async () => {
+  const world = makeWorld({ allowlist: null });
+  await world.bridge.attach();
+  let target = world.bridge.tabTarget({ extensionId: "ext-a" });
+  assert.strictEqual(target.ok, false);
+  assert.match(target.error, /no content script of "ext-a" is running/);
+  assert.match(target.error, /not allowlisted|not injected|not scanned/);
+
+  world.backend.state.attached = true;
+  const allowlisted = createContentBridgeLike(world, "ext-a");
+  await allowlisted.refresh();
+  target = allowlisted.tabTarget({ extensionId: "ext-a" });
+  assert.strictEqual(target.ok, true);
+  assert.strictEqual(target.frameKey, "rozenite-app:ext-a");
+  allowlisted.dispose();
+});
+
+/** A second bridge over the same backend/router, with the gate open for one id. */
+function createContentBridgeLike(world, allowlist) {
+  const reader = readerFor({ "content.js": "globalThis.hooked = true;" });
+  return createContentBridge({
+    sendCommand: world.backend.sendCommand,
+    onEvent: world.backend.onEvent,
+    isAttached: world.backend.isAttached,
+    scan: scanOf(fixture("ext-a")),
+    readManifest: () => ({ name: "Fixture" }),
+    resolvePaths: reader.resolvePaths,
+    readSources: reader.readSources,
+    allowlist,
+    router: world.router,
+    targetInfo: () => ({ attached: true, url: "my-app://rn", title: "RN" }),
+    log: { warn: () => {}, error: () => {}, log: () => {} },
+    requestTimeoutMs: 200,
+    sweepIntervalMs: 0,
+  });
+}
+
+test("an un-attached session refuses a tab send rather than resolving undefined", async () => {
+  const world = makeWorld({ allowlist: ALL_RN_TARGETS });
+  await world.bridge.attach();
+  world.backend.state.attached = false;
+  const target = world.bridge.tabTarget({ extensionId: "ext-a" });
+  assert.strictEqual(target.ok, false);
+  assert.match(target.error, /not attached/);
+  world.bridge.dispose();
+});
+
+test("a Port the app opens reaches a panel of the same extension, and only that extension", async () => {
+  const world = makeWorld({ allowlist: ALL_RN_TARGETS });
+  await world.bridge.attach();
+  const panel = world.makePanel();
+  const otherPanel = {
+    key: "panel:other",
+    received: [],
+  };
+  world.router.registerFrame({
+    key: otherPanel.key,
+    extensionId: "ext-b",
+    url: "rozenite://ext-b/panel.html",
+    send: (delivery) => otherPanel.received.push(delivery),
+  });
+
+  await world.bridge.onBindingCalled(
+    binding({ t: "port-connect", x: "ext-a", s: "ext-a#1", n: "relay" })
+  );
+  assert.strictEqual(panel.received.length, 1, "the panel of the same extension got it");
+  assert.deepStrictEqual(panel.received[0].payload.name, "relay");
+  assert.deepStrictEqual(otherPanel.received, [], "another extension never sees it");
+
+  await settleApp();
+  const opened = dispatched(world).find((e) => e.t === "port-open");
+  assert.strictEqual(opened.p, panel.received[0].payload.portId);
+
+  const panelKey = "panel:ext-a";
+  const portId = panel.received[0].payload.portId;
+  world.router.portPost({ fromKey: panelKey, portId, message: { from: "panel" } });
+  await settleApp();
+  const posted = dispatched(world).find((e) => e.k === "port-message");
+  assert.deepStrictEqual([posted.s, posted.p.message], ["ext-a#1", { from: "panel" }]);
+  assert.notStrictEqual(posted.s, portId, "the host translated the router's id back to the app's own");
+
+  await world.bridge.onBindingCalled(
+    binding({ t: "port-post", x: "ext-a", s: "ext-a#1", m: { from: "app" } })
+  );
+  assert.deepStrictEqual(
+    panel.received.filter((d) => d.kind === "port-message").map((d) => d.payload.message),
+    [{ from: "app" }],
+    "the app's post translated its own port id back to the router's"
+  );
+
+  world.router.portDisconnect({ fromKey: panelKey, portId });
+  await settleApp();
+  const dropped = dispatched(world).find((e) => e.t === "port-drop");
+  assert.strictEqual(dropped === undefined, true, "a peer's disconnect is a delivery, not a drop");
+  assert.ok(
+    dispatched(world).some((e) => e.k === "port-disconnect"),
+    "and the app is told through the delivery channel"
+  );
+  world.bridge.dispose();
+});
+
+test("a Port the app opens with no peer is refused with Chrome's own message", async () => {
+  const world = makeWorld({ allowlist: ALL_RN_TARGETS });
+  world.router.registerFrame({
+    key: "panel:ext-z",
+    extensionId: "ext-z",
+    url: "rozenite://ext-z/panel.html",
+    send: () => {},
+  });
+  await world.bridge.attach();
+  await world.bridge.onBindingCalled(
+    binding({ t: "port-connect", x: "ext-a", s: "ext-a#1", n: "lonely" })
+  );
+  await settleApp();
+  const dropped = dispatched(world).find((e) => e.t === "port-drop");
+  assert.strictEqual(dropped.s, "ext-a#1");
+  assert.match(String(dropped.p), /Could not establish connection/);
+  world.bridge.dispose();
+});
+
+test("an app report is logged and never treated as messaging", async () => {
+  const world = makeWorld({ allowlist: ALL_RN_TARGETS });
+  await world.bridge.attach();
+  await world.bridge.onBindingCalled(
+    binding({ t: "report", x: "ext-a", k: "listener-threw", d: "boom in the app" })
+  );
+  assert.match(world.logs.join("\n"), /the app reported "listener-threw": boom in the app/);
+  assert.deepStrictEqual(dispatched(world), [], "a report does not open a leg");
+  world.bridge.dispose();
+});
+
+test("an extension's own report about a sibling extension is refused", async () => {
+  const world = makeWorld({ allowlist: ALL_RN_TARGETS });
+  await world.bridge.attach();
+  await world.bridge.onBindingCalled(
+    binding({ t: "respond", x: "not-scanned", s: 1, m: "cross-extension" })
+  );
+  assert.match(world.logs.join("\n"), /claiming unknown extension "not-scanned"/);
+  world.bridge.dispose();
+});
+
+// ── defect 1: a lost send must not look like an answered one ────────────────────
+// Observed on a device: a content script that sends in the same tick it is injected
+// usually loses the message, and the app's own callback reported
+// `{"response":undefined,"lastError":null}` — the exact shape this host reserves for "a
+// listener answered nothing" (docs/features/CONTENT-SCRIPTS.md, "Two things the run
+// showed that the tests could not"). The loader half (an `e` envelope really becoming
+// `lastError` + a rejected promise) is asserted in tests/content-loader.test.js; what is
+// asserted here is that the host SENDS that envelope.
+test("an app send the mesh cannot deliver is Chrome's connection failure, not undefined", async () => {
+  const world = makeWorld({ allowlist: ALL_RN_TARGETS });
+  await world.bridge.attach();
+  // Nothing else of ext-a exists: not a worker, not a panel. The app is alone in the mesh.
+  await world.bridge.onBindingCalled(
+    binding({ t: "send", x: "ext-a", s: "ext-a#1", m: { from: "first statement" } })
+  );
+  await settleApp();
+  const [answer] = dispatched(world).filter((e) => e.t === "response");
+  assert.strictEqual(answer.s, "ext-a#1", "the app's own sequence id, so its callback settles");
+  assert.strictEqual(
+    "m" in answer,
+    false,
+    "no response value is claimed: `undefined` belongs to a listener that answered nothing"
+  );
+  assert.match(String(answer.e), /Could not establish connection\. Receiving end does not exist\./);
+  assert.match(String(answer.e), /messaging mesh/);
+  assert.match(String(answer.e), /ext-a/);
+  world.bridge.dispose();
+});
+
+test("the race shape: the same send fails honestly before a peer exists and works after", async () => {
+  const world = makeWorld({ allowlist: ALL_RN_TARGETS });
+  await world.bridge.attach();
+
+  // 1. Injection happened; the extension's other context has not registered yet. This is
+  //    the observed race (worker seat taken during shell startup, injection at attach).
+  await world.bridge.onBindingCalled(binding({ t: "send", x: "ext-a", s: "ext-a#1", m: { n: 1 } }));
+  await settleApp();
+  const lost = dispatched(world).find((e) => e.t === "response" && e.s === "ext-a#1");
+  assert.ok(lost.e, "the lost send is reported as a failure");
+
+  // 2. The peer arrives — an ordinary frame, the way RUNTIME_REGISTER makes one.
+  const peer = world.makePanel("ext-a", "worker");
+  peer.setResponder(({ message, requestId }) => {
+    world.router.resolveDelivery({
+      fromKey: peer.key,
+      requestId,
+      response: { got: message.n },
+    });
+  });
+  await world.bridge.onBindingCalled(binding({ t: "send", x: "ext-a", s: "ext-a#2", m: { n: 2 } }));
+  await settleApp();
+  const answered = dispatched(world).find((e) => e.t === "response" && e.s === "ext-a#2");
+  assert.deepStrictEqual(answered.m, { got: 2 }, "a delivered send still resolves normally");
+  assert.strictEqual("e" in answered, false, "and carries no error");
+  assert.strictEqual(peer.received.length, 1, "the peer really was addressed");
+  world.bridge.dispose();
+});
+
+test("a listener that genuinely answers nothing still resolves undefined, error-free", async () => {
+  const world = makeWorld({ allowlist: ALL_RN_TARGETS });
+  await world.bridge.attach();
+  const panel = world.makePanel();
+  panel.setResponder(({ requestId }) => {
+    // Reached, and answered nothing: the ONE case `undefined` means in this host.
+    world.router.resolveDelivery({ fromKey: panel.key, requestId, response: undefined });
+  });
+  await world.bridge.onBindingCalled(binding({ t: "send", x: "ext-a", s: "ext-a#1", m: { n: 1 } }));
+  await settleApp();
+  const [answer] = dispatched(world).filter((e) => e.t === "response");
+  assert.strictEqual(answer.s, "ext-a#1");
+  assert.strictEqual("e" in answer, false, "no error is invented for a real, empty answer");
+  assert.strictEqual(answer.m, undefined);
+  world.bridge.dispose();
+});
+
+// ── defect 1b: ordering the worker's seat before injection ──────────────────────
+test("an extension's script waits for its own worker's mesh seat, and injects once it exists", async () => {
+  const world = makeWorld({
+    allowlist: ALL_RN_TARGETS,
+    readManifest: () => ({ name: "Fixture", background: { service_worker: "worker.js" } }),
+  });
+  const report = await world.bridge.attach();
+  assert.strictEqual(report[0].injected, false);
+  assert.strictEqual(report[0].pending, true, "picked up by the next pass, not forgotten");
+  assert.match(report[0].lastError, /background worker has no seat in the messaging mesh/);
+  assert.deepStrictEqual(injectedExpressions(world), [], "the script never went into the app");
+  assert.match(world.logs.join("\n"), /deferred — its own background worker has no seat/);
+
+  // The worker takes its seat, exactly the way RUNTIME_REGISTER hands one to a real frame.
+  const worker = world.makePanel("ext-a", "worker");
+  worker.setResponder(({ requestId }) => {
+    world.router.resolveDelivery({ fromKey: worker.key, requestId, response: "from the worker" });
+  });
+  const after = await world.bridge.refresh();
+  assert.strictEqual(after[0].injected, true);
+  assert.strictEqual(after[0].pending, false);
+  assert.strictEqual(injectedExpressions(world).length, 1, "and it went in exactly once");
+
+  // The whole point: a send from the script's first statement now reaches the worker.
+  await world.bridge.onBindingCalled(
+    binding({ t: "send", x: "ext-a", s: "ext-a#1", m: { marker: "IMMEDIATE" } })
+  );
+  await settleApp();
+  const answer = dispatched(world).find((e) => e.t === "response");
+  assert.strictEqual(answer.m, "from the worker");
+  assert.strictEqual("e" in answer, false);
+  world.bridge.dispose();
+});
+
+test("waiting for the worker is bounded: the script is injected anyway rather than never", async () => {
+  const world = makeWorld({
+    allowlist: ALL_RN_TARGETS,
+    readManifest: () => ({ name: "Fixture", background: { scripts: ["worker.js"] } }),
+  });
+  await world.bridge.attach(); // pass 1
+  await world.bridge.refresh(); // pass 2
+  await world.bridge.refresh(); // pass 3
+  assert.deepStrictEqual(injectedExpressions(world), [], "the wait is a wait, not an instant give-up");
+  const last = await world.bridge.refresh(); // pass 4: past the bound
+  assert.strictEqual(last[0].injected, true, "a worker that never registers cannot keep the script out");
+  assert.match(world.logs.join("\n"), /injecting anyway — its background worker is still not/);
+  assert.strictEqual(injectedExpressions(world).length, 1);
+  world.bridge.dispose();
+});
+
+// The shape the live run actually produced, and the only test here that reproduces it:
+// `Runtime.addBinding` is fire-and-forget, so a send made from the script's own first
+// statement arrives at the host while the `Runtime.evaluate` running that script is still
+// open. Before this fix the host answered that send "this extension is not injected" — the
+// script was, in fact, being executed at that moment.
+test("an app send that arrives DURING the injection evaluate is answered, not refused", async () => {
+  const world = makeWorld({ allowlist: ALL_RN_TARGETS, backend: { holdEvaluations: true } });
+  const injecting = world.bridge.attach();
+  // Hold the app inside the script, then send exactly as the injected script would.
+  await new Promise((resolve) => setImmediate(resolve));
+  const peer = world.makePanel("ext-a", "worker");
+  peer.setResponder(({ message, requestId }) => {
+    world.router.resolveDelivery({
+      fromKey: peer.key,
+      requestId,
+      response: { got: message.marker },
+    });
+  });
+
+  await world.bridge.onBindingCalled(
+    binding({ t: "send", x: "ext-a", s: "ext-a#1", m: { marker: "IMMEDIATE" } })
+  );
+  const midflight = dispatched(world).find((e) => e.t === "response" && e.s === "ext-a#1");
+  assert.ok(midflight, "the in-flight send got an answer");
+  assert.strictEqual("e" in midflight, false, "and it was not an error");
+  assert.deepStrictEqual(midflight.m, { got: "IMMEDIATE" }, "it reached the peer, mid-evaluate");
+
+  world.backend.releaseEvaluations();
+  const report = await injecting;
+  assert.strictEqual(report[0].injected, true, "and the pass completed normally afterwards");
+  world.bridge.dispose();
+});
+
+// ── defect 2: one entry, one evaluation per app context ─────────────────────────
+// The live run counted ~4 evaluations of one entry per session. `refresh()`'s verdicts
+// really are idempotent and the loader's merge-not-replace really did keep one listener —
+// but a re-evaluated script's OWN side effects are not idempotent from the app's view.
+test("one entry is evaluated once per app context, however many passes run", async () => {
+  const world = makeWorld({ allowlist: ALL_RN_TARGETS });
+  await world.bridge.attach();
+  await world.bridge.refresh();
+  const report = await world.bridge.refresh();
+  assert.strictEqual(injectedExpressions(world).length, 1, "no second Runtime.evaluate carried the script");
+  assert.strictEqual(report[0].injected, true, "and the report still says the app is running it");
+  assert.strictEqual(report[0].entries[0].injected, true);
+  assert.match(report[0].entries[0].skipped, /already evaluated into this app context/);
+  assert.match(world.logs.join("\n"), /is already evaluated into this app context — not evaluated twice/);
+  world.bridge.dispose();
+});
+
+test("a fresh app context is a fresh evaluation: the dedupe does not survive a new generation", async () => {
+  const world = makeWorld({ allowlist: ALL_RN_TARGETS });
+  await world.bridge.attach();
+  await world.bridge.refresh();
+  assert.strictEqual(injectedExpressions(world).length, 1);
+
+  world.backend.emit("Runtime.executionContextsCleared", {});
+  await settleApp();
+  assert.ok(
+    injectedExpressions(world).length >= 2,
+    "the recreated context has no loader, so the script goes in again"
+  );
+  assert.match(world.logs.join("\n"), /injected content\.js/);
+  const report = world.bridge.report()[0];
+  assert.strictEqual(report.injected, true);
+  assert.strictEqual(report.entries[0].skipped, null, "this pass really did evaluate it");
+  world.bridge.dispose();
+});
+
+test("an entry whose sources changed is evaluated again, even in the same context", async () => {
+  const world = makeWorld({ allowlist: ALL_RN_TARGETS });
+  await world.bridge.attach();
+  await world.bridge.refresh();
+  // Same extension, same context, different bytes: the old script must not be what stays
+  // running because a dedupe record said "already evaluated".
+  world.sources["content.js"] = "globalThis.hooked = 'second version';";
+  const report = await world.bridge.refresh();
+  assert.strictEqual(injectedExpressions(world).length, 2, "the new source went in");
+  assert.match(injectedExpressions(world)[1], /second version/);
+  assert.strictEqual(report[0].entries[0].skipped, null);
+  world.bridge.dispose();
+});
+
+test("an entry the gate stops mid-life stops being addressed, even though it once ran", async () => {
+  // A parsed allowlist the test can empty, so the NEXT pass really declines what the last
+  // one allowed — the case a dedupe record could otherwise get wrong.
+  const gate = { ids: ["ext-a"], tokens: ["ext-a"], allRnTargets: false, invalid: [] };
+  const world = makeWorld({ allowlist: gate });
+  await world.bridge.attach();
+  assert.strictEqual(world.bridge.tabTarget({ extensionId: "ext-a" }).ok, true);
+
+  gate.ids = [];
+  gate.tokens = [];
+  const report = await world.bridge.refresh();
+  assert.strictEqual(report[0].injected, false);
+  const target = world.bridge.tabTarget({ extensionId: "ext-a" });
+  assert.strictEqual(target.ok, false, "a script this pass declined to allow is not a receiver");
+  assert.match(target.error, /nothing allowlisted/);
+  const panel = world.makePanel();
+  await world.router.sendMessage({ fromKey: panel.key, message: { hi: 1 } });
+  assert.strictEqual(panel.received.length, 0, "and the mesh no longer knows the app's seat");
+  world.bridge.dispose();
+});
+

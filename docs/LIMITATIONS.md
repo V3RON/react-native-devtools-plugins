@@ -18,10 +18,15 @@
   nothing has to wake it, so `onSuspend`/`onUpdateAvailable` never fire and a worker that
   would have been torn down in Chrome keeps running here. That is a superset for a devtools
   host and a divergence from Chrome's resource model at the same time.
-- Still missing from the extension model: content-script injection and a working
-  `action`/popup — plus a toolbar, browser menu, or shortcut routing, which is why
-  `action.onClicked`, `commands.onCommand`, and `contextMenus.onClicked` are registrable but
-  have no producer. What HAS arrived since (issue #4,
+- Still missing from the extension model: a working `action`/popup — plus a toolbar, browser
+  menu, or shortcut routing, which is why `action.onClicked`, `commands.onCommand`, and
+  `contextMenus.onClicked` are registrable but have no producer. Content-script injection has
+  arrived since (issue #5, [features/CONTENT-SCRIPTS.md](features/CONTENT-SCRIPTS.md)), but only
+  for an extension a developer names in `DEVTOOLS_CONTENT_SCRIPTS`, and only into the app's own
+  JS context — Hermes has no isolated worlds, so a script there can read and overwrite app
+  globals. Observed on a real device; the message-loss gap that run found is fixed and
+  re-observed there, so a send nobody could receive now fails with Chrome's own connection
+  error instead of looking answered. What HAS arrived since (issue #4,
   [features/SMALL-SHIMS.md](features/SMALL-SHIMS.md)): `notifications` raises real system
   notifications, `alarms` runs real timers, `downloads` really saves over the shell's one
   export path, manifest `options_ui` opens a real window, `permissions` reports the manifest's
@@ -58,14 +63,25 @@
   is not — with `status` and `windowId` left absent rather than guessed. That is **one tab
   standing in for a whole browser**: there is no tab strip, no window model, and no second
   tab, so a `windowId`/`groupId`/`title` query filter matches nothing by design.
-- **`chrome.tabs.sendMessage` has no receiver yet.** It resolves `undefined` with one console
-  line and is deliberately *not* routed into the extension's own runtime messaging: doing
-  that would let an extension message itself and treat the success as a page having
-  answered. Delivery arrives with content scripts
-  ([features/CONTENT-SCRIPTS.md](features/CONTENT-SCRIPTS.md), issue #5). Deviation from
-  Chrome, stated: Chrome fails this call with a connection error; this shell resolves
-  `undefined`, so a caller that only checks for a response value could read it as success —
-  the console line is what says otherwise.
+- **A content script cannot message a DIFFERENT extension.** Chrome allows
+  `runtime.sendMessage(extensionId, …)` / `connect(extensionId, …)` when the target declares
+  `externally_connectable`. Here a foreign target id is refused with Chrome's own connection
+  failure, naming the extension that was being asked — because that grant matches a **page
+  origin** against the target's declared `matches`, and an RN target has no URL to match, so
+  the grant has nothing to evaluate against. Addressing your own extension id still works.
+  Refusing is also the alternative to the failure this replaced: the loader used to *drop*
+  the target id, so the message reached the **sender's own** worker and panels, and an answer
+  from them looked exactly like the addressee replying.
+- **`chrome.tabs.sendMessage` delivers only to a script that was opted in.** Its receiver is
+  this extension's own content script inside the inspected app
+  ([features/CONTENT-SCRIPTS.md](features/CONTENT-SCRIPTS.md), issue #5), and no script is
+  injected unless `DEVTOOLS_CONTENT_SCRIPTS` names the extension — so by default this call
+  **fails**, with the reason (`no content script of "…" is running in the inspected target`)
+  as a rejected promise and `runtime.lastError`. It is never routed into the caller's own
+  `runtime.onMessage`: an extension answering itself and calling that a page is the false
+  positive this host refuses on principle. Where it differs from Chrome is *which* messages
+  arrive at all — Chrome injects what a manifest declares, this shell injects what a
+  developer has explicitly allowed.
 - **`chrome.tabs.create` opens nothing by default.** It returns a real descriptor (id +
   resolved url, which is what unblocks Altair's `tabs.js`), plus a non-Chrome `openedVia`
   field saying `"external"` / `"window"` / `null`. The open itself is
@@ -218,6 +234,15 @@
   `sidePanel` round-trips its configuration, and **`open` rejects** rather than resolving,
   because its promise means a panel came up and none can
   ([features/SMALL-SHIMS.md](features/SMALL-SHIMS.md)).
+- **A content script's app→host payloads are also relayed to the DevTools frontend.** The host
+  does not open a second debugger connection — it multiplexes onto the frontend's CDP session by
+  message id (`src/main/cdp-bridge.js`) — and the backend dispatches `Runtime.bindingCalled` to
+  every session on that connection, so every envelope an injected script sends is pushed to the
+  frontend too, base64 blobs included. It is inert there: the frontend's React-DevTools bindings
+  each check the binding NAME before touching a payload (`__FUSEBOX_REACT_DEVTOOLS_DISPATCHER__`,
+  and two more that only install when their panel is open), and the host ignores any name but its
+  own. So this is bandwidth, not corruption — noted because the bridge's own rule for host
+  *replies* is "never forward them", and notifications have no message id to apply that rule to.
 - **Per-extension CSP.** Every `rozenite://` response carries that extension's
   `content_security_policy`; an extension declaring none gets Chrome's MV3 default
   (`script-src 'self'; object-src 'self'`, plus `wasm-unsafe-eval` when it has a service
@@ -230,7 +255,9 @@ plumbing works with real GraphQL tooling — an extension's `background.js` now 
 lifecycle events fire, and it is a messaging peer — and the network data behind
 `devtools.network` / `webRequest` is real CDP rather than a stub. But the app-side half of that
 network path has never been walked against a device from this checkout, and the shell is still
-far from a product: no install/reload UI, no content scripts, no MV3 worker lifecycle, sandbox
-still off, deep coupling to an unmerged frontend fork.
+far from a product: no install/reload UI, content scripts that inject only when a developer
+opts an extension in by hand (that path has now been walked on a device), no MV3 worker
+lifecycle,
+sandbox still off, deep coupling to an unmerged frontend fork.
 The path forward is in [ROADMAP.md](ROADMAP.md); per-functionality state is in
 [features/README.md](features/README.md).

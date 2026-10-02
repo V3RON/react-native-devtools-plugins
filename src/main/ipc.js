@@ -16,6 +16,8 @@ const panelHost = require("./panel-host");
 const { createMessageRouter } = require("./message-router");
 const { evalInPage, reloadInPage } = require("./inspected-window");
 const { createNetworkService } = require("./network-service");
+const { getContentBridge, attachContentBridge } = require("./content-bridge");
+const { deliverTabMessage } = require("./tab-send");
 const { sendCommand, onEvent, status: bridgeStatus } = require("./cdp-bridge");
 const { createPermissionGate, API_PERMISSIONS } = require("../shared/permissions");
 const tabHost = require("./tab-host");
@@ -54,6 +56,7 @@ const {
   TABS_TARGET_INFO,
   TABS_OPEN,
   TABS_CLOSE,
+  TABS_SEND_TO_APP,
   NOTIFICATION_SHOW,
   NOTIFICATION_CLEAR,
   NOTIFICATION_PERMISSION,
@@ -68,6 +71,28 @@ const {
 
 // ── runtime messaging router wiring ─────────────────────────────────────────
 const router = createMessageRouter();
+
+let contentBridgeInstance = null;
+
+/**
+ * The content bridge, on first need. It cannot be built at module load: it wants the
+ * router above, and attaching it starts a scan of the extensions folder. The app
+ * (src/main/index.js) and the Electron test harness both get here through this one
+ * accessor, so `chrome.tabs.sendMessage` always reports against a real bridge — and,
+ * when nothing is injected, the reason it is really not injected
+ * (docs/features/CONTENT-SCRIPTS.md).
+ */
+const startContentBridge = () => {
+  if (!contentBridgeInstance) {
+    try {
+      contentBridgeInstance = attachContentBridge({ router });
+    } catch (error) {
+      console.warn(`[content-scripts] could not start: ${error.message}`);
+      return null;
+    }
+  }
+  return contentBridgeInstance;
+};
 
 // ── the CDP network model, shared by devtools.network and webRequest ────────
 // (docs/features/DEVTOOLS-NETWORK.md). One model for every frame; a frame asks
@@ -501,6 +526,31 @@ const registerIpcHandlers = () => {
       .catch((error) => ({ ok: false, error: error && error.message }));
   });
 
+  // ── chrome.tabs.sendMessage (GitHub issue #5's other half) ────────────────
+  // Issue #12 refused to wire this because there was no receiver, and routing it into
+  // the extension's own `runtime.onMessage` would have let an extension message itself
+  // and call the success "a page answered". Issue #5 supplied the real receiver — the
+  // extension's allowlisted content script, inside the inspected app — so the message
+  // now goes THERE, through the same router seat a panel uses.
+  //
+  // The decisions (grant check, whose app context is addressable, what silence means)
+  // live in src/main/tab-send.js so they can be tested; this is the part that cannot be.
+  ipcMain.handle(TABS_SEND_TO_APP, (event, details = {}) => {
+    return deliverTabMessage({
+      // Same two checks every other chrome.tabs channel makes, from host state rather
+      // than from anything the frame says about itself.
+      granted: tabsCaller(event),
+      fromKey: resolveFrameKey(event),
+      frameUrl: event.senderFrame ? event.senderFrame.url : "",
+      // The production shell started it in src/main/index.js; a harness that never ran
+      // that file gets it built here, against the same router, so the answer is always
+      // "what this shell really did" rather than "the bridge was never started".
+      bridge: getContentBridge() || startContentBridge(),
+      sendTo: (args) => router.sendTo(args),
+      message: details.message,
+    });
+  });
+
   // ── chrome.notifications (docs/features/SMALL-SHIMS.md) ────────────────────
   // The `notifications` permission is enforced HERE as well as in the frame's gate:
   // a frame that ignored its RUNTIME_REGISTER reply must not be able to raise a
@@ -673,4 +723,4 @@ const registerIpcHandlers = () => {
   );
 };
 
-module.exports = { registerIpcHandlers, subscribeRouterFrames };
+module.exports = { registerIpcHandlers, subscribeRouterFrames, startContentBridge };

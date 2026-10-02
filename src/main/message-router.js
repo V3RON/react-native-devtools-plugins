@@ -14,6 +14,16 @@
 //   - a frame that dies mid-send simply concludes its leg;
 //   - connect() with no peers fails like Chrome's
 //     "Could not establish connection.".
+
+/**
+ * Chrome's answer for "the context was reached, nothing was listening in it". A targeted
+ * sender must hear exactly this, because that is what its own API throws, and a sender
+ * that could not reach ANY context says the same thing — Chrome has no other message for
+ * "nobody was there to hear it" (`chrome.runtime.connect` to a dead extension excepted,
+ * which shortens it to "Could not establish connection.").
+ */
+const NO_RECEIVER = "Could not establish connection. Receiving end does not exist.";
+
 const createMessageRouter = () => {
   const frames = new Map(); // frameKey -> {key, extensionId, url, send}
   const ports = new Map(); // portId -> {extensionId, initiator, legs:Set}
@@ -33,6 +43,18 @@ const createMessageRouter = () => {
     );
   };
 
+  /**
+   * Whether a sender has ANY context that could receive what it is about to send — a
+   * question a sender must be able to ask BEFORE it sends, because `sendMessage` below
+   * answers "no peers" and "peers answered nothing" with the same `undefined`, and only
+   * the second one is a value Chrome ever gives back.
+   *
+   * Read-only and purely additive: it changes nothing about how a send settles, and the
+   * frame-side `RUNTIME_SEND_MESSAGE` path does not consult it (see the note on
+   * `sendMessage`). The app-side sender in src/main/content-bridge.js does.
+   */
+  const hasPeers = (fromKey) => peersOf(fromKey).length > 0;
+
   // ── sendMessage ──────────────────────────────────────────────────────────
   const settle = (id) => {
     const req = pending.get(id);
@@ -40,9 +62,28 @@ const createMessageRouter = () => {
       return;
     }
     pending.delete(id);
+    if (req.targeted && req.lastResponse === undefined && req.silent !== undefined) {
+      // Every leg of a ONE-frame request said "nobody listens here". `chrome.tabs.
+      // sendMessage` fails in that case; resolving undefined would be the shell claiming
+      // the app answered with nothing.
+      req.reject(new Error(req.silent));
+      return;
+    }
     req.resolve(req.lastResponse);
   };
 
+  /**
+   * Fan-out to every peer of one extension, resolving with the LAST valid response.
+   *
+   * Known divergence from Chrome, left alone on purpose: when `fromKey` has no peers at
+   * all, this resolves `undefined` — the value Chrome's `runtime.sendMessage` reserves for
+   * "a listener answered nothing", while Chrome itself rejects with NO_RECEIVER here. It
+   * stays as it is because layers above (`RUNTIME_SEND_MESSAGE` in src/main/ipc.js and the
+   * frame-side client in src/chrome-shim/messaging.js) and their tests are written against
+   * `Promise.resolve(undefined)`, and a sender that needs to know the difference can ask
+   * `hasPeers` BEFORE sending, which is exactly what the app-side sender does. Fixing the
+   * fidelity means changing that layer, not this contract.
+   */
   const sendMessage = ({ fromKey, message }) => {
     const from = frames.get(fromKey);
     const targets = peersOf(fromKey);
@@ -63,13 +104,93 @@ const createMessageRouter = () => {
     });
   };
 
+  /**
+   * One targeted leg: deliver to ONE frame and wait for its answer, in this same mesh.
+   *
+   * `chrome.tabs.sendMessage` is the consumer — Chrome addresses the content scripts of
+   * one tab, which is not the fan-out `sendMessage` does. Reusing this router rather than
+   * a second request map is the point: the same `pending` bookkeeping, the same
+   * last-response settling, the same extension scoping (a caller cannot address a frame
+   * of another extension, and the app's seat is an ordinary frame), and a frame that dies
+   * still settles its legs through `unregisterFrame`.
+   *
+   * Chrome's semantics for the call itself: the addressed context answers, or the request
+   * FAILS with "Receiving end does not exist". It never resolves `undefined` for "nobody
+   * answered", so this promise rejects in that case (`settle` above). A caller that
+   * treated silence as an empty answer would be reporting a delivery that did not happen.
+   *
+   * @returns {{ok: true, requestId: number, promise: Promise<unknown>}|{ok: false, error: string}}
+   */
+  const sendTo = ({ fromKey, targetKey, message }) => {
+    const from = frames.get(fromKey);
+    const target = frames.get(targetKey);
+    if (!from) {
+      return { ok: false, error: "Could not establish connection." };
+    }
+    if (!target || target.extensionId !== from.extensionId) {
+      // Chrome's own answer for an addressable-but-absent receiver, and the same rule
+      // `peersOf` applies: extension scoping is not relaxed for a targeted send.
+      return { ok: false, error: NO_RECEIVER };
+    }
+    const id = nextRequestId++;
+    const sender = { id: from.extensionId, url: from.url };
+    const promise = new Promise((resolve, reject) => {
+      pending.set(id, {
+        expected: new Set([targetKey]),
+        lastResponse: undefined,
+        targeted: true,
+        silent: undefined,
+        resolve,
+        reject,
+      });
+      try {
+        target.send({ kind: "message", payload: { requestId: id, message, sender } });
+      } catch (error) {
+        // The frame vanished as it was being handed the message. That is the same truth
+        // as a leg that dies mid-send: nothing there can answer.
+        failTargeted(id, error.message);
+      }
+    });
+    return { ok: true, requestId: id, promise };
+  };
+
+  /** Ends a targeted request as a failure, with the reason the mesh cannot deliver it. */
+  const failTargeted = (id, reason) => {
+    const req = pending.get(id);
+    if (!req) {
+      return;
+    }
+    pending.delete(id);
+    req.reject(new Error(reason || NO_RECEIVER));
+  };
+
+  /**
+   * The host-side marker for "this context was reached and nothing was listening in it"
+   * (src/main/content-bridge.js turns the app loader's `nr: true` into this). It travels
+   * as a response because that is the only channel a leg has, but it is NOT one: such a
+   * leg settles, so no sender waits for an answer nobody will send, yet it never becomes
+   * the value a peer resolves with, and it must not let a fan-out finish early while other
+   * peers are still thinking. For a targeted send the distinction IS the answer — Chrome
+   * fails that call — which is why the request also records the fact (`silent`).
+   */
+  const isNoReceiver = (response) =>
+    Boolean(response && response.__rozeniteNoReceiver === true);
+
   const resolveDelivery = ({ fromKey, requestId, response }) => {
     const req = pending.get(requestId);
     if (!req || !req.expected.has(fromKey)) {
       return;
     }
     req.expected.delete(fromKey);
+    if (isNoReceiver(response)) {
+      req.silent =
+        (typeof response.error === "string" && response.error) || NO_RECEIVER;
+      settle(requestId);
+      return;
+    }
     req.lastResponse = response;
+    // A real answer outranks a silent leg that arrived first: something did listen.
+    req.silent = undefined;
     settle(requestId);
   };
 
@@ -133,6 +254,11 @@ const createMessageRouter = () => {
     frames.delete(key);
     for (const [id, req] of [...pending]) {
       if (req.expected.delete(key)) {
+        if (req.targeted && req.lastResponse === undefined && req.silent === undefined) {
+          // The one context this request addressed is gone. Chrome's call fails here;
+          // resolving undefined would tell the sender the app had answered nothing.
+          req.silent = `Could not establish connection. "${key}" is no longer reachable.`;
+        }
         settle(id);
       }
     }
@@ -146,7 +272,9 @@ const createMessageRouter = () => {
   return {
     registerFrame,
     unregisterFrame,
+    hasPeers,
     sendMessage,
+    sendTo,
     resolveDelivery,
     connect,
     portPost,
@@ -154,4 +282,4 @@ const createMessageRouter = () => {
   };
 };
 
-module.exports = { createMessageRouter };
+module.exports = { createMessageRouter, NO_RECEIVER };

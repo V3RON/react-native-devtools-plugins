@@ -292,12 +292,15 @@ test("inspectedWindow.tabId is a stable positive int per extension", () => {
   assert.ok(Number.isInteger(tabIdFor("graphql")) && tabIdFor("graphql") > 0);
 });
 
-test("chrome.tabs keeps its shape: events, TAB_ID_NONE, and the honest sendMessage", async () => {
+test("chrome.tabs keeps its shape: events, TAB_ID_NONE, and a sendMessage that cannot lie", async () => {
   const { createTabs } = require("../src/chrome-shim/tabs");
   const tabs = createTabs();
   tabs.onUpdated.addListener(() => {});
   assert.strictEqual(tabs.TAB_ID_NONE, -1);
-  assert.deepStrictEqual(await tabs.sendMessage(1, "hi"), undefined); // no receivers, yet
+  // A context with no route to the app (no `sendToApp` injected) must not resolve
+  // `undefined`: that is the shape of "the page answered nothing". Issue #5 gave the
+  // API a receiver, and the no-receiver case is a failure with a reason.
+  await assert.rejects(() => tabs.sendMessage(1, "hi"), /no route to the inspected target/);
   // The one-tab model itself (query/get/create/update/remove) is tested in
   // tests/tabs.test.js, where its host-backed injections can be faked.
 });

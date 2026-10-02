@@ -86,6 +86,11 @@ module.exports = {
   TABS_OPEN: "tabs-open",
   /** ({handle}) -> closes a window THIS host opened for a created tab. */
   TABS_CLOSE: "tabs-close",
+  /** ({message}) -> delivers to the content script of the CALLING extension running in
+   *  the inspected target, and waits for its answer (issue #5 gave the API a receiver).
+   *  Gated on the frame's `tabs` grant; the target is always this frame's OWN extension's
+   *  app context, so a payload can never name another extension's script. */
+  TABS_SEND_TO_APP: "tabs-send-to-app",
 
   // ── chrome.notifications (docs/features/SMALL-SHIMS.md) ──────────────────────
   /** ({id, title, message, silent}) -> show one system notification for the calling
