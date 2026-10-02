@@ -51,6 +51,7 @@
 // in the messaging mesh is withdrawn rather than left to accumulate undeliverable work.
 const { createEvalInPage } = require("./inspected-window");
 const { decideEntries } = require("./content-gate");
+const { NO_RECEIVER } = require("./message-router");
 const { tabIdFor } = require("../chrome-shim/devtools");
 const { syntheticTab } = require("../chrome-shim/tab-model");
 
@@ -66,6 +67,46 @@ const RESPONSE_WAIT_MS = 5000;
 
 // How often the bridge re-checks whether the app is attached again after a drop.
 const SWEEP_INTERVAL_MS = 4000;
+
+/**
+ * How many passes an injection may stand down for while the extension's OWN background
+ * worker takes its seat in the messaging mesh. Three covers shell startup at the sweep
+ * interval above; after that the runner injects anyway, because a worker that never
+ * registers is the worker's problem, not the content script's, and a script that is
+ * never injected helps nobody either.
+ */
+const MESH_SEAT_PASSES = 3;
+
+/**
+ * Whether a manifest declares a background context: the peer a content script's first
+ * `runtime.sendMessage` is usually aimed at, and the one whose mesh seat is taken during
+ * shell startup rather than during attach — the ordering the live run found unfixed
+ * (docs/features/CONTENT-SCRIPTS.md, "Two things the run showed that the tests could
+ * not"). MV3 answers with `background.service_worker`; MV2 with `background.scripts`.
+ */
+const declaresBackground = (manifest) => {
+  const background = manifest && manifest.background;
+  if (!background || typeof background !== "object") {
+    return false;
+  }
+  if (typeof background.service_worker === "string" && background.service_worker) {
+    return true;
+  }
+  return Array.isArray(background.scripts) && background.scripts.length > 0;
+};
+
+/**
+ * What an app-side `sendMessage` answers when the mesh has nobody to receive it: Chrome's
+ * own failure text — because the injected loader turns this into `runtime.lastError` and a
+ * rejected promise — plus the reason only THIS shell knows. Never `undefined`: that value
+ * is this host's own for "a listener answered nothing" and must stay that way, or a lost
+ * message reads as a plausible success.
+ */
+const noReceiverReason = (extensionId) =>
+  `${NO_RECEIVER} The inspected app asked "${extensionId}" to answer, but no other context ` +
+  "of that extension is registered in the messaging mesh, so nothing can receive this " +
+  "message. Its background worker or panel has not taken its seat yet (the worker " +
+  "registers while the shell starts up; injection runs when a debugger session attaches).";
 
 /**
  * The app-side loader. Pure string generation: nothing in this function runs in this
@@ -330,15 +371,66 @@ const loaderSource = ({
       reload: function () {},
       getBackgroundPage: function () { return undefined; }
     };
-    Object.defineProperty(api, "lastError", { get: function () { return host.lastError; } });
+    // Enumerable on purpose: the merges below copy members with a "for (var key in ...)"
+    // loop, so a non-enumerable accessor here would silently leave lastError OFF the object
+    // a script actually holds — and every failure would then read to it as no failure.
+    Object.defineProperty(api, "lastError", {
+      get: function () { return host.lastError; },
+      enumerable: true,
+      configurable: true
+    });
     return api;
+  }
+
+  /**
+   * Copy ONE member, keeping an accessor an accessor.
+   *
+   * Two failure modes this prevents, both measured:
+   *   - READING an app-owned getter in order to copy it runs page code during injection,
+   *     so one hostile or plain-uncooperative page getter used to abort the whole
+   *     injection, and a getter that reports live state used to be frozen at whatever it
+   *     returned at injection time;
+   *   - the loader's OWN lastError, copied flat, became a permanent null — and every
+   *     failure this host reports would then reach a script looking exactly like a silent
+   *     success, which is the ambiguity this layer exists to remove.
+   * The copy stays live AND keeps the page's own receiver, which is what its getter expects.
+   */
+  function defineMember(target, source, key) {
+    var descriptor = Object.getOwnPropertyDescriptor(source, key);
+    if (descriptor && (descriptor.get || descriptor.set)) {
+      var targetObject = source;
+      var getter = descriptor.get;
+      var setter = descriptor.set;
+      Object.defineProperty(target, key, {
+        get: getter ? function () { return getter.call(targetObject); } : undefined,
+        set: setter ? function (value) { return setter.call(targetObject, value); } : undefined,
+        configurable: true,
+        enumerable: true
+      });
+      return;
+    }
+    target[key] = source[key];
+  }
+
+  /**
+   * Does this object already carry this member? Asked WITHOUT reading it: a plain
+   * "target[key]" runs a page getter, which is the crash the note above is about. A page
+   * whose property descriptor cannot even be read is treated as having the member, so the
+   * loader keeps its hands off it.
+   */
+  function hasMember(target, key) {
+    try {
+      return Object.getOwnPropertyDescriptor(target, key) !== undefined;
+    } catch (ignored) {
+      return true;
+    }
   }
 
   function mergeInto(target, additions) {
     for (var key in additions) {
       if (!Object.prototype.hasOwnProperty.call(additions, key)) continue;
-      if (target[key] === undefined) {
-        try { target[key] = additions[key]; } catch (ignored) {}
+      if (!hasMember(target, key)) {
+        try { defineMember(target, additions, key); } catch (ignored) {}
       }
     }
     return target;
@@ -355,9 +447,9 @@ const loaderSource = ({
   function mergeOwn(target, additions, bucket) {
     for (var key in additions) {
       if (!Object.prototype.hasOwnProperty.call(additions, key)) continue;
-      if (target[key] === undefined) {
+      if (!hasMember(target, key)) {
         try {
-          target[key] = additions[key];
+          defineMember(target, additions, key);
           installedKeys[bucket].push(key);
         } catch (ignored) {}
       }
@@ -381,12 +473,15 @@ const loaderSource = ({
     var runtime = {};
     for (var key in base) {
       if (!Object.prototype.hasOwnProperty.call(base, key) || key === "runtime") continue;
-      if (!isOwn("root", key)) merged[key] = base[key];
+      if (!isOwn("root", key)) defineMember(merged, base, key);
     }
     if (baseRuntime) {
       for (var member in baseRuntime) {
         if (!Object.prototype.hasOwnProperty.call(baseRuntime, member) || isOwn("runtime", member)) continue;
-        runtime[member] = baseRuntime[member];
+        // Copying a member the APP owns means copying what it IS, not what it returns at
+        // this instant: an accessor has to stay an accessor, or the script reads a frozen
+        // snapshot of it. (Reading a page-owned getter to copy it is also the crash.)
+        defineMember(runtime, baseRuntime, member);
       }
     }
     mergeInto(runtime, runtimeApi(ch));
@@ -596,6 +691,29 @@ const createContentBridge = ({
   /** extensionId -> Map(app port id ⇄ router port id) */
   const appPorts = new Map();
   /**
+   * extensionId -> what the CURRENT app context has already been evaluated into it, keyed
+   * by the same notion of "fresh context" everything above uses. Re-running a script the
+   * context already ran is NOT idempotent from the app's point of view: the runner's own
+   * verdicts are, a third-party script's side effects are not. It lives here rather than
+   * in the per-pass record below because that record is rebuilt on every pass by design,
+   * and a pass must not forget what the app context already has (docs/features/
+   * CONTENT-SCRIPTS.md, "The same entry is injected several times per live session").
+   */
+  const evaluated = new Map();
+  /**
+   * extensionId -> how many passes have stood down waiting for this extension's own
+   * background worker to take its mesh seat (see `injectExtension`). Bounded so a worker
+   * that never registers cannot keep a content script out of the app forever.
+   */
+  const seatWaits = new Map();
+  /** What one entry IS, as a value: its files and their contents, not an object identity. */
+  const injectionKeyOf = (entry) =>
+    JSON.stringify({
+      js: (entry.sources || []).map((source) => [source.innerPath, source.source]),
+      css: (entry.css || []).slice(),
+    });
+
+  /**
    * "Which app context is this?" — the bridge has no generation counter of its own, so
    * it counts the context notifications the fan-out shows it. A changed epoch means the
    * backend has a fresh context, and a fresh context has no binding handler installed
@@ -706,7 +824,14 @@ const createContentBridge = ({
     }
   };
 
-  /** The app context as a mesh member: panel ⇄ worker ⇄ app is the ONE router. */
+  /**
+   * The app context as a mesh member: panel ⇄ worker ⇄ app is the ONE router.
+   *
+   * The seat is taken BEFORE the extension's script is evaluated, not after: a content
+   * script that calls `runtime.sendMessage` from its first statement is talking through
+   * this seat, and a mesh that does not know the seat yet cannot answer it (nor route a
+   * `tabs.sendMessage` to a context whose loader has just been installed).
+   */
   const registerAppFrame = (extensionId) => {
     if (!router) return;
     router.registerFrame({
@@ -723,13 +848,24 @@ const createContentBridge = ({
     state.set(extensionId, { ...record, frameRegistered: true });
   };
 
-  /** Retire an extension's app-side state and withdraw its mesh seat. */
+  /**
+   * Retire an extension's app-side state and withdraw its mesh seat. Called when the app
+   * context is gone or just proved it cannot be reached, so what it had been evaluated
+   * into goes with it — that is the one claim about "did this context ever run this
+   * script" that is not a bookkeeping guess, so this is where the dedupe record is
+   * dropped, and the next pass injects again.
+   */
   const withdraw = (extensionId, why) => {
     const record = state.get(extensionId) || {};
-    if (record.frameRegistered && router) {
+    // Unconditional: `rozenite-app:<id>` is a key this bridge owns alone and the router's
+    // `unregisterFrame` is idempotent, so retirement must not depend on a per-pass flag
+    // that a fresh decision pass legitimately rebuilds (a seat that outlives the script it
+    // stands for is the one thing here that must never happen).
+    if (router) {
       router.unregisterFrame(appFrameKey(extensionId));
     }
     appPorts.delete(extensionId);
+    evaluated.delete(extensionId);
     state.set(extensionId, {
       ...record,
       injected: false,
@@ -841,6 +977,16 @@ const createContentBridge = ({
         }
         if (!state.get(extensionId).injected) {
           await answerApp(extensionId, envelope.s, undefined, "this extension is not injected");
+          return;
+        }
+        // Ask the mesh BEFORE sending, because `sendMessage` cannot tell the app the
+        // difference afterwards: with no peers it resolves `undefined`, which is the one
+        // value this host reserves for "a listener answered nothing" (and which the
+        // injected loader therefore reports as `{response: undefined, lastError: null}`).
+        // A script that sends in the same tick it is injected used to lose that message
+        // inside exactly that ambiguity; now it hears Chrome's own connection failure.
+        if (!router.hasPeers(key)) {
+          await answerApp(extensionId, envelope.s, undefined, noReceiverReason(extensionId));
           return;
         }
         const response = await router.sendMessage({ fromKey: key, message: envelope.m });
@@ -1007,12 +1153,11 @@ const createContentBridge = ({
     const allowed = entries.filter((entry) => entry.decision.allowed && !entry.unreadable);
     if (allowed.length === 0) {
       const blocked = entries.find((entry) => entry.decision.allowed && entry.unreadable);
-      state.set(extensionId, {
-        ...state.get(extensionId),
-        lastError: blocked
-          ? (blocked.problems || []).join("; ")
-          : "nothing allowlisted",
-      });
+      const why = blocked ? (blocked.problems || []).join("; ") : "nothing allowlisted";
+      // Anything this app context was given is no longer allowed here, so the seat goes
+      // with it: `tabTarget` must never keep addressing a script this pass declined to run.
+      withdraw(extensionId, why);
+      state.set(extensionId, { ...state.get(extensionId), pending: false });
       return state.get(extensionId);
     }
     if (!isAttached()) {
@@ -1034,8 +1179,55 @@ const createContentBridge = ({
       return state.get(extensionId);
     }
 
-    let injectedAny = false;
+    // The seat is taken BEFORE the script goes in, so a script that sends from its first
+    // statement is already a mesh member when it does — see `registerAppFrame`.
+    registerAppFrame(extensionId);
+    const generation = bindingGeneration();
+
+    // A `runtime.sendMessage` from a content script's first statement is aimed at this
+    // extension's own background worker, and the worker takes its mesh seat while the
+    // shell starts up, which is the same window attach-time injection happens in. The
+    // order was never fixed, so the message was lost — and used to look like an answered
+    // send (above: `hasPeers`). Standing down until the worker exists is what makes the
+    // common case work; after MESH_SEAT_PASSES passes the runner injects anyway, because
+    // a worker that never registers is the worker's business, not the script's.
+    if (router && declaresBackground(manifest) && !router.hasPeers(appFrameKey(extensionId))) {
+      const waited = seatWaits.get(extensionId) || 0;
+      if (waited < MESH_SEAT_PASSES) {
+        seatWaits.set(extensionId, waited + 1);
+        const why =
+          "its own background worker has no seat in the messaging mesh yet, so a message sent " +
+          `from the script's first statement could not be answered (waiting ${waited + 1} of ` +
+          `${MESH_SEAT_PASSES} passes; the sweeper re-runs injection)`;
+        withdraw(extensionId, why);
+        state.set(extensionId, { ...state.get(extensionId), pending: true, lastError: why });
+        line(`${extensionId}: deferred — ${why}`);
+        return state.get(extensionId);
+      }
+      line(
+        `${extensionId}: injecting anyway — its background worker is still not in the messaging ` +
+          `mesh after ${MESH_SEAT_PASSES} passes`
+      );
+    }
+    seatWaits.delete(extensionId);
+
+    const already = evaluated.get(extensionId);
+    const seen = new Set(already && already.generation === generation ? [...already.seen] : []);
     for (const entry of allowed) {
+      const key = injectionKeyOf(entry);
+      if (generation !== null && seen.has(key)) {
+        // One entry, one evaluation per app context. The verdicts of `refresh()` are
+        // idempotent; the script's OWN side effects are not, and this is the third run of
+        // the same source in the same context the live run counted (docs/features/
+        // CONTENT-SCRIPTS.md). Reported as injected because the context IS running it.
+        entry.injected = true;
+        entry.injectError = null;
+        entry.skipped = "already evaluated into this app context";
+        line(`${extensionId}[${entry.index}]: ${(entry.sources || [])
+          .map((source) => source.innerPath)
+          .join(", ")} is already evaluated into this app context — not evaluated twice`);
+        continue;
+      }
       const expression = injectionExpression({
         extensionId,
         innerPaths: (entry.sources || []).map((source) => source.innerPath),
@@ -1046,7 +1238,7 @@ const createContentBridge = ({
       entry.injected = outcome.ok;
       entry.injectError = outcome.ok ? null : outcome.error;
       if (outcome.ok) {
-        injectedAny = true;
+        seen.add(key);
         line(`${extensionId}[${entry.index}]: injected ${(entry.sources || [])
           .map((source) => source.innerPath)
           .join(", ")}`);
@@ -1055,14 +1247,19 @@ const createContentBridge = ({
         state.set(extensionId, { ...state.get(extensionId), lastError: outcome.error });
       }
     }
-    if (injectedAny) {
+    if (seen.size > 0) {
       registerAppFrame(extensionId);
+      evaluated.set(extensionId, { generation, seen });
       state.set(extensionId, {
         ...state.get(extensionId),
         injected: true,
         pending: false,
         lastError: null,
       });
+    } else {
+      // Nothing is running in there, so the seat just taken must not stay behind to
+      // receive traffic the app has no loader to answer.
+      withdraw(extensionId, state.get(extensionId).lastError || "no script could be evaluated into the app");
     }
     return state.get(extensionId);
   };
@@ -1152,6 +1349,9 @@ const createContentBridge = ({
         code: (entry.decision && entry.decision.code) || null,
         injected: entry.injected === true,
         injectError: entry.injectError || null,
+        // Set when this pass did NOT evaluate the entry because this app context is
+        // already running it: the honest difference between "injected" and "injected again".
+        skipped: entry.skipped || null,
         reasons: (entry.decision && entry.decision.reasons) || [],
         notes: (entry.decision && entry.decision.notes) || [],
         problems: entry.problems || [],

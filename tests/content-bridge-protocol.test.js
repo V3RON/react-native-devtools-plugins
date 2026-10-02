@@ -143,7 +143,8 @@ function makeWorld(options = {}) {
   const router = createMessageRouter();
   const logs = [];
   const found = options.found || [fixture("ext-a")];
-  const reader = readerFor(options.sources || { "content.js": "globalThis.hooked = true;" });
+  const sources = options.sources || { "content.js": "globalThis.hooked = true;" };
+  const reader = readerFor(sources);
   const bridge = createContentBridge({
     sendCommand: backend.sendCommand,
     onEvent: backend.onEvent,
@@ -187,7 +188,15 @@ function makeWorld(options = {}) {
       answer: ({ requestId, response }) => router.resolveDelivery({ fromKey: key, requestId, response }),
     };
   };
-  return { backend, router, bridge, logs, makePanel };
+  return {
+    backend,
+    router,
+    bridge,
+    logs,
+    /** What the fake reader serves for a declared inner path; assign to change the bytes. */
+    sources,
+    makePanel,
+  };
 }
 
 const injectedExpressions = (world) =>
@@ -503,8 +512,9 @@ test("a malformed or hostile binding payload cannot break the host", async () =>
     true,
     "nothing reached Object.prototype"
   );
-  // The oversized send DID reach the router: it is a legitimate message, and the mesh
-  // settles a leg with no receiver rather than hanging.
+  // The oversized send IS a legitimate message and reaches the mesh. There is no peer of
+  // ext-a in this world, so the honest answer is the connection failure below — one
+  // answer either way, never silence.
   await settleApp();
   const answers = dispatched(world).filter((e) => e.t === "response");
   assert.strictEqual(answers.length, 1);
@@ -780,3 +790,200 @@ test("an extension's own report about a sibling extension is refused", async () 
   assert.match(world.logs.join("\n"), /claiming unknown extension "not-scanned"/);
   world.bridge.dispose();
 });
+
+// ── defect 1: a lost send must not look like an answered one ────────────────────
+// Observed on a device: a content script that sends in the same tick it is injected
+// usually loses the message, and the app's own callback reported
+// `{"response":undefined,"lastError":null}` — the exact shape this host reserves for "a
+// listener answered nothing" (docs/features/CONTENT-SCRIPTS.md, "Two things the run
+// showed that the tests could not"). The loader half (an `e` envelope really becoming
+// `lastError` + a rejected promise) is asserted in tests/content-loader.test.js; what is
+// asserted here is that the host SENDS that envelope.
+test("an app send the mesh cannot deliver is Chrome's connection failure, not undefined", async () => {
+  const world = makeWorld({ allowlist: ALL_RN_TARGETS });
+  await world.bridge.attach();
+  // Nothing else of ext-a exists: not a worker, not a panel. The app is alone in the mesh.
+  await world.bridge.onBindingCalled(
+    binding({ t: "send", x: "ext-a", s: "ext-a#1", m: { from: "first statement" } })
+  );
+  await settleApp();
+  const [answer] = dispatched(world).filter((e) => e.t === "response");
+  assert.strictEqual(answer.s, "ext-a#1", "the app's own sequence id, so its callback settles");
+  assert.strictEqual(
+    "m" in answer,
+    false,
+    "no response value is claimed: `undefined` belongs to a listener that answered nothing"
+  );
+  assert.match(String(answer.e), /Could not establish connection\. Receiving end does not exist\./);
+  assert.match(String(answer.e), /messaging mesh/);
+  assert.match(String(answer.e), /ext-a/);
+  world.bridge.dispose();
+});
+
+test("the race shape: the same send fails honestly before a peer exists and works after", async () => {
+  const world = makeWorld({ allowlist: ALL_RN_TARGETS });
+  await world.bridge.attach();
+
+  // 1. Injection happened; the extension's other context has not registered yet. This is
+  //    the observed race (worker seat taken during shell startup, injection at attach).
+  await world.bridge.onBindingCalled(binding({ t: "send", x: "ext-a", s: "ext-a#1", m: { n: 1 } }));
+  await settleApp();
+  const lost = dispatched(world).find((e) => e.t === "response" && e.s === "ext-a#1");
+  assert.ok(lost.e, "the lost send is reported as a failure");
+
+  // 2. The peer arrives — an ordinary frame, the way RUNTIME_REGISTER makes one.
+  const peer = world.makePanel("ext-a", "worker");
+  peer.setResponder(({ message, requestId }) => {
+    world.router.resolveDelivery({
+      fromKey: peer.key,
+      requestId,
+      response: { got: message.n },
+    });
+  });
+  await world.bridge.onBindingCalled(binding({ t: "send", x: "ext-a", s: "ext-a#2", m: { n: 2 } }));
+  await settleApp();
+  const answered = dispatched(world).find((e) => e.t === "response" && e.s === "ext-a#2");
+  assert.deepStrictEqual(answered.m, { got: 2 }, "a delivered send still resolves normally");
+  assert.strictEqual("e" in answered, false, "and carries no error");
+  assert.strictEqual(peer.received.length, 1, "the peer really was addressed");
+  world.bridge.dispose();
+});
+
+test("a listener that genuinely answers nothing still resolves undefined, error-free", async () => {
+  const world = makeWorld({ allowlist: ALL_RN_TARGETS });
+  await world.bridge.attach();
+  const panel = world.makePanel();
+  panel.setResponder(({ requestId }) => {
+    // Reached, and answered nothing: the ONE case `undefined` means in this host.
+    world.router.resolveDelivery({ fromKey: panel.key, requestId, response: undefined });
+  });
+  await world.bridge.onBindingCalled(binding({ t: "send", x: "ext-a", s: "ext-a#1", m: { n: 1 } }));
+  await settleApp();
+  const [answer] = dispatched(world).filter((e) => e.t === "response");
+  assert.strictEqual(answer.s, "ext-a#1");
+  assert.strictEqual("e" in answer, false, "no error is invented for a real, empty answer");
+  assert.strictEqual(answer.m, undefined);
+  world.bridge.dispose();
+});
+
+// ── defect 1b: ordering the worker's seat before injection ──────────────────────
+test("an extension's script waits for its own worker's mesh seat, and injects once it exists", async () => {
+  const world = makeWorld({
+    allowlist: ALL_RN_TARGETS,
+    readManifest: () => ({ name: "Fixture", background: { service_worker: "worker.js" } }),
+  });
+  const report = await world.bridge.attach();
+  assert.strictEqual(report[0].injected, false);
+  assert.strictEqual(report[0].pending, true, "picked up by the next pass, not forgotten");
+  assert.match(report[0].lastError, /background worker has no seat in the messaging mesh/);
+  assert.deepStrictEqual(injectedExpressions(world), [], "the script never went into the app");
+  assert.match(world.logs.join("\n"), /deferred — its own background worker has no seat/);
+
+  // The worker takes its seat, exactly the way RUNTIME_REGISTER hands one to a real frame.
+  const worker = world.makePanel("ext-a", "worker");
+  worker.setResponder(({ requestId }) => {
+    world.router.resolveDelivery({ fromKey: worker.key, requestId, response: "from the worker" });
+  });
+  const after = await world.bridge.refresh();
+  assert.strictEqual(after[0].injected, true);
+  assert.strictEqual(after[0].pending, false);
+  assert.strictEqual(injectedExpressions(world).length, 1, "and it went in exactly once");
+
+  // The whole point: a send from the script's first statement now reaches the worker.
+  await world.bridge.onBindingCalled(
+    binding({ t: "send", x: "ext-a", s: "ext-a#1", m: { marker: "IMMEDIATE" } })
+  );
+  await settleApp();
+  const answer = dispatched(world).find((e) => e.t === "response");
+  assert.strictEqual(answer.m, "from the worker");
+  assert.strictEqual("e" in answer, false);
+  world.bridge.dispose();
+});
+
+test("waiting for the worker is bounded: the script is injected anyway rather than never", async () => {
+  const world = makeWorld({
+    allowlist: ALL_RN_TARGETS,
+    readManifest: () => ({ name: "Fixture", background: { scripts: ["worker.js"] } }),
+  });
+  await world.bridge.attach(); // pass 1
+  await world.bridge.refresh(); // pass 2
+  await world.bridge.refresh(); // pass 3
+  assert.deepStrictEqual(injectedExpressions(world), [], "the wait is a wait, not an instant give-up");
+  const last = await world.bridge.refresh(); // pass 4: past the bound
+  assert.strictEqual(last[0].injected, true, "a worker that never registers cannot keep the script out");
+  assert.match(world.logs.join("\n"), /injecting anyway — its background worker is still not/);
+  assert.strictEqual(injectedExpressions(world).length, 1);
+  world.bridge.dispose();
+});
+
+// ── defect 2: one entry, one evaluation per app context ─────────────────────────
+// The live run counted ~4 evaluations of one entry per session. `refresh()`'s verdicts
+// really are idempotent and the loader's merge-not-replace really did keep one listener —
+// but a re-evaluated script's OWN side effects are not idempotent from the app's view.
+test("one entry is evaluated once per app context, however many passes run", async () => {
+  const world = makeWorld({ allowlist: ALL_RN_TARGETS });
+  await world.bridge.attach();
+  await world.bridge.refresh();
+  const report = await world.bridge.refresh();
+  assert.strictEqual(injectedExpressions(world).length, 1, "no second Runtime.evaluate carried the script");
+  assert.strictEqual(report[0].injected, true, "and the report still says the app is running it");
+  assert.strictEqual(report[0].entries[0].injected, true);
+  assert.match(report[0].entries[0].skipped, /already evaluated into this app context/);
+  assert.match(world.logs.join("\n"), /is already evaluated into this app context — not evaluated twice/);
+  world.bridge.dispose();
+});
+
+test("a fresh app context is a fresh evaluation: the dedupe does not survive a new generation", async () => {
+  const world = makeWorld({ allowlist: ALL_RN_TARGETS });
+  await world.bridge.attach();
+  await world.bridge.refresh();
+  assert.strictEqual(injectedExpressions(world).length, 1);
+
+  world.backend.emit("Runtime.executionContextsCleared", {});
+  await settleApp();
+  assert.ok(
+    injectedExpressions(world).length >= 2,
+    "the recreated context has no loader, so the script goes in again"
+  );
+  assert.match(world.logs.join("\n"), /injected content\.js/);
+  const report = world.bridge.report()[0];
+  assert.strictEqual(report.injected, true);
+  assert.strictEqual(report.entries[0].skipped, null, "this pass really did evaluate it");
+  world.bridge.dispose();
+});
+
+test("an entry whose sources changed is evaluated again, even in the same context", async () => {
+  const world = makeWorld({ allowlist: ALL_RN_TARGETS });
+  await world.bridge.attach();
+  await world.bridge.refresh();
+  // Same extension, same context, different bytes: the old script must not be what stays
+  // running because a dedupe record said "already evaluated".
+  world.sources["content.js"] = "globalThis.hooked = 'second version';";
+  const report = await world.bridge.refresh();
+  assert.strictEqual(injectedExpressions(world).length, 2, "the new source went in");
+  assert.match(injectedExpressions(world)[1], /second version/);
+  assert.strictEqual(report[0].entries[0].skipped, null);
+  world.bridge.dispose();
+});
+
+test("an entry the gate stops mid-life stops being addressed, even though it once ran", async () => {
+  // A parsed allowlist the test can empty, so the NEXT pass really declines what the last
+  // one allowed — the case a dedupe record could otherwise get wrong.
+  const gate = { ids: ["ext-a"], tokens: ["ext-a"], allRnTargets: false, invalid: [] };
+  const world = makeWorld({ allowlist: gate });
+  await world.bridge.attach();
+  assert.strictEqual(world.bridge.tabTarget({ extensionId: "ext-a" }).ok, true);
+
+  gate.ids = [];
+  gate.tokens = [];
+  const report = await world.bridge.refresh();
+  assert.strictEqual(report[0].injected, false);
+  const target = world.bridge.tabTarget({ extensionId: "ext-a" });
+  assert.strictEqual(target.ok, false, "a script this pass declined to allow is not a receiver");
+  assert.match(target.error, /nothing allowlisted/);
+  const panel = world.makePanel();
+  await world.router.sendMessage({ fromKey: panel.key, message: { hi: 1 } });
+  assert.strictEqual(panel.received.length, 0, "and the mesh no longer knows the app's seat");
+  world.bridge.dispose();
+});
+

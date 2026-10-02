@@ -128,6 +128,75 @@ test("merge, not replace: an app that already owns global.chrome keeps what it h
   assert.strictEqual(app.json("typeof chrome.runtime.onMessage"), "object");
 });
 
+test("an app-owned accessor is copied as an accessor, not read flat", () => {
+  // Two real failure modes this prevented. A throwing page getter used to crash the
+  // wrapper build (forExtension threw, so the extension's script never ran at all); a
+  // live page getter used to be read ONCE and frozen, so a page that reports state
+  // through `chrome.someFlag` showed the value it had at injection time forever.
+  const app = makeApp();
+  app.evaluate(`
+    globalThis.__pageState = "before";
+    globalThis.chrome = {
+      get liveFlag() { return globalThis.__pageState; },
+      get guarded() { throw new Error("the page refuses to answer this"); },
+    };
+  `);
+  app.install("ext-a", ["a.js"], "globalThis.sawLive = chrome.liveFlag;");
+  assert.strictEqual(app.json("globalThis.sawLive"), "before", "the getter ran, in the script's own view");
+
+  const view = `globalThis[${JSON.stringify(DISPATCH_GLOBAL)}].forExtension("ext-a", globalThis.chrome)`;
+  assert.strictEqual(
+    app.json(`(function () { globalThis.__pageState = "after"; return ${view}.liveFlag; })()`),
+    "after",
+    "and it still reads live on the next build: nothing was snapshotted"
+  );
+  assert.strictEqual(
+    app.json(`typeof Object.getOwnPropertyDescriptor(${view}, "guarded").get`),
+    "function",
+    "a throwing page getter is preserved as the accessor it is, not read during the copy"
+  );
+});
+
+test("the app's own chrome.runtime.lastError accessor is not flattened by the merge", () => {
+  // `lastError` only means something as a getter. Flattened, every failure this host
+  // reports would reach a script as `null` — that is, as a success — so the shape that
+  // carries the honesty is asserted here, on both sides of the merge.
+  const app = makeApp();
+  app.evaluate(`
+    globalThis.__err = null;
+    globalThis.chrome = { runtime: { get lastError() { return globalThis.__err; }, id: "app" } };
+  `);
+  app.install("ext-a", ["a.js"], "1;");
+  assert.strictEqual(app.json("chrome.runtime.id"), "app", "the app's runtime still wins");
+  app.evaluate(`globalThis.__err = { message: "from the page" };`);
+  assert.strictEqual(
+    app.json("chrome.runtime.lastError.message"),
+    "from the page",
+    "and reads live, which is only true if the merge did not read it flat"
+  );
+});
+
+test("the injected chrome.runtime.lastError stays a getter after the merge", () => {
+  const app = makeApp();
+  app.install("ext-a", ["a.js"], "1;");
+  assert.strictEqual(
+    app.json(`typeof Object.getOwnPropertyDescriptor(chrome.runtime, "lastError").get`),
+    "function",
+    "the member the global has is the accessor the loader owns, not a copied null"
+  );
+  // What that buys the script: the host reporting "nobody can receive this" really does
+  // raise lastError inside the callback (the flat copy made every failure read as null).
+  app.evaluate(`
+    globalThis.seen = "unset";
+    chrome.runtime.sendMessage({ping: 1}, function () {
+      globalThis.seen = chrome.runtime.lastError ? chrome.runtime.lastError.message : null;
+    });
+  `);
+  const sent = envelopes(app).find((e) => e.t === "send");
+  app.dispatch(JSON.stringify({ t: "response", x: "ext-a", s: sent.s, e: "Could not establish connection. Receiving end does not exist." }));
+  assert.strictEqual(app.json("globalThis.seen"), "Could not establish connection. Receiving end does not exist.");
+});
+
 test("a second script in the same context does not clobber the first, and keeps its own id", () => {
   const app = makeApp();
   app.install("ext-a", ["a.js"], "globalThis.aSawId = chrome.runtime.id;");
@@ -294,6 +363,63 @@ test("a throwing listener is reported and does not stop the other listeners", ()
   const reports = envelopes(app).filter((e) => e.t === "report");
   assert.deepStrictEqual(reports.map((e) => e.k), ["listener-threw"]);
   assert.match(reports[0].d, /boom/);
+});
+
+test("the host's \"no receiver\" arrives as lastError + a rejected promise, not an empty answer", async () => {
+  // The app-visible half of the lost-send defect: the live run's fixture reported
+  // `{"response":undefined,"lastError":null}` for a message nobody received, because the
+  // host answered with the value it reserves for "a listener answered nothing". Once the
+  // host says it honestly (src/main/content-bridge.js), THIS is what the script sees.
+  const app = makeApp();
+  app.install(
+    "ext-a",
+    ["a.js"],
+    `globalThis.reported = "unset"; globalThis.rejected = "unset";
+     chrome.runtime.sendMessage({from: "first statement"}, function (response) {
+       globalThis.reported = JSON.stringify({
+         response: response === undefined ? "<undefined>" : response,
+         lastError: chrome.runtime.lastError ? chrome.runtime.lastError.message : null,
+       });
+     });`
+  );
+  const sent = envelopes(app)[0];
+  app.dispatch(
+    JSON.stringify({
+      t: "response",
+      x: "ext-a",
+      s: sent.s,
+      e: "Could not establish connection. Receiving end does not exist. No other context…",
+    })
+  );
+  const reported = app.json("globalThis.reported");
+  assert.match(reported, /"lastError":"Could not establish connection\. Receiving end does not exist/);
+  assert.match(reported, /"response":"<undefined>"/);
+
+  // Promise form, with no callback: the same failure rejects rather than resolving.
+  const other = makeApp();
+  other.install(
+    "ext-b",
+    ["b.js"],
+    `chrome.runtime.sendMessage({from: "first statement"}).then(
+       function (v) { globalThis.outcome = ["resolved", String(v)]; },
+       function (error) { globalThis.outcome = ["rejected", String(error.message)]; });`
+  );
+  const envelope = other.sent.map((t) => JSON.parse(t)).find((e) => e.t === "send");
+  other.dispatch(
+    JSON.stringify({
+      t: "response",
+      x: "ext-b",
+      s: envelope.s,
+      e: "Could not establish connection. Receiving end does not exist.",
+    })
+  );
+  // A promise reaction is a microtask, so it needs the host's stack to unwind first —
+  // the same reason the timeout test below polls instead of reading straight away.
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepStrictEqual(other.json("globalThis.outcome"), [
+    "rejected",
+    "Could not establish connection. Receiving end does not exist.",
+  ]);
 });
 
 // ── binary + oversized payloads ───────────────────────────────────────────────

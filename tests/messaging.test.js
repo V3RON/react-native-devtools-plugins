@@ -49,6 +49,25 @@ function makeWorld() {
 
 const tick = () => new Promise((r) => setImmediate(r));
 
+// The router cannot tell a sender "no peers" from "peers answered nothing" — both come
+// back `undefined` — so a sender that needs the difference asks first. The app-side
+// sender (src/main/content-bridge.js, an injected content script's sendMessage) does.
+test("router.hasPeers: false for a lone frame, true once a peer of one extension exists", async () => {
+  const { router, addFrame } = makeWorld();
+  addFrame("1:1", "ext-a");
+  assert.strictEqual(router.hasPeers("1:1"), false, "nobody else of ext-a is registered");
+  assert.strictEqual(router.hasPeers("no-such-frame"), false, "and an unknown sender has no peers");
+
+  addFrame("1:2", "ext-a");
+  assert.strictEqual(router.hasPeers("1:1"), true, "a peer of the same extension counts");
+
+  addFrame("2:1", "ext-b");
+  assert.strictEqual(router.hasPeers("2:1"), false, "another extension is not a peer");
+
+  router.unregisterFrame("1:2");
+  assert.strictEqual(router.hasPeers("1:1"), false, "and the count goes back down when it goes");
+});
+
 test("sendMessage: sync sendResponse round-trip (callback + promise)", async () => {
   const { addFrame } = makeWorld();
   const panel = addFrame("1:1", "ext-a");
