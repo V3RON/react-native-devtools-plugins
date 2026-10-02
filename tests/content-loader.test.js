@@ -448,6 +448,13 @@ test("an unaddressed send carries no target, and self-addressing changes nothing
   assert.strictEqual("to" in sent[0], false, "unaddressed: no target claimed");
   assert.strictEqual(sent[0].m.hi, 1, "and the message is the message");
   assert.deepStrictEqual(sent[1], { t: "send", x: "ext-a", s: "ext-a#2", m: { hi: 2 }, to: "ext-a" });
+
+  // A lone string argument is Chrome's MESSAGE, not an address — the reason the loader only
+  // reads a target when a second argument follows it.
+  app.evaluate(`chrome.runtime.sendMessage("just a message");`);
+  const bare = envelopes(app)[2];
+  assert.strictEqual("to" in bare, false, "a single string is the payload");
+  assert.strictEqual(bare.m, "just a message");
 });
 
 // Chrome's connect(connectInfo) vs connect(extensionId, connectInfo): a string first

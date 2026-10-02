@@ -63,6 +63,15 @@
   is not — with `status` and `windowId` left absent rather than guessed. That is **one tab
   standing in for a whole browser**: there is no tab strip, no window model, and no second
   tab, so a `windowId`/`groupId`/`title` query filter matches nothing by design.
+- **A content script cannot message a DIFFERENT extension.** Chrome allows
+  `runtime.sendMessage(extensionId, …)` / `connect(extensionId, …)` when the target declares
+  `externally_connectable`. Here a foreign target id is refused with Chrome's own connection
+  failure, naming the extension that was being asked — because that grant matches a **page
+  origin** against the target's declared `matches`, and an RN target has no URL to match, so
+  the grant has nothing to evaluate against. Addressing your own extension id still works.
+  Refusing is also the alternative to the failure this replaced: the loader used to *drop*
+  the target id, so the message reached the **sender's own** worker and panels, and an answer
+  from them looked exactly like the addressee replying.
 - **`chrome.tabs.sendMessage` delivers only to a script that was opted in.** Its receiver is
   this extension's own content script inside the inspected app
   ([features/CONTENT-SCRIPTS.md](features/CONTENT-SCRIPTS.md), issue #5), and no script is
