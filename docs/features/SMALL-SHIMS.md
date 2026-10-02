@@ -93,13 +93,17 @@ never clicked was created — is a side effect no extension asked this host for,
 user cannot take it back. Whichever policy is set, the Tab descriptor says what really
 happened, so nothing is claimed that did not occur.
 
-**`tabs.sendMessage` is not wired to the extension's own messaging, on purpose.** There is
-no content-script context to deliver to ([CONTENT-SCRIPTS.md](CONTENT-SCRIPTS.md) is the
-next layer, issue #5). Routing it through `runtime.sendMessage` would let an extension
-message *itself* and read the success as a page having answered — exactly the false
-positive a devtools extension would then trust. So it resolves `undefined`, once per
-context with the reason in the console. Chrome's own answer here is a connection error;
-that difference is a stated deviation rather than a claim of success.
+**`tabs.sendMessage` goes to the app, and only to a script that was opted in.** Its receiver
+is this extension's own content script inside the inspected target
+([CONTENT-SCRIPTS.md](CONTENT-SCRIPTS.md), issue #5), which exists only when
+`DEVTOOLS_CONTENT_SCRIPTS` names the extension — so by default the call **fails** with the
+reason, as a rejected promise and through `runtime.lastError`. It is deliberately *not*
+routed through `runtime.sendMessage`: that would let an extension message *itself* and read
+the success as a page having answered, the exact false positive a devtools extension would
+then trust. Nor does a resolved `undefined` stand in for silence — a context that reports
+"nothing is listening in here" fails the call, Chrome-style, and `undefined` is reserved for
+a listener that genuinely answered nothing. A tab this shell opened is a real tab id with no
+content script in it, and says so instead of pretending the message landed.
 
 ## `chrome.notifications`
 

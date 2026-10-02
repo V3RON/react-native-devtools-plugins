@@ -58,14 +58,16 @@
   is not — with `status` and `windowId` left absent rather than guessed. That is **one tab
   standing in for a whole browser**: there is no tab strip, no window model, and no second
   tab, so a `windowId`/`groupId`/`title` query filter matches nothing by design.
-- **`chrome.tabs.sendMessage` has no receiver yet.** It resolves `undefined` with one console
-  line and is deliberately *not* routed into the extension's own runtime messaging: doing
-  that would let an extension message itself and treat the success as a page having
-  answered. Delivery arrives with content scripts
-  ([features/CONTENT-SCRIPTS.md](features/CONTENT-SCRIPTS.md), issue #5). Deviation from
-  Chrome, stated: Chrome fails this call with a connection error; this shell resolves
-  `undefined`, so a caller that only checks for a response value could read it as success —
-  the console line is what says otherwise.
+- **`chrome.tabs.sendMessage` delivers only to a script that was opted in.** Its receiver is
+  this extension's own content script inside the inspected app
+  ([features/CONTENT-SCRIPTS.md](features/CONTENT-SCRIPTS.md), issue #5), and no script is
+  injected unless `DEVTOOLS_CONTENT_SCRIPTS` names the extension — so by default this call
+  **fails**, with the reason (`no content script of "…" is running in the inspected target`)
+  as a rejected promise and `runtime.lastError`. It is never routed into the caller's own
+  `runtime.onMessage`: an extension answering itself and calling that a page is the false
+  positive this host refuses on principle. Where it differs from Chrome is *which* messages
+  arrive at all — Chrome injects what a manifest declares, this shell injects what a
+  developer has explicitly allowed.
 - **`chrome.tabs.create` opens nothing by default.** It returns a real descriptor (id +
   resolved url, which is what unblocks Altair's `tabs.js`), plus a non-Chrome `openedVia`
   field saying `"external"` / `"window"` / `null`. The open itself is
@@ -230,7 +232,8 @@ plumbing works with real GraphQL tooling — an extension's `background.js` now 
 lifecycle events fire, and it is a messaging peer — and the network data behind
 `devtools.network` / `webRequest` is real CDP rather than a stub. But the app-side half of that
 network path has never been walked against a device from this checkout, and the shell is still
-far from a product: no install/reload UI, no content scripts, no MV3 worker lifecycle, sandbox
-still off, deep coupling to an unmerged frontend fork.
+far from a product: no install/reload UI, content scripts that inject only when a developer
+opts an extension in by hand (and never yet against a real device), no MV3 worker lifecycle,
+sandbox still off, deep coupling to an unmerged frontend fork.
 The path forward is in [ROADMAP.md](ROADMAP.md); per-functionality state is in
 [features/README.md](features/README.md).

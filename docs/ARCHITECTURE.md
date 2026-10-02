@@ -291,7 +291,7 @@ middleware, and every extension frame — the model accumulates once in main and
 | DevTools frontend | main frame of the visible `BrowserWindow` | its own | `window.js` |
 | devtools page, panel pages | `rozenite://` iframes | **the frontend's** | `src/frontend/panel-bridge.js` |
 | **background context** (MV3 worker) | main frame of a hidden `BrowserWindow`, one per extension | **its own** | `src/main/background-host.js` |
-| injected content scripts | not implemented | — | — |
+| injected content scripts | **inside the inspected app**, not in any Electron context | none — the app is not a frame tree | `src/main/content-bridge.js`, over the CDP session, only for extensions named in `DEVTOOLS_CONTENT_SCRIPTS` |
 
 ```
  frontend window (visible)                      extension windows (show:false, one per extension)
