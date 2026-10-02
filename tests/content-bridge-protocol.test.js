@@ -32,11 +32,19 @@ function makeBackend({
   bindingLive = true,
   loaderLive = true,
   evaluationsFail = false,
+  holdEvaluations = false,
 } = {}) {
   const commands = [];
   /** method | "*" -> handlers, mirroring the real bridge's dispatch. */
   const byMethod = new Map();
-  const state = { attached, bindingLive, loaderLive, evaluationsFail };
+  const state = { attached, bindingLive, loaderLive, evaluationsFail, holdEvaluations };
+  /**
+   * A real `Runtime.evaluate` stays open while the app RUNS the script, and that window is
+   * the whole content-bridge protocol's hardest case (an addBinding call made by that
+   * script lands here before the evaluate answers). `holdEvaluations()` reproduces it:
+   * every later evaluate waits until the test releases it.
+   */
+  const held = [];
   /** What an `expression` is answering, per the switches a test wants to flip. */
   const truthOf = (expression) => {
     if (expression.includes(`typeof globalThis[${JSON.stringify(BINDING_NAME)}]`)) {
@@ -60,6 +68,11 @@ function makeBackend({
     }
     if (method === "Runtime.evaluate") {
       const answer = truthOf(String(params.expression || ""));
+      if (state.holdEvaluations && String(params.expression || "").includes(`${DISPATCH_GLOBAL}.inject(`)) {
+        // Only the SCRIPT's evaluate is held: the probes around it are ordinary tooling
+        // round-trips, and holding them would stall the pass before it reached the app.
+        await new Promise((resolve) => held.push(resolve));
+      }
       if (answer === null) {
         // A tooling-side refusal: `text` only, no `exception` object — which is how
         // src/main/inspected-window.js maps it to `isError` rather than `isException`.
@@ -94,6 +107,11 @@ function makeBackend({
       }
     },
     isAttached: () => state.attached,
+    /** Let the script's `Runtime.evaluate` answer, i.e. let the app finish running it. */
+    releaseEvaluations: () => {
+      const waiting = held.splice(0, held.length);
+      for (const resolve of waiting) resolve();
+    },
   };
 }
 
@@ -913,6 +931,39 @@ test("waiting for the worker is bounded: the script is injected anyway rather th
   assert.strictEqual(last[0].injected, true, "a worker that never registers cannot keep the script out");
   assert.match(world.logs.join("\n"), /injecting anyway — its background worker is still not/);
   assert.strictEqual(injectedExpressions(world).length, 1);
+  world.bridge.dispose();
+});
+
+// The shape the live run actually produced, and the only test here that reproduces it:
+// `Runtime.addBinding` is fire-and-forget, so a send made from the script's own first
+// statement arrives at the host while the `Runtime.evaluate` running that script is still
+// open. Before this fix the host answered that send "this extension is not injected" — the
+// script was, in fact, being executed at that moment.
+test("an app send that arrives DURING the injection evaluate is answered, not refused", async () => {
+  const world = makeWorld({ allowlist: ALL_RN_TARGETS, backend: { holdEvaluations: true } });
+  const injecting = world.bridge.attach();
+  // Hold the app inside the script, then send exactly as the injected script would.
+  await new Promise((resolve) => setImmediate(resolve));
+  const peer = world.makePanel("ext-a", "worker");
+  peer.setResponder(({ message, requestId }) => {
+    world.router.resolveDelivery({
+      fromKey: peer.key,
+      requestId,
+      response: { got: message.marker },
+    });
+  });
+
+  await world.bridge.onBindingCalled(
+    binding({ t: "send", x: "ext-a", s: "ext-a#1", m: { marker: "IMMEDIATE" } })
+  );
+  const midflight = dispatched(world).find((e) => e.t === "response" && e.s === "ext-a#1");
+  assert.ok(midflight, "the in-flight send got an answer");
+  assert.strictEqual("e" in midflight, false, "and it was not an error");
+  assert.deepStrictEqual(midflight.m, { got: "IMMEDIATE" }, "it reached the peer, mid-evaluate");
+
+  world.backend.releaseEvaluations();
+  const report = await injecting;
+  assert.strictEqual(report[0].injected, true, "and the pass completed normally afterwards");
   world.bridge.dispose();
 });
 

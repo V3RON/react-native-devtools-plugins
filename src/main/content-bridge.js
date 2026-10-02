@@ -869,6 +869,7 @@ const createContentBridge = ({
     state.set(extensionId, {
       ...record,
       injected: false,
+      evaluating: false,
       frameRegistered: false,
       lastError: why,
     });
@@ -914,11 +915,20 @@ const createContentBridge = ({
     if (!outcome.ok) {
       line(`${extensionId}: the app refused a ${kind} delivery: ${outcome.error}`);
       if (kind === "message" && router) {
-        // Chrome settles a leg whose receiver died rather than hanging the sender.
+        // Chrome settles a leg whose receiver died rather than hanging the sender — but it
+        // settles it as NO RECEIVER, not as an answer. Resolving `undefined` here would
+        // hand a targeted sender (chrome.tabs.sendMessage) the value this host reserves for
+        // "a listener answered nothing", for a message the app never got. The router's own
+        // marker is what says both things at once: the leg is done, and it was not an
+        // answer (a fan-out ignores it, a targeted send fails with it).
         router.resolveDelivery({
           fromKey: appFrameKey(extensionId),
           requestId: payload.requestId,
-          response: undefined,
+          response: {
+            __rozeniteNoReceiver: true,
+            error:
+              `${NO_RECEIVER} The inspected app refused this delivery: ${outcome.error}`,
+          },
         });
       }
     }
@@ -975,7 +985,12 @@ const createContentBridge = ({
           await answerApp(extensionId, envelope.s, undefined, "no messaging router is running");
           return;
         }
-        if (!state.get(extensionId).injected) {
+        const record = state.get(extensionId);
+        // `evaluating` is the in-flight case, and it counts: this envelope could only have
+        // been sent by a script the app is running right now (see `injectExtension`).
+        // Anything else is an extension whose script is not in the app, and saying so is
+        // true rather than a hedge.
+        if (!record.injected && !record.evaluating) {
           await answerApp(extensionId, envelope.s, undefined, "this extension is not injected");
           return;
         }
@@ -1144,6 +1159,7 @@ const createContentBridge = ({
       name: found.name,
       entries,
       injected: false,
+      evaluating: false,
       pending: false,
       lastError: null,
       at: Date.now(),
@@ -1179,9 +1195,21 @@ const createContentBridge = ({
       return state.get(extensionId);
     }
 
-    // The seat is taken BEFORE the script goes in, so a script that sends from its first
-    // statement is already a mesh member when it does — see `registerAppFrame`.
+    // The seat is taken BEFORE the script goes in, for one reason with two halves:
+    // `Runtime.addBinding` is fire-and-forget, so a script that sends from its own first
+    // statement reaches this host WHILE the `Runtime.evaluate` running it is still in
+    // flight — and an app that owns no mesh seat cannot have that message routed at all.
+    //
+    // What answers that in-flight message matters. Answering it `undefined` was the defect.
+    // Answering it "this extension is not injected" is the same class of lie: the envelope
+    // the app just sent is itself the proof that the loader and the script's own file ran,
+    // because a script can only reach this shell's binding from inside the expression being
+    // evaluated. So the runner flags the extension as `evaluating` for the duration and the
+    // `send` path believes that, while `tabTarget` still demands `injected`: host→app
+    // traffic cannot address a context whose script may yet be refused. `withdraw` below
+    // takes the seat and both flags back if `seen` ends up empty.
     registerAppFrame(extensionId);
+    state.set(extensionId, { ...state.get(extensionId), evaluating: true, pending: false });
     const generation = bindingGeneration();
 
     // A `runtime.sendMessage` from a content script's first statement is aimed at this
@@ -1253,6 +1281,7 @@ const createContentBridge = ({
       state.set(extensionId, {
         ...state.get(extensionId),
         injected: true,
+        evaluating: false,
         pending: false,
         lastError: null,
       });
