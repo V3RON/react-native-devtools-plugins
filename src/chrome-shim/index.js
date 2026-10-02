@@ -5,7 +5,10 @@
 //   getManifest    — () => manifest object ({} until loaded)
 //   platform       — {os, arch} in Chrome's vocabulary
 //   storage        — from ./storage createExtensionStorage({ createBackend })
-//   networkBridge  — from ./network-bridge createNetworkBridge({ ... })
+//   networkBridge  — from ./network-bridge createNetworkBridge({ ... }): feeds
+//                    BOTH chrome.webRequest and chrome.devtools.network (one CDP
+//                    capture in main, two Chrome APIs — docs/features/
+//                    DEVTOOLS-NETWORK.md, docs/features/WEBREQUEST.md)
 //   transport      — optional host transport for runtime messaging
 //                    (see ./messaging); when absent, runtime messaging
 //                    degrades to the previous no-op state.
@@ -64,16 +67,24 @@ const createChromeNamespace = ({
   const chrome = {
     runtime: runtime.namespace,
 
-    // [FAKE transport] observe-only, synthetic feed
-    // (docs/features/WEBREQUEST.md)
+    // [REAL, observe-only] chrome.webRequest from the host's CDP network model —
+    // the same capture as chrome.devtools.network below, and non-blocking by
+    // construction (docs/features/WEBREQUEST.md)
     webRequest: networkBridge.webRequest,
 
     // [REAL storage; Tier-1 devtools] chrome.devtools.* — installed for every
     // extension frame, matching Chrome (devtools page + panel pages alike);
     // panels.create is host-driven (docs/features/DEVTOOLS-PANELS.md),
-    // inspectedWindow.eval is host-backed (docs/features/INSPECTED-WINDOW.md)
-    devtools: createDevtools({ extensionId, onPanelCreated, evalInPage, reloadInPage })
-      .namespace,
+    // inspectedWindow.eval is host-backed (docs/features/INSPECTED-WINDOW.md),
+    // and devtools.network is the shared network bridge's own API object
+    // (docs/features/DEVTOOLS-NETWORK.md)
+    devtools: createDevtools({
+      extensionId,
+      onPanelCreated,
+      evalInPage,
+      reloadInPage,
+      networkApi: networkBridge.network,
+    }).namespace,
 
     // [STUB] inert host shell: no browser tab model here (docs/LIMITATIONS.md)
     tabs: createTabs(),

@@ -9,7 +9,7 @@ needed. Legend and tiers: [../README.md](../README.md). Last reviewed: 2026-10-0
 | --- | --- | --- | --- |
 | [Extension management & manifest support](EXTENSION-MANAGEMENT.md) | 🟡 folder-at-repo-root | 1 | — |
 | [DevTools panels](DEVTOOLS-PANELS.md) (`chrome.devtools.panels`) | 🟨 create works; theme/events/sidebars missing | 1 | dispatch channel |
-| [DevTools network](DEVTOOLS-NETWORK.md) (`chrome.devtools.network`) | 🟡 synthetic events + fake bodies | 1 | CDP bridge (exists), RN network inspection |
+| [DevTools network](DEVTOOLS-NETWORK.md) (`chrome.devtools.network`) | 🟨 real CDP model (`Network.*`), unverified on device; `onNavigated` diverges | 1 | RN network inspection |
 | [Inspected window](INSPECTED-WINDOW.md) (`chrome.devtools.inspectedWindow`) | 🟨 `eval` + `reload` real via the CDP bridge; resources/selected-node inert | 1 | — |
 | [Runtime messaging](RUNTIME-MESSAGING.md) (`chrome.runtime`, Ports, event contract) | 🟨 surface + sendMessage + Ports real; background/lifecycle pending | 1 | — |
 | [Storage & i18n](STORAGE-AND-I18N.md) (`chrome.storage`, `chrome.i18n`) | 🟨 storage real (local/sync); session/managed/i18n missing | 1 | — |
@@ -21,7 +21,7 @@ needed. Legend and tiers: [../README.md](../README.md). Last reviewed: 2026-10-0
 | --- | --- | --- | --- |
 | [Content scripts (bridge-style)](CONTENT-SCRIPTS.md) | ❌ (design done) | 2 | dispatch channel, runtime messaging |
 | [Background worker](BACKGROUND-WORKER.md) (MV3 service worker) | ❌ | 2 | extension management, runtime messaging |
-| [webRequest](WEBREQUEST.md) (`chrome.webRequest`) | 🟡 observe-only, 2 of 9 events, fake bodies | 2 | dispatch channel |
+| [webRequest](WEBREQUEST.md) (`chrome.webRequest`) | 🟨 observe-only, 7 of 9 events from the real CDP model; filters + `ResourceType` real | 2 | — (blocking needs CDP `Fetch`) |
 | [`chrome.permissions`](SMALL-SHIMS.md) — "everything declared is granted" shim | ❌ | 2 | runtime messaging |
 | [`chrome.tabs`/`windows` subset](SMALL-SHIMS.md) — one synthetic tab = inspected target | ❌ | 2 | runtime messaging |
 | [`chrome.notifications`](SMALL-SHIMS.md) → Electron `Notification` | ❌ | 2 | — |

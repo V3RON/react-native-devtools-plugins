@@ -269,19 +269,6 @@ const InspectorFrontendHost = {
   },
 };
 
-// ── [FAKE] network-events bridge to extension frames ────────────────────────
-// The frontend broadcasts RequestStarted/RequestFinished here; extension-frame
-// chrome.webRequest listeners consume them. Temporary transport, replaced by
-// the real dispatch channel (docs/features/DISPATCH-CHANNEL.md).
-contextBridge.exposeInMainWorld("Events", {
-  send: (event, data) => {
-    const iframes = document.querySelectorAll("iframe");
-    iframes.forEach((iframe) => {
-      iframe.contentWindow.postMessage({ event, data }, "*");
-    });
-  },
-});
-
 // context-bridge bridge: exposeInMainWorld proxies functions; the frontend
 // wants a plain window.InspectorFrontendHost object instead.
 contextBridge.exposeInMainWorld("InspectorFrontendHostElectron", InspectorFrontendHost);

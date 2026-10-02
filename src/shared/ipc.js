@@ -11,9 +11,6 @@ module.exports = {
   STORE_INJECTED_SCRIPT: "store-injected-script",
   /** (origin) -> returns the stored injected script for that origin. */
   GET_INJECTED_SCRIPT: "get-injected-script",
-  /** main-world event relay channel used by the extension-frame Events API. */
-  EVENTS: "Events",
-
   // ── dispatch channel (docs/features/DISPATCH-CHANNEL.md) ────────────────
   /** main -> main-frame preload -> window.InspectorFrontendAPI[name](...args) */
   HOST_EVENT: "host-event",
@@ -62,4 +59,17 @@ module.exports = {
 
   /** ({options}) from an extension frame -> CDP Page.reload on the bridge. */
   DEVTOOLS_RELOAD: "devtools-reload",
+
+  // ── devtools.network / webRequest (docs/features/DEVTOOLS-NETWORK.md) ──────
+  /** () -> registers the calling frame as a network subscriber and returns the
+   *  host's current {available, reason, …} status (identity from the frame). */
+  NETWORK_SUBSCRIBE: "network-subscribe",
+  /** ({options}) -> the real HAR 1.2 log built from the CDP network model. */
+  NETWORK_GET_HAR: "network-get-har",
+  /** () -> honest "is there network data at all, and if not why" status. */
+  NETWORK_GET_STATUS: "network-get-status",
+  /** ({requestId}) -> lazy Network.getResponseBody: {available, body, base64Encoded}. */
+  NETWORK_GET_BODY: "network-get-body",
+  /** main -> frame push: one request lifecycle step, or a navigated/status note. */
+  NETWORK_DELIVER: "network-deliver",
 };

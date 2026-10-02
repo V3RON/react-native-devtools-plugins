@@ -8,6 +8,8 @@ const extensionServer = require("./extension-server");
 const panelHost = require("./panel-host");
 const { createMessageRouter } = require("./message-router");
 const { evalInPage, reloadInPage } = require("./inspected-window");
+const { createNetworkService } = require("./network-service");
+const { sendCommand, onEvent, status: bridgeStatus } = require("./cdp-bridge");
 const {
   STORE_INJECTED_SCRIPT,
   GET_INJECTED_SCRIPT,
@@ -31,10 +33,30 @@ const {
   EXT_PANEL_CREATE,
   DEVTOOLS_EVAL,
   DEVTOOLS_RELOAD,
+  NETWORK_SUBSCRIBE,
+  NETWORK_GET_HAR,
+  NETWORK_GET_STATUS,
+  NETWORK_GET_BODY,
+  NETWORK_DELIVER,
 } = require("../shared/ipc");
 
 // ── runtime messaging router wiring ─────────────────────────────────────────
 const router = createMessageRouter();
+
+// ── the CDP network model, shared by devtools.network and webRequest ────────
+// (docs/features/DEVTOOLS-NETWORK.md). One model for every frame; a frame asks
+// for it by id and receives deliveries on NETWORK_DELIVER.
+const networkService = createNetworkService({
+  sendCommand,
+  onEvent,
+  bridgeStatus,
+  log: (level, message) => {
+    const line = `[network] ${message}`;
+    if (level === "error") console.error(line);
+    else if (level === "warn") console.warn(line);
+    else console.log(line);
+  },
+});
 
 // frameKey -> WebFrameMain that registered it: every later call claiming a
 // frameKey must come from the same principal object (a frame cannot spoof
@@ -45,7 +67,7 @@ const principals = new Map();
 
 let unregisterRouterFrame; // set below to avoid closure-order issues
 
-const makeFrameSender = (key, webContents, frame, frameId) => ({
+const makeFrameSender = (key, webContents, frame, frameId, channel = RUNTIME_DELIVER) => ({
   kind,
   payload,
 }) => {
@@ -53,7 +75,7 @@ const makeFrameSender = (key, webContents, frame, frameId) => ({
     if (webContents.isDestroyed() || (frame && frame.isDestroyed())) {
       throw new Error("frame gone");
     }
-    webContents.sendToFrame([webContents.id, frameId], RUNTIME_DELIVER, {
+    webContents.sendToFrame([webContents.id, frameId], channel, {
       kind,
       payload,
     });
@@ -121,6 +143,9 @@ const registerIpcHandlers = () => {
   unregisterRouterFrame = (key) => {
     principals.delete(key);
     router.unregisterFrame(key);
+    // A frame that goes away also stops being a network subscriber; the model
+    // stops asking the backend for Network events once no frame wants them.
+    networkService.unregisterFrame(key);
   };
 
   ipcMain.handle(RUNTIME_REGISTER, (event) => {
@@ -221,6 +246,74 @@ const registerIpcHandlers = () => {
       return { ok: false, error: "inspectedWindow.reload: unauthorized call" };
     }
     return reloadInPage(options || {});
+  });
+
+  // ── devtools.network / webRequest (docs/features/DEVTOOLS-NETWORK.md) ──────
+  // All three reads ride the same frame gate as eval/panels.create: identity comes
+  // from the calling frame, and an unauthorized frame gets an explicit failure
+  // instead of data. Deliveries flow back on NETWORK_DELIVER. The replies are
+  // never thrown across IPC — every failure comes back as a value the shim can
+  // report, matching the DEVTOOLS_EVAL pattern.
+  const networkSenderFor = (event) => {
+    const key = resolveFrameKey(event);
+    if (!key) {
+      return null;
+    }
+    const frame = event.senderFrame;
+    return {
+      key,
+      send: makeFrameSender(key, event.sender, frame, event.frameId, NETWORK_DELIVER),
+    };
+  };
+
+  // A frame calls this from its first network listener / first getHAR and gets the
+  // honest availability snapshot back immediately; the model starts asking the
+  // backend for Network events from here on.
+  ipcMain.handle(NETWORK_SUBSCRIBE, (event) => {
+    const target = networkSenderFor(event);
+    if (!target) {
+      return { available: false, reason: "network.subscribe: unauthorized call", requests: 0 };
+    }
+    if (!networkService.hasSubscriber(target.key)) {
+      return networkService.subscribe(target.key, target.send);
+    }
+    return networkService.getStatus();
+  });
+
+  ipcMain.handle(NETWORK_GET_HAR, (event, { options } = {}) => {
+    const target = networkSenderFor(event);
+    if (!target) {
+      // No fabricated HAR for a frame the host does not know.
+      return { ok: false, error: "network.getHAR: unauthorized call" };
+    }
+    // First read counts as interest: an extension that only polls getHAR never
+    // registers a listener, and the HAR must not be empty just because nobody
+    // asked the backend for events yet.
+    if (!networkService.hasSubscriber(target.key)) {
+      networkService.subscribe(target.key, target.send);
+    }
+    return networkService.getHar(options || {});
+  });
+
+  ipcMain.handle(NETWORK_GET_STATUS, (event) => {
+    const target = networkSenderFor(event);
+    if (!target) {
+      return { available: false, reason: "network.getStatus: unauthorized call", requests: 0 };
+    }
+    return networkService.getStatus();
+  });
+
+  // Bodies are the exact place a fake used to live, so every failure path returns
+  // `{available: false, error}` with the backend's own reason and never a body.
+  ipcMain.handle(NETWORK_GET_BODY, (event, { requestId } = {}) => {
+    const target = networkSenderFor(event);
+    if (!target) {
+      return { available: false, error: "network.getResponseBody: unauthorized call" };
+    }
+    if (typeof requestId !== "string" || requestId.length === 0) {
+      return { available: false, error: "Network.getResponseBody: requestId is required." };
+    }
+    return networkService.getBody(requestId);
   });
 };
 

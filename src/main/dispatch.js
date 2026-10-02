@@ -4,9 +4,11 @@
 // Flow: main process -> HOST_EVENT IPC -> main-frame preload ->
 // window.InspectorFrontendAPI[name](...args) in the frontend's main world.
 //
-// This replaces the ad-hoc `Events` postMessage broadcast (now the only
-// consumer left there is the frontend's synthetic network feed, until
-// devtools.network moves onto this channel — docs/features/DEVTOOLS-NETWORK.md).
+// It used to be described as the replacement for the ad-hoc `Events` postMessage
+// broadcast; that broadcast is now gone entirely — devtools.network and webRequest
+// are fed from the shell's own CDP network model (src/main/network-service.js),
+// not from the frontend, so there is no consumer left to migrate
+// (docs/features/DEVTOOLS-NETWORK.md, docs/features/WEBREQUEST.md).
 const { HOST_EVENT } = require("../shared/ipc");
 
 let frontendContents = null;

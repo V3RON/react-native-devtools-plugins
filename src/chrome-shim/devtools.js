@@ -23,9 +23,26 @@ const tabIdFor = (extensionId) => {
   return (Math.abs(hash) % 100000) + 1;
 };
 
-const EMPTY_HAR = JSON.stringify({
-  log: { version: "1.2", creator: { name: "rozenite-shell" }, entries: [] },
-});
+// Chrome's getHAR hands the HAR *log* object to the callback (`harLog.entries`);
+// the spec's `{log: …}` wrapper is spelled the same way here so both styles of
+// consumer find the same (empty) entries. This is the no-host-behind-it state, so
+// a fresh copy is handed out per call: a consumer that mutates what it got must
+// not empty the next answer.
+const emptyHar = () => {
+  const log = { version: "1.2", creator: { name: "rozenite-shell" }, entries: [] };
+  return { ...log, log };
+};
+
+/** getHAR's no-host answer, with Chrome's callback/promise duality intact. */
+const getEmptyHar = (optionsOrCallback, maybeCallback) => {
+  const callback =
+    typeof optionsOrCallback === "function" ? optionsOrCallback : maybeCallback;
+  if (typeof callback === "function") {
+    callAsync(callback, emptyHar());
+    return undefined; // Chrome: callback style returns nothing
+  }
+  return Promise.resolve(emptyHar());
+};
 
 const callAsync = (cb, ...args) => {
   if (typeof cb === "function") {
@@ -36,6 +53,11 @@ const callAsync = (cb, ...args) => {
 const createDevtools = ({
   extensionId,
   onPanelCreated = () => {},
+  // chrome.devtools.network: injected from the shared network bridge
+  // (./network-bridge.js), because devtools.network and chrome.webRequest are two
+  // views of ONE capture. Absent = the documented no-data shapes, never invented
+  // traffic (docs/features/DEVTOOLS-NETWORK.md).
+  networkApi,
   // chrome.devtools.inspectedWindow.eval: injected host dependency
   // (expression, options) => Promise<{value, exceptionInfo}>. Wired by the
   // extension-frame preload over the DEVTOOLS_EVAL IPC channel to
@@ -93,7 +115,12 @@ const createDevtools = ({
       onCreateContextMenu: createEvent(),
     },
     network: {
-      getHAR: (cb) => callAsync(cb, EMPTY_HAR),
+      // Same model as chrome.devtools.network (docs/features/DEVTOOLS-NETWORK.md):
+      // Chrome documents panels.network.getHAR as the same underlying HAR log.
+      getHAR: (optionsOrCallback, maybeCallback) =>
+        networkApi && typeof networkApi.getHAR === "function"
+          ? networkApi.getHAR(optionsOrCallback, maybeCallback)
+          : getEmptyHar(optionsOrCallback, maybeCallback),
     },
     performance: {
       onRecordingStarted: createEvent(),
@@ -170,15 +197,47 @@ const createDevtools = ({
     },
   };
 
-  const network = {
-    // [STUB until devtools.network rides the dispatch channel]
-    // (docs/features/DEVTOOLS-NETWORK.md): events exist but never fire;
-    // getHAR answers with an empty-but-valid HAR.
+  // chrome.devtools.network — real, shared with chrome.webRequest. The API object
+  // comes from ./network-bridge.js (same capture, one delivery channel); without a
+  // host behind it, getHAR answers with an empty-but-valid HAR and the events stay
+  // quiet, which is the documented no-data state
+  // (docs/features/DEVTOOLS-NETWORK.md), never invented traffic.
+  const NO_NETWORK = {
     onRequestFinished: createEvent(),
     onNavigated: createEvent(),
-    getHAR: (cb) => callAsync(cb, EMPTY_HAR),
-    getResponseBody: (request, cb) => callAsync(cb, null, ""),
+    getHAR: getEmptyHar,
+    getNetworkStatus: (optionsOrCallback, maybeCallback) => {
+      // The documented no-data state, in both of Chrome's call styles; a guess
+      // about the backend would be worse than an honest "nothing is being observed".
+      const status = {
+        available: false,
+        observing: false,
+        enableState: "idle",
+        reason: null,
+        requests: 0,
+      };
+      const callback =
+        typeof optionsOrCallback === "function" ? optionsOrCallback : maybeCallback;
+      if (typeof callback === "function") {
+        callAsync(callback, status);
+        return undefined; // Chrome: callback style returns nothing
+      }
+      return Promise.resolve(status);
+    },
+    // No host, so no body: `null` content with no encoding, and a reason in the
+    // console — the old stub answered with a hardcoded payload for every request.
+    // Chrome's signature is (request, callback); a requestId string is accepted too.
+    getResponseBody: (request, callback) => {
+      const reason = "chrome.devtools.network has no network backend in this host";
+      logger.warn(`[devtools.network] ${reason}`);
+      if (typeof callback === "function") {
+        callAsync(callback, null, null);
+        return undefined;
+      }
+      return Promise.resolve({ content: null, encoding: null, reason });
+    },
   };
+  const network = { ...NO_NETWORK, ...(networkApi || {}) };
 
   return {
     namespace: {

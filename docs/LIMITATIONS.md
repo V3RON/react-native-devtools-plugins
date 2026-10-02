@@ -17,11 +17,21 @@
 
 **API fidelity**
 
-- `chrome.webRequest` is **observe-only**: events are replayed from the frontend's view of
-  the CDP stream; listeners can't block/modify/cancel requests; only two event kinds are
-  emitted. Most listeners are empty `addListener`s.
-- Response bodies are a **fake hardcoded stub** — extensions that inspect payloads only
-  *appear* to work.
+- `chrome.webRequest` is **observe-only**: seven of Chrome's nine events come from the
+  shell's own CDP `Network.*` model with real filters and `ResourceType`, but listeners can
+  never block/modify/cancel a request — RN implements no CDP `Fetch` domain. `addListener`
+  with `["blocking"]` registers and logs one honest note. `onHeadersReceived` and
+  `onAuthRequired` have no CDP counterpart and never fire
+  ([features/WEBREQUEST.md](features/WEBREQUEST.md)).
+- Network data only exists **if the inspected app reports it**. `Network.enable` is refused
+  when the app registers more than one RN host (`HostAgent.cpp:150`) and the whole domain
+  can be compiled out (`InspectorFlags.cpp:44`); traffic that bypasses the inspected
+  runtime's network stack is invisible either way. The correct failure mode is implemented
+  and tested — an empty list plus `getNetworkStatus()` naming the backend's own reason —
+  but it has not been exercised against a device from this checkout
+  ([features/DEVTOOLS-NETWORK.md](features/DEVTOOLS-NETWORK.md)).
+- Network history is a bounded ring (500 settled records, in-flight requests never dropped);
+  an evicted record's body then honestly reports itself as unavailable rather than stale.
 - `chrome.tabs.*` is an **inert shell** (`query()` → `[]`, events never fire —
   `src/chrome-shim/tabs.js`), enough for Altair's `tabs.query` consumers to render its
   monitor panel. The background worker itself does not run
@@ -33,9 +43,12 @@
   `devtools.inspectedWindow.eval` and `.reload` (CDP `Runtime.evaluate` / `Page.reload`
   over the shell's CDP bridge — see
   [features/INSPECTED-WINDOW.md](features/INSPECTED-WINDOW.md) for the fidelity and the
-  honest-degradation table). `devtools.network.getHAR` and the rest of
-  `devtools.network` are still inert stubs, and `inspectedWindow.getResources` /
-  `getSelectedNode` answer with documented no-data.
+  honest-degradation table). `devtools.network` is real too now (`onRequestFinished`,
+  `getHAR`, lazy `getContent`), with two documented divergences: `onNavigated` fires on a
+  debugger-session change rather than a page navigation and carries the target's title (or
+  `""`), and HAR fields CDP never reported (`timings.blocked/dns/connect/ssl`,
+  `headersSize`) stay HAR's own `-1` instead of a plausible number.
+  `inspectedWindow.getResources` / `getSelectedNode` answer with documented no-data.
 - `inspectedWindow.eval` only answers when the shell's CDP bridge actually has a session:
   no Metro, no debuggable app, or `DEVTOOLS_CDP_BRIDGE=off` without an external relay all
   surface as `exceptionInfo.isError` with the host's reason. Nothing is answered from
@@ -70,6 +83,8 @@
   hazard to replace with a validated per-extension IPC layer.
 
 **Bottom line:** the proof-of-concept shows the hosting + storage + panel plumbing works
-with real GraphQL tooling, but is far from a product: no lifecycle/permission model,
-synthetic network data, deep coupling to an unmerged frontend fork. The path forward is
+with real GraphQL tooling, and the network data behind `devtools.network` / `webRequest` is
+now real CDP rather than a stub — but the app-side half of that path has never been walked
+against a device from this checkout, and the shell is still far from a product: no
+lifecycle/permission model, deep coupling to an unmerged frontend fork. The path forward is
 in [ROADMAP.md](ROADMAP.md); per-functionality state is in [features/README.md](features/README.md).
