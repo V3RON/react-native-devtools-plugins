@@ -18,10 +18,12 @@
   nothing has to wake it, so `onSuspend`/`onUpdateAvailable` never fire and a worker that
   would have been torn down in Chrome keeps running here. That is a superset for a devtools
   host and a divergence from Chrome's resource model at the same time.
-- Still missing from the extension model: content-script injection and a working
-  `action`/popup — plus a toolbar, browser menu, or shortcut routing, which is why
-  `action.onClicked`, `commands.onCommand`, and `contextMenus.onClicked` are registrable but
-  have no producer. What HAS arrived since (issue #4,
+- Still missing from the extension model: a working `action`/popup — plus a toolbar, browser
+  menu, or shortcut routing, which is why `action.onClicked`, `commands.onCommand`, and
+  `contextMenus.onClicked` are registrable but have no producer. Content-script injection has
+  arrived since (issue #5, [features/CONTENT-SCRIPTS.md](features/CONTENT-SCRIPTS.md)), but only
+  for an extension a developer names in `DEVTOOLS_CONTENT_SCRIPTS`, and never yet against a real
+  device. What HAS arrived since (issue #4,
   [features/SMALL-SHIMS.md](features/SMALL-SHIMS.md)): `notifications` raises real system
   notifications, `alarms` runs real timers, `downloads` really saves over the shell's one
   export path, manifest `options_ui` opens a real window, `permissions` reports the manifest's
@@ -220,6 +222,15 @@
   `sidePanel` round-trips its configuration, and **`open` rejects** rather than resolving,
   because its promise means a panel came up and none can
   ([features/SMALL-SHIMS.md](features/SMALL-SHIMS.md)).
+- **A content script's app→host payloads are also relayed to the DevTools frontend.** The host
+  does not open a second debugger connection — it multiplexes onto the frontend's CDP session by
+  message id (`src/main/cdp-bridge.js`) — and the backend dispatches `Runtime.bindingCalled` to
+  every session on that connection, so every envelope an injected script sends is pushed to the
+  frontend too, base64 blobs included. It is inert there: the frontend's React-DevTools bindings
+  each check the binding NAME before touching a payload (`__FUSEBOX_REACT_DEVTOOLS_DISPATCHER__`,
+  and two more that only install when their panel is open), and the host ignores any name but its
+  own. So this is bandwidth, not corruption — noted because the bridge's own rule for host
+  *replies* is "never forward them", and notifications have no message id to apply that rule to.
 - **Per-extension CSP.** Every `rozenite://` response carries that extension's
   `content_security_policy`; an extension declaring none gets Chrome's MV3 default
   (`script-src 'self'; object-src 'self'`, plus `wasm-unsafe-eval` when it has a service

@@ -34,7 +34,8 @@ function makeBackend({
   evaluationsFail = false,
 } = {}) {
   const commands = [];
-  const handlers = new Set();
+  /** method | "*" -> handlers, mirroring the real bridge's dispatch. */
+  const byMethod = new Map();
   const state = { attached, bindingLive, loaderLive, evaluationsFail };
   /** What an `expression` is answering, per the switches a test wants to flip. */
   const truthOf = (expression) => {
@@ -78,12 +79,19 @@ function makeBackend({
     sendCommand,
     evaluates: () => commands.filter((c) => c.method === "Runtime.evaluate"),
     addBindings: () => commands.filter((c) => c.method === "Runtime.addBinding"),
+    // Faithful to src/main/cdp-bridge.js: a handler sees an event only if it subscribed to
+    // that exact method name or to "*". Fanning everything to every handler — which this
+    // fake used to do — lets a bridge that never subscribed to `Runtime.bindingCalled` pass
+    // every test here, because the tests drove the app→host leg through the seam instead.
     onEvent: (method, handler) => {
-      handlers.add(handler);
-      return () => handlers.delete(handler);
+      if (!byMethod.has(method)) byMethod.set(method, new Set());
+      byMethod.get(method).add(handler);
+      return () => byMethod.get(method)?.delete(handler);
     },
     emit: (method, params) => {
-      for (const handler of [...handlers]) handler(params || {}, method);
+      for (const handler of [...(byMethod.get(method) || []), ...(byMethod.get("*") || [])]) {
+        handler(params || {}, method);
+      }
     },
     isAttached: () => state.attached,
   };
@@ -412,6 +420,57 @@ test("an envelope naming an extension that was never injected is refused", async
   await world.bridge.onBindingCalled(binding({ t: "send", x: "ext-b", s: "ext-b#1", m: {} }));
   assert.strictEqual(world.backend.evaluates().length, before, "no delivery was attempted");
   assert.match(world.logs.join("\n"), /claiming unknown extension/);
+  world.bridge.dispose();
+});
+
+// The whole app→host direction used to be reachable ONLY through the `onBindingCalled`
+// seam: production never subscribed to `Runtime.bindingCalled`, so every injected script
+// could hook everything and still never be heard. Every test here called the seam, so the
+// suite stayed green while the feature's core direction was dead. This drives the same
+// message the way a real app delivers it — as a CDP notification — and is the only test
+// that fails if the subscription is missing.
+test("the app→host leg is wired to the real CDP notification, not just the test seam", async () => {
+  const world = makeWorld({ allowlist: ALL_RN_TARGETS });
+  world.router.registerFrame({
+    key: "panel:ext-a",
+    extensionId: "ext-a",
+    url: "rozenite://ext-a/panel.html",
+    send: (delivery) => {
+      if (delivery.kind === "message") {
+        world.router.resolveDelivery({
+          fromKey: "panel:ext-a",
+          requestId: delivery.payload.requestId,
+          response: { from: "panel" },
+        });
+      }
+    },
+  });
+  await world.bridge.attach();
+
+  world.backend.emit("Runtime.bindingCalled", binding({ t: "send", x: "ext-a", s: "ext-a#1", m: { n: 1 } }));
+  await settleApp();
+  const answers = dispatched(world).filter((envelope) => envelope.t === "response");
+  assert.deepStrictEqual(
+    answers.map((a) => [a.x, a.s, a.m]),
+    [["ext-a", "ext-a#1", { from: "panel" }]],
+    "a notification alone reaches the router and answers back into the app"
+  );
+
+  // The frontend owns a DIFFERENT binding on the same session, and RN dispatches
+  // bindingCalled by name alone, so its React-DevTools traffic arrives here too. It must
+  // be ignored, not parsed as an extension envelope.
+  const before = world.backend.evaluates().length;
+  world.backend.emit("Runtime.bindingCalled", {
+    name: "__FUSEBOX_REACT_DEVTOOLS_DISPATCHER__",
+    payload: JSON.stringify({ domain: "ReactDevTools", message: { id: 1 } }),
+  });
+  await settleApp();
+  assert.deepStrictEqual(
+    dispatched(world).filter((envelope) => envelope.t === "response"),
+    answers,
+    "another session binding's payload never becomes an extension message"
+  );
+  assert.ok(world.backend.evaluates().length >= before);
   world.bridge.dispose();
 });
 

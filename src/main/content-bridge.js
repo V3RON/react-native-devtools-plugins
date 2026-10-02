@@ -604,6 +604,7 @@ const createContentBridge = ({
   let contextEpoch = 0;
   const bindingGeneration = () => (isAttached() ? `epoch:${contextEpoch}` : null);
   let unsubscribe = null;
+  let unsubscribeBinding = null;
   let reinjectTimer = null;
   let sweeper = null;
   let disposed = false;
@@ -1067,6 +1068,17 @@ const createContentBridge = ({
   };
 
   const attach = () => {
+    // The app→host leg proper. `Runtime.bindingCalled` is the ONLY thing the app has to
+    // talk back with (host→app rides an evaluate, whose reply can only arrive while a
+    // session exists), so an injection that subscribed to nothing else would leave every
+    // injected script permanently mute. Subscribed by exact method name: the payload
+    // envelope is untrusted app data, and `onBindingCalled` checks the binding name before
+    // parsing it, which is what keeps the frontend's own React-DevTools binding
+    // (`__FUSEBOX_REACT_DEVTOOLS_DISPATCHER__`, same session, same notification) from
+    // being read as an extension message.
+    unsubscribeBinding = onEvent("Runtime.bindingCalled", (params) => {
+      void onBindingCalled(params);
+    });
     unsubscribe = onEvent("*", (params, method) => {
       if (method === "Runtime.executionContextCreated") {
         scheduleReinject("Runtime.executionContextCreated");
@@ -1083,6 +1095,7 @@ const createContentBridge = ({
   const dispose = () => {
     disposed = true;
     if (unsubscribe) unsubscribe();
+    if (unsubscribeBinding) unsubscribeBinding();
     if (reinjectTimer) clearTimer(reinjectTimer);
     if (sweeper) clearTimer(sweeper);
     for (const extensionId of [...state.keys()]) {
