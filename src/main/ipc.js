@@ -7,6 +7,7 @@ const { showContextMenu } = require("./context-menu");
 const extensionServer = require("./extension-server");
 const panelHost = require("./panel-host");
 const { createMessageRouter } = require("./message-router");
+const { evalInPage, reloadInPage } = require("./inspected-window");
 const {
   STORE_INJECTED_SCRIPT,
   GET_INJECTED_SCRIPT,
@@ -28,6 +29,8 @@ const {
   RUNTIME_PORT_CLOSE,
   RUNTIME_DELIVER,
   EXT_PANEL_CREATE,
+  DEVTOOLS_EVAL,
+  DEVTOOLS_RELOAD,
 } = require("../shared/ipc");
 
 // ── runtime messaging router wiring ─────────────────────────────────────────
@@ -192,6 +195,32 @@ const registerIpcHandlers = () => {
       return { ok: false };
     }
     return { ok: panelHost.addPanel({ extensionId, title, pagePath }) };
+  });
+
+  // ── inspected window (docs/features/INSPECTED-WINDOW.md) ──────────────────
+  // chrome.devtools.inspectedWindow.eval -> CDP Runtime.evaluate over the
+  // frontend's debugger session (src/main/cdp-bridge.js). Same frame gate as
+  // panels.create: an unregistered frame gets a visible isError, never a
+  // fabricated value.
+  ipcMain.handle(DEVTOOLS_EVAL, (event, { expression, options } = {}) => {
+    if (!resolveFrameKey(event) || typeof expression !== "string") {
+      return { ok: false, error: "inspectedWindow.eval: unauthorized call" };
+    }
+    return evalInPage(expression, options || {}).then(({ value, exceptionInfo }) => ({
+      ok: true,
+      value,
+      exceptionInfo,
+    }));
+  });
+
+  // inspectedWindow.reload() -> Page.reload. Chrome's version has no callback, so
+  // the reply exists only for the frame to log: a failed reload is reported, not
+  // silently swallowed (src/preload/extension-frame.js).
+  ipcMain.handle(DEVTOOLS_RELOAD, (event, { options } = {}) => {
+    if (!resolveFrameKey(event)) {
+      return { ok: false, error: "inspectedWindow.reload: unauthorized call" };
+    }
+    return reloadInPage(options || {});
   });
 };
 

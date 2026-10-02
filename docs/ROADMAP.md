@@ -27,13 +27,16 @@ browser; no for things that do — and that's a product decision, not a technica
    `shell.openExternal/showItemInFolder`, notifications,
    `dispatchHttpRequest`.
 2. **Dispatch channel — the prerequisite (days):** ~~host→frontend events
-   (`InspectorFrontendAPI` via IPC)~~ ✅ live; remaining:
-   `sendMessageToBackend`→CDP socket →
-   [features/DISPATCH-CHANNEL.md](features/DISPATCH-CHANNEL.md). Unblocks menus,
-   eye-dropper, panel events, workspace, real `devtools.network`, `webRequest`.
-   **Highest-leverage item in the project.**
-3. **RN/CDP-dependent (weeks; fidelity capped by the backend):** `inspectedWindow.eval`
-   (excellent), `network`/`webRequest` observability (as good as RN network inspection),
+   (`InspectorFrontendAPI` via IPC)~~ ✅ live. ~~`sendMessageToBackend`→CDP socket~~
+   ✅ **resolved differently and closed**: with `?ws=` in the frontend URL the frontend
+   talks to the socket directly, so that hook is never called. The shell took the socket
+   instead → [cdp-bridge.js](../src/main/cdp-bridge.js)
+   ([features/DISPATCH-CHANNEL.md](features/DISPATCH-CHANNEL.md)). Remaining consumers:
+   menus/theme events, save flow, workspace, device discovery.
+3. **RN/CDP-dependent (weeks; fidelity capped by the backend):**
+   ~~`inspectedWindow.eval`~~ ✅ real (`Runtime.evaluate` over the bridge);
+   `network`/`webRequest` observability (as good as RN network inspection — the transport
+   is now in place, so this is a backend-fidelity question),
    element sidebar panes, **device discovery** (genuinely *better than Chrome* for RN:
    enumerate emulators/devices via the same feed), Sources mapping.
 4. **Fundamentally browser-shaped — deliberately don't fake:** DOM content scripts,
@@ -43,11 +46,13 @@ browser; no for things that do — and that's a product decision, not a technica
 ## Recommended order
 
 ```
-1. dispatch-channel            (bucket 2; unblocks everything)
+1. dispatch-channel            (bucket 2; unblocks everything)          ✅ live
 2. runtime-messaging + contract rules (promise/callback, lastError, Events, Ports)
 3. extension-management        (manifest parse, ids, enumerate to frontend)
-4. devtools-network            (real requests/bodies → GraphQL inspector is real)
-5. inspected-window.eval       (state-debugger extensions work)
+4. inspected-window.eval       (state-debugger extensions work)          ✅ done
+   └── with it: the CDP bridge, which is now the prerequisite for the next item
+5. devtools-network            (real requests/bodies on Network.* → the GraphQL
+                                inspector is real; highest-leverage item left)
 6. storage session + i18n + small-shims   (crash → degrade for many extensions)
 7. background-worker           (unlocks webRequest consumers, alarms, notifications)
 8. content-bridge runner       (app-facing extensions with zero app-code changes)

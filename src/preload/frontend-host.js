@@ -11,7 +11,12 @@
 // main process events arrive over HOST_EVENT and are invoked on the frontend's
 // own window.InspectorFrontendAPI. Context menus are the first round-trip
 // consumer (contextMenuItemSelected / contextMenuCleared).
-// `sendMessageToBackend` remains a stub: its response contract is fork-specific.
+//
+// `sendMessageToBackend` is a no-op **by design, not by omission**: the frontend
+// URL carries `?ws=` (src/main/config.js), so the frontend build selects
+// core/sdk/WebSocketConnection and talks to the CDP socket itself — MainConnection,
+// the only user of sendMessageToBackend, is never constructed. The host reaches
+// the backend on that socket instead (src/main/cdp-bridge.js).
 
 const { contextBridge, ipcRenderer, webFrame } = require("electron");
 const {
@@ -214,9 +219,15 @@ const InspectorFrontendHost = {
   setOpenNewWindowForPopups(value) {},
   setAddExtensionCallback(callback) {},
 
-  // ── [STUB] frontend -> backend CDP escape hatch ──────────────────────────
-  // Important stub: wiring this to the RN CDP socket is the honest way to
-  // build devtools.network / inspectedWindow (docs/features/DISPATCH-CHANNEL.md)
+  // ── frontend -> backend CDP: structurally unused here ────────────────────
+  // Chrome's frontend uses this only in MainConnection (InspectorFrontendHost
+  // "hosted over IPC"). Our frontend URL carries ?ws=, so the frontend build
+  // builds a core/sdk/WebSocketConnection to that host:port and never calls
+  // through here — verified against the bundle we load: the connection factory
+  // (core/sdk/sdk.js) selects WebSocketConnection whenever the `ws`/`wss` query
+  // param is present. The host therefore reaches the RN backend on that socket:
+  // src/main/cdp-bridge.js owns it and answers host commands by message id
+  // (docs/features/INSPECTED-WINDOW.md, docs/features/DISPATCH-CHANNEL.md).
   sendMessageToBackend(message) {},
 
   // ── [STUB] device discovery (sleeper feature for an RN host) ─────────────

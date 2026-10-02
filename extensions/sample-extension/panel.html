@@ -80,6 +80,61 @@
           assert(pong === "port-pong:ping", String(pong));
           port.disconnect();
         });
+
+        // inspectedWindow.eval needs a live RN app on the shell's CDP bridge. Until
+        // the bridge has a session, eval answers isError with the host's reason
+        // (never invented data), so the first check retries for a while instead of
+        // reporting a false FAIL for a panel that simply loaded before the app did.
+        // (docs/features/INSPECTED-WINDOW.md, README "Quick start".)
+        const evalUntilAttached = async (expression, attempts = 40) => {
+          let pair = await chrome.devtools.inspectedWindow.eval(expression);
+          while (attempts-- > 1 && pair && pair[1] && pair[1].isError) {
+            await sleep(500);
+            pair = await chrome.devtools.inspectedWindow.eval(expression);
+          }
+          return pair;
+        };
+
+        await check("inspectedWindow.eval returns real app globals", async () => {
+          const pair = await evalUntilAttached(
+            'JSON.stringify({dev: globalThis.__DEV__, platform: globalThis.platform, window: typeof globalThis.window})'
+          );
+          const [value, info] = pair || [];
+          assert(!info, "no exceptionInfo (host said: " + JSON.stringify(info) + ")");
+          const parsed = JSON.parse(value);
+          assert(typeof parsed.dev === "boolean", "__DEV__ is a boolean: " + value);
+          assert(typeof parsed.platform === "string", "platform is a string: " + value);
+          assert(parsed.window === "object", "RN aliases global.window: " + value);
+          console.log("[inspectedWindow] app says", parsed);
+        });
+
+        await check("inspectedWindow.eval reports page exceptions (callback style)", () =>
+          new Promise((resolve, reject) =>
+            // A bare undeclared identifier throws ReferenceError; note this is NOT
+            // the same as `globalThis.__nope`, which evaluates to undefined.
+            chrome.devtools.inspectedWindow.eval("__no_such_global_at_all__", (value, info) => {
+              try {
+                assert(value === undefined, "no value for a thrown exception");
+                assert(info && info.isException === true, JSON.stringify(info));
+                assert(/Uncaught/.test(info.value), info.value);
+                assert(!info.isError, "isError is reserved for tooling failures");
+                resolve();
+              } catch (e) {
+                reject(e);
+              }
+            })
+          )
+        );
+
+        await check("inspectedWindow.eval: unserializable results are undefined, not faked", async () => {
+          // CDP hands back an objectId for values it cannot serialize; Chrome's
+          // JSON-constrained eval then has nothing to give the extension either.
+          const [value, info] = await chrome.devtools.inspectedWindow.eval(
+            "(function notSerializable() {})"
+          );
+          assert(value === undefined, "a function has no JSON form: " + JSON.stringify(value));
+          assert(!info, "and it is not an error: " + JSON.stringify(info));
+        });
       })();
     </script>
   </body>

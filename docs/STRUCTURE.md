@@ -27,15 +27,15 @@ docs/
 │   │                                        "what is the state of X?"
 │   │                                        (status + tier + blockers per functionality,
 │   │                                         dependency graph)
-│   ├── DISPATCH-CHANNEL.md                ❌ Host→frontend events (InspectorFrontendAPI,
-│   │                                        sendMessageToBackend) — the key prerequisite
-│   ├── RUNTIME-MESSAGING.md               🟡 chrome.runtime, Ports, + the cross-cutting
+│   ├── DISPATCH-CHANNEL.md                🟨 Host→frontend events (InspectorFrontendAPI);
+│   │                                        frontend→backend CDP = the shell's bridge
+│   ├── RUNTIME-MESSAGING.md               🟨 chrome.runtime, Ports, + the cross-cutting
 │   │                                        contract rules (lastError, promise/callback, Events)
 │   ├── EXTENSION-MANAGEMENT.md            🟡 manifest parsing, ids, install/reload
 │   │                                        + manifest-key support matrix
 │   ├── DEVTOOLS-PANELS.md                 🟨 panels.create/theme/events, elements sidebars
 │   ├── DEVTOOLS-NETWORK.md                🟡 real requests + bodies (rebuild on CDP Network.*)
-│   ├── INSPECTED-WINDOW.md                ❌ eval → Runtime.evaluate (state debuggers)
+│   ├── INSPECTED-WINDOW.md                🟨 eval → Runtime.evaluate (state debuggers)
 │   ├── STORAGE-AND-I18N.md                🟨 storage areas status + _locales support
 │   ├── CONTENT-SCRIPTS.md                 ❌ bridge-runner design: CDP injection +
 │   │                                        Runtime.addBinding transport, two-species split

@@ -52,6 +52,10 @@ Altair, Lighthouse, Wiztree…) actually rely on, in rough order of importance:
 - A mechanism (repurposed `setInjectedScriptForOrigin` + per-origin re-injection) for the
   frontend to inject its devtools-API implementation into extension frames.
 - A CDP man-in-the-middle (`src/tools/fake-cdp.js`) to test the stack against web targets.
+- The shell holds the RN debugger session itself (`src/main/cdp-bridge.js`: Metro target
+  discovery, re-attach, host commands multiplexed by message id onto the frontend's
+  session), which makes `chrome.devtools.inspectedWindow.eval` return real values from a
+  running app — the first working bridge to the target.
 
 See [LIMITATIONS.md](LIMITATIONS.md) for what this prototype is *not*.
 

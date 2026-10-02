@@ -9,8 +9,9 @@
 // frontend — the panel iframe then loads `rozenite://<id>/<pagePath>` like any
 // other extension frame.
 //
-// Tier-1 slice: `create` is real; the rest are inert shapes per the stubbing
-// rule of thumb (docs/OVERVIEW.md) — extensions feature-detect by calling.
+// Tier-1 slice: `create` is real; `inspectedWindow.eval` rides the host's CDP
+// bridge; the rest are inert shapes per the stubbing rule of thumb
+// (docs/OVERVIEW.md) — extensions feature-detect by calling.
 const { createEvent } = require("./event");
 
 // Stable synthetic inspectedWindow.tabId (Chrome's is a small positive int).
@@ -32,7 +33,21 @@ const callAsync = (cb, ...args) => {
   }
 };
 
-const createDevtools = ({ extensionId, onPanelCreated = () => {} }) => {
+const createDevtools = ({
+  extensionId,
+  onPanelCreated = () => {},
+  // chrome.devtools.inspectedWindow.eval: injected host dependency
+  // (expression, options) => Promise<{value, exceptionInfo}>. Wired by the
+  // extension-frame preload over the DEVTOOLS_EVAL IPC channel to
+  // src/main/inspected-window.js; absent = honest isError, like Chrome's
+  // "cannot access" answer rather than a silently empty success.
+  evalInPage,
+  // chrome.devtools.inspectedWindow.reload: injected host dependency
+  // (options) => Promise<{ok, error?}>, mapped onto CDP Page.reload. Chrome's API
+  // reports nothing, so a failed reload surfaces through `logger` instead.
+  reloadInPage = () => Promise.resolve(),
+  logger = console,
+}) => {
   const createPanel = (title, pagePath) => ({
     onShown: createEvent(), // deviation: never fires until panel events land
     onHidden: createEvent(),
@@ -94,24 +109,65 @@ const createDevtools = ({ extensionId, onPanelCreated = () => {} }) => {
 
   const inspectedWindow = {
     tabId: tabIdFor(extensionId),
-    // [DEGRADED] no CDP Runtime.evaluate bridge yet — honest isError
-    // (docs/features/INSPECTED-WINDOW.md).
+    // Chrome semantics: `eval(expression, options?, cb)` always answers with the
+    // pair `[value, exceptionInfo]` — it never throws, never rejects, and never
+    // touches runtime.lastError. Both argument overloads are real (a function in
+    // the options slot *is* the callback), and the promise style is the
+    // no-callback form.
+    //
+    // `frameURL`, `useContentScriptContext` and `scriptExecutionContext` are
+    // accepted and ignored: RN has no frames and no isolated content-script
+    // worlds — the app's global context is the only context (and RN aliases
+    // `global.window = global`, which is what state-debugger extensions need).
     eval(expression, options, cb) {
       if (typeof options === "function") {
         cb = options;
+        options = undefined;
       }
-      const failure = [
-        undefined,
-        { isError: true, value: "inspectedWindow.eval is not supported by this host" },
-      ];
+      const run = async () => {
+        if (typeof evalInPage !== "function") {
+          return [
+            undefined,
+            {
+              isError: true,
+              isException: false,
+              value: "inspectedWindow.eval has no CDP backend in this host",
+            },
+          ];
+        }
+        const { value, exceptionInfo } = await evalInPage(expression, options || {});
+        return [value, exceptionInfo];
+      };
       if (typeof cb === "function") {
-        callAsync(cb, ...failure);
-        return undefined;
+        run().then(
+          (pair) => cb(...pair),
+          (error) =>
+            cb(undefined, {
+              isError: true,
+              isException: false,
+              value: String((error && error.message) || error),
+            })
+        );
+        return undefined; // Chrome: callback style returns nothing
       }
-      return Promise.resolve(failure);
+      return run();
     },
+    // [STUB] no DOM node model to select (docs/features/INSPECTED-WINDOW.md).
     getSelectedNode: (cb) => callAsync(cb, null),
+    // [STUB] would map to Debugger.getScriptParsed (Tier 2, same doc).
     getResources: (cb) => callAsync(cb, []),
+    // Chrome's `reload()` takes `{ignoreCache, injectedScript}` and returns
+    // nothing. Mapped onto CDP `Page.reload`, which RN's backend implements
+    // (HostAgent.cpp -> onReload), so this really reloads the JS bundle. Chrome's
+    // API has no callback, so the only honest place to report a failed reload is
+    // the frame's console — the one place an extension author is already looking.
+    reload(options) {
+      Promise.resolve(reloadInPage(options || {})).then((reply) => {
+        if (reply && reply.ok === false) {
+          logger.warn(`[devtools.inspectedWindow.reload] ${reply.error}`);
+        }
+      });
+    },
   };
 
   const network = {
