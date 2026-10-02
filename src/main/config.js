@@ -57,6 +57,27 @@ const alarmClockScale = () => {
   return Number.isFinite(value) && value > 0 ? value : 1;
 };
 
+// Which extensions may inject a content script INTO THE INSPECTED APP, and by
+// default: none of them (src/main/content-gate.js is the full reasoning).
+//
+// The value is a comma/space-separated list of extension ids (the `extensions/<id>`
+// folder name) and/or the literal `<all_rn_targets>`:
+//
+//   DEVTOOLS_CONTENT_SCRIPTS=graphql              only that extension injects
+//   DEVTOOLS_CONTENT_SCRIPTS='<all_rn_targets>'   every extension that declares scripts
+//   (unset)                                       NOTHING is injected — the default
+//
+// `matches` URL patterns are deliberately NOT part of this decision: an RN target has
+// no page URL for a pattern to be written against, so allowing a pattern would mean
+// inventing which target it "really" meant. The gate reports what each pattern would
+// have matched, as information, and decides from this list alone.
+//
+// Chrome needs no such switch, which is the point of having one here: a content script
+// runs third-party code inside the user's running app, in the app's own JS context
+// (Hermes has no isolated worlds), and this shell has no UI to ask the user first.
+const contentScriptAllowlist = () =>
+  (process.env.DEVTOOLS_CONTENT_SCRIPTS || "").trim() || null;
+
 module.exports = {
   repoRoot,
 
@@ -73,6 +94,10 @@ module.exports = {
   // chrome.tabs.create policy: "none" | "external" | "window" (see
   // TABS_OPEN_POLICIES above for why the default opens nothing).
   tabsOpen: tabsOpenPolicy(),
+
+  // Which extensions may inject content scripts into the inspected app
+  // (src/main/content-gate.js). `null` means nothing is allowed — the default.
+  contentScripts: contentScriptAllowlist(),
 
   // chrome.alarms' clock multiplier (src/chrome-shim/alarms.js), resolved to a NUMBER
   // on purpose: this value travels to each extension context inside its
