@@ -14,6 +14,16 @@
 //   - a frame that dies mid-send simply concludes its leg;
 //   - connect() with no peers fails like Chrome's
 //     "Could not establish connection.".
+
+/**
+ * Chrome's answer for "the context was reached, nothing was listening in it". A targeted
+ * sender must hear exactly this, because that is what its own API throws, and a sender
+ * that could not reach ANY context says the same thing — Chrome has no other message for
+ * "nobody was there to hear it" (`chrome.runtime.connect` to a dead extension excepted,
+ * which shortens it to "Could not establish connection.").
+ */
+const NO_RECEIVER = "Could not establish connection. Receiving end does not exist.";
+
 const createMessageRouter = () => {
   const frames = new Map(); // frameKey -> {key, extensionId, url, send}
   const ports = new Map(); // portId -> {extensionId, initiator, legs:Set}
@@ -33,13 +43,19 @@ const createMessageRouter = () => {
     );
   };
 
-  // ── sendMessage ──────────────────────────────────────────────────────────
   /**
-   * Chrome's answer for "the context was reached, nothing was listening in it". A
-   * targeted sender must hear exactly this, because that is what its own API throws.
+   * Whether a sender has ANY context that could receive what it is about to send — a
+   * question a sender must be able to ask BEFORE it sends, because `sendMessage` below
+   * answers "no peers" and "peers answered nothing" with the same `undefined`, and only
+   * the second one is a value Chrome ever gives back.
+   *
+   * Read-only and purely additive: it changes nothing about how a send settles, and the
+   * frame-side `RUNTIME_SEND_MESSAGE` path does not consult it (see the note on
+   * `sendMessage`). The app-side sender in src/main/content-bridge.js does.
    */
-  const NO_RECEIVER = "Could not establish connection. Receiving end does not exist.";
+  const hasPeers = (fromKey) => peersOf(fromKey).length > 0;
 
+  // ── sendMessage ──────────────────────────────────────────────────────────
   const settle = (id) => {
     const req = pending.get(id);
     if (!req || req.expected.size > 0) {
@@ -56,6 +72,18 @@ const createMessageRouter = () => {
     req.resolve(req.lastResponse);
   };
 
+  /**
+   * Fan-out to every peer of one extension, resolving with the LAST valid response.
+   *
+   * Known divergence from Chrome, left alone on purpose: when `fromKey` has no peers at
+   * all, this resolves `undefined` — the value Chrome's `runtime.sendMessage` reserves for
+   * "a listener answered nothing", while Chrome itself rejects with NO_RECEIVER here. It
+   * stays as it is because layers above (`RUNTIME_SEND_MESSAGE` in src/main/ipc.js and the
+   * frame-side client in src/chrome-shim/messaging.js) and their tests are written against
+   * `Promise.resolve(undefined)`, and a sender that needs to know the difference can ask
+   * `hasPeers` BEFORE sending, which is exactly what the app-side sender does. Fixing the
+   * fidelity means changing that layer, not this contract.
+   */
   const sendMessage = ({ fromKey, message }) => {
     const from = frames.get(fromKey);
     const targets = peersOf(fromKey);
@@ -244,6 +272,7 @@ const createMessageRouter = () => {
   return {
     registerFrame,
     unregisterFrame,
+    hasPeers,
     sendMessage,
     sendTo,
     resolveDelivery,
@@ -253,4 +282,4 @@ const createMessageRouter = () => {
   };
 };
 
-module.exports = { createMessageRouter };
+module.exports = { createMessageRouter, NO_RECEIVER };
