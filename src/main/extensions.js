@@ -6,7 +6,20 @@ const fs = require("fs");
 const path = require("path");
 const config = require("./config");
 const extensionServer = require("./extension-server");
+const contentScripts = require("./content-scripts");
 const { buildExtensionURL } = require("../shared/protocol");
+
+/** Every installed extension folder name, in filesystem order. */
+const extensionFolders = () => {
+  try {
+    return fs
+      .readdirSync(config.extensionsDir, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name);
+  } catch {
+    return []; // no extensions dir -> no extensions
+  }
+};
 
 /**
  * Every extension folder with a `devtools_page` manifest entry.
@@ -90,4 +103,24 @@ const scanBackgroundExtensions = () => {
   return found;
 };
 
-module.exports = { scanExtensions, scanBackgroundExtensions };
+/**
+ * Every extension folder that declares `content_scripts`.
+ *
+ * A third scan for the same reason the other two are separate: a content script is
+ * a fourth execution context (inside the inspected app, not in this shell), with its
+ * own host (`src/main/content-bridge.js`) and its own, much stricter, permission
+ * story (`src/main/content-gate.js`). This scan reads MANIFESTS ONLY — no script
+ * source is opened here, because reading third-party source is the first step
+ * toward running it in the user's app.
+ *
+ * @returns {{extensionId: string, name: string, entries: object[], problems: string[]}[]}
+ */
+const scanContentScriptExtensions = () =>
+  contentScripts.scanContentScriptExtensions({ listExtensions: extensionFolders });
+
+module.exports = {
+  extensionFolders,
+  scanExtensions,
+  scanBackgroundExtensions,
+  scanContentScriptExtensions,
+};
