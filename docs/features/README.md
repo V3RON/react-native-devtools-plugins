@@ -1,7 +1,7 @@
 # Feature status matrix
 
 One doc per functionality: status, Chrome API surface, RN mapping, current state, what's
-needed. Legend and tiers: [../README.md](../README.md). Last reviewed: 2026-10-01.
+needed. Legend and tiers: [../README.md](../README.md). Last reviewed: 2026-10-02.
 
 ## Tier 1 — extensions are nonfunctional without these
 
@@ -19,7 +19,7 @@ needed. Legend and tiers: [../README.md](../README.md). Last reviewed: 2026-10-0
 
 | Functionality | Status | Tier | Blocked by |
 | --- | --- | --- | --- |
-| [Content scripts (bridge-style)](CONTENT-SCRIPTS.md) | 🟨 content-bridge runner real and **observed on a real device** (injection, global hook, app→host over `Runtime.bindingCalled`, `tabs.sendMessage` round-trip), behind `DEVTOOLS_CONTENT_SCRIPTS` (default off, so nothing injects); same-tick sends can be lost, and the same entry injects more than once per session | 2 | — |
+| [Content scripts (bridge-style)](CONTENT-SCRIPTS.md) | 🟨 content-bridge runner real and **observed on a real device** (injection, global hook, app→host over `Runtime.bindingCalled`, `tabs.sendMessage` round-trip), behind `DEVTOOLS_CONTENT_SCRIPTS` (default off, so nothing injects); a send with no receiver reports Chrome's connection failure instead of `undefined`, and one entry is evaluated once per app context — both re-observed on the device | 2 | — |
 | [Background worker](BACKGROUND-WORKER.md) (MV3 service worker) | 🟨 always-on hidden context: script executes, lifecycle fires, worker is a messaging peer; MV3 eviction skipped | 2 | — |
 | [webRequest](WEBREQUEST.md) (`chrome.webRequest`) | 🟨 observe-only, 7 of 9 events from the real CDP model; filters + `ResourceType` real | 2 | — (blocking needs CDP `Fetch`) |
 | [`chrome.permissions`](SMALL-SHIMS.md) — "everything declared is granted" shim | 🟨 accept-and-grant: reports the host's real verdict, `request` grants nothing new | 2 | — |

@@ -422,6 +422,22 @@ test("the host's \"no receiver\" arrives as lastError + a rejected promise, not 
   ]);
 });
 
+test("the app-side loader flattens a named target extension — a known divergence, pinned", () => {
+  // Chrome addresses `sendMessage(extensionId, message)` to THAT extension and fails if it
+  // has no receiver. This loader keeps only its own id on the envelope, so the host ends up
+  // fanning the message out to the SENDER's peers. The frame-side client
+  // (src/chrome-shim/messaging.js) rejects a foreign id instead. This is deliberately NOT
+  // fixed here — the right fix is the envelope protocol, host-side, where the caller's real
+  // extension id is host state — but the behaviour is pinned so it cannot be forgotten.
+  // Recorded in docs/features/CONTENT-SCRIPTS.md, "After the run".
+  const app = makeApp();
+  app.install("ext-a", ["a.js"], "1;");
+  app.evaluate(`chrome.runtime.sendMessage("other-extension.local", {hi: 1});`);
+  assert.deepStrictEqual(envelopes(app), [
+    { t: "send", x: "ext-a", s: "ext-a#1", m: { hi: 1 } },
+  ], "the named target is gone; the envelope carries the SENDER's extension id");
+});
+
 // ── binary + oversized payloads ───────────────────────────────────────────────
 test("binary travels base64 and comes back as bytes on both legs", () => {
   const app = makeApp();

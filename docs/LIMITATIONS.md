@@ -22,8 +22,11 @@
   menu, or shortcut routing, which is why `action.onClicked`, `commands.onCommand`, and
   `contextMenus.onClicked` are registrable but have no producer. Content-script injection has
   arrived since (issue #5, [features/CONTENT-SCRIPTS.md](features/CONTENT-SCRIPTS.md)), but only
-  for an extension a developer names in `DEVTOOLS_CONTENT_SCRIPTS`, and never yet against a real
-  device. What HAS arrived since (issue #4,
+  for an extension a developer names in `DEVTOOLS_CONTENT_SCRIPTS`, and only into the app's own
+  JS context — Hermes has no isolated worlds, so a script there can read and overwrite app
+  globals. Observed on a real device; the message-loss gap that run found is fixed and
+  re-observed there, so a send nobody could receive now fails with Chrome's own connection
+  error instead of looking answered. What HAS arrived since (issue #4,
   [features/SMALL-SHIMS.md](features/SMALL-SHIMS.md)): `notifications` raises real system
   notifications, `alarms` runs real timers, `downloads` really saves over the shell's one
   export path, manifest `options_ui` opens a real window, `permissions` reports the manifest's
@@ -244,7 +247,8 @@ lifecycle events fire, and it is a messaging peer — and the network data behin
 `devtools.network` / `webRequest` is real CDP rather than a stub. But the app-side half of that
 network path has never been walked against a device from this checkout, and the shell is still
 far from a product: no install/reload UI, content scripts that inject only when a developer
-opts an extension in by hand (and never yet against a real device), no MV3 worker lifecycle,
+opts an extension in by hand (that path has now been walked on a device), no MV3 worker
+lifecycle,
 sandbox still off, deep coupling to an unmerged frontend fork.
 The path forward is in [ROADMAP.md](ROADMAP.md); per-functionality state is in
 [features/README.md](features/README.md).
