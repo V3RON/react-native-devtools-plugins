@@ -135,6 +135,56 @@ test("get() with an unknown id fails with Chrome's own error, promise and callba
   assert.match(String(seenError && seenError.message), /No tab with id/);
 });
 
+// The test above builds its OWN lastError holder and hands it to createTabs, so it proves
+// the contract on one side of a seam and stays green while the seam itself is wired wrong.
+// This is that same failure through the wiring an extension frame actually gets, which is
+// where `deps.lastError` was being handed the bare `{value}` cell: with no setError,
+// promiseOrCallback falls back to `callback(undefined, {message})`, an argument Chrome never
+// passes, while runtime.lastError stays empty — so the extension's error check below reads a
+// failed lookup as a successful `undefined`.
+test("a tab failure reaches chrome.runtime.lastError through the real namespace wiring", async () => {
+  const chrome = createChromeNamespace({
+    extensionId: "altair",
+    storage: createExtensionStorage({ createBackend: () => createMemoryBackend() }),
+    networkBridge: { webRequest: {}, network: {} },
+    getTargetInfo: () => ATTACHED,
+    logger: { warn: () => {}, error: () => {}, log: () => {} },
+  });
+
+  await assert.rejects(
+    () => chrome.tabs.get(999999),
+    /No tab with id: 999999/,
+    "promise style rejects with the same message"
+  );
+
+  let observed = null;
+  await new Promise((resolve) =>
+    chrome.tabs.get(999999, function (tab) {
+      // Chrome's shape: no value to work with, and the error lives on runtime.lastError.
+      // `runtime.lastError` is a static `null` on a bare namespace because contextBridge
+      // cloning loses getters — src/preload/extension-frame.js re-defines it as a live
+      // getter over this same holder. `_getLastLastError()` is that holder.
+      observed = {
+        tab,
+        args: arguments.length,
+        lastError: chrome.runtime._getLastLastError(),
+      };
+      resolve();
+    })
+  );
+  await tick();
+  assert.strictEqual(observed.tab, undefined, "the callback gets no tab");
+  assert.strictEqual(observed.args, 0, "and no second error argument, which Chrome never passes");
+  assert.ok(observed.lastError, "the shared lastError holder is set for the callback's duration");
+  assert.match(String(observed.lastError.message), /No tab with id: 999999/);
+
+  await tick();
+  assert.ok(
+    !chrome.runtime._getLastLastError(),
+    "and scoped to that callback: it does not leak and read as a stale failure on the next one"
+  );
+});
+
 test("create returns an id and a real url, and resolves a relative path against the extension origin", async () => {
   // The exact consumer: Altair's assets/tabs.js.
   const { tabs } = make();

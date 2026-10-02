@@ -88,6 +88,27 @@ const createChromeNamespace = ({
   // the messaging client sets/clears it around callback invocations.
   const lastError = { value: null };
 
+  /**
+   * What `promiseOrCallback` wants as `options.lastError`: the same shared cell, wrapped in
+   * the `{setError, clearError}` pair it documents. Handing a shim the bare cell instead —
+   * which is what happened while each shim guessed — leaves `setError` missing, so
+   * `promiseOrCallback` falls back to `callback(undefined, {message})`: an argument Chrome
+   * never passes, delivered while `chrome.runtime.lastError` stays empty. The extension's
+   * `if (chrome.runtime.lastError)` then reads a failure as a successful `undefined`.
+   *
+   * Only the shims that raise their OWN failures need this (`tabs`). The shells in
+   * src/chrome-shim/browser-shells.js build the pair themselves around the cell, which is
+   * why the two shapes coexist here.
+   */
+  const lastErrorScope = {
+    setError: (error) => {
+      lastError.value = error;
+    },
+    clearError: () => {
+      lastError.value = null;
+    },
+  };
+
   // Declared permissions gate real capability (docs/features/EXTENSION-MANAGEMENT.md).
   // Absent means ungated: the shape stays and every call works, which is the
   // state a unit test injects when it is not testing enforcement.
@@ -224,7 +245,11 @@ const createChromeNamespace = ({
         openTab: openTabIn,
         closeTab: closeTabById,
         onUnsupported: (message) => logger.warn(`[chrome.tabs] ${message}`),
-        lastError,
+        // The pair, not the bare cell. `createTabs` documents `{setError, clearError}` and
+        // its own unit tests pass exactly that, so this call site was the one place the
+        // contract was broken — every failure this model raises ("No tab with id") was
+        // invisible to `if (chrome.runtime.lastError)`.
+        lastError: lastErrorScope,
       }),
       {
       api: "tabs",
