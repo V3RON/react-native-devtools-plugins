@@ -30,6 +30,7 @@ const {
   PREF_CLEAR,
   WINDOW_BRING_TO_FRONT,
   WINDOW_CLOSE,
+  HOST_SAVE,
 } = require("../shared/ipc");
 
 // ── dispatch channel receiver ───────────────────────────────────────────────
@@ -118,19 +119,47 @@ const InspectorFrontendHost = {
     window.open(url, "_blank");
   },
   save(url, content, forceSaveAs, isBase64) {
-    // [FAKE] basic anchor-download hack; should use Electron's save dialog
-    const blob = new Blob([content], { type: "text/plain" });
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = url || "untitled.txt";
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(a.href);
+    // [REAL] the shell's one save path (src/main/save-service.js) — the same one
+    // `chrome.downloads.download` uses. This used to build a Blob, hang an
+    // `<a download>` off the DevTools document and click it: that only works if the
+    // renderer is allowed to navigate to a `blob:` URL, and nobody — not the user,
+    // not the shell — was told whether a file was written or where it went. Here the
+    // host picks a path (a real save dialog when `forceSaveAs`), writes the bytes,
+    // and reports the state; the reply is awaited for nothing because Chrome's
+    // `InspectorFrontendHost.save` has no callback, but a failed save is logged
+    // rather than swallowed.
+    const name = String(url || "untitled.txt").split(/[\\/]/).pop() || "untitled.txt";
+    ipcRenderer
+      .invoke(HOST_SAVE, { url: name, content, forceSaveAs, isBase64 })
+      .then((reply) => {
+        if (reply && reply.ok === false) {
+          console.warn(`InspectorFrontendHost.save: ${reply.error}`);
+        }
+      })
+      .catch((error) => console.warn(`InspectorFrontendHost.save: ${error && error.message}`));
   },
-  append(url, content) {},
-  close(url) {},
-  showItemInFolder(fileSystemPath) {},
+  // Chrome appends to a file it opened with `save` first. This shell's save owns a
+  // path only for the duration of one write, so there is nothing to append to; say
+  // so, because an inert no-op reads as a file that grew.
+  append(url, content) {
+    void url;
+    void content;
+    console.warn(
+      "InspectorFrontendHost.append does nothing: this host writes a file in one save and keeps no handle open."
+    );
+  },
+  // Chrome's `close` releases a file opened by `save`. Nothing is open here.
+  close(url) {
+    void url;
+  },
+  // [STUB] no OS file-revealer is wired for a path the frontend names. It stays inert
+  // rather than doing something adjacent-looking (bringing this window forward would
+  // read as "the file was revealed"), and says why once per call site.
+  showItemInFolder(fileSystemPath) {
+    console.warn(
+      `InspectorFrontendHost.showItemInFolder does nothing: ${String(fileSystemPath || "")} is not a path this host tracks.`
+    );
+  },
 
   // ── [REAL] preferences (persisted via electron-store) ───────────────────
   // Frontend state (theme, experiments, panel sizing) survives restarts.

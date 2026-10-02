@@ -45,6 +45,18 @@ const {
   NETWORK_GET_STATUS,
   NETWORK_GET_BODY,
   NETWORK_DELIVER,
+  TABS_TARGET_INFO,
+  TABS_OPEN,
+  TABS_CLOSE,
+  NOTIFICATION_SHOW,
+  NOTIFICATION_CLEAR,
+  NOTIFICATION_PERMISSION,
+  OPTIONS_OPEN,
+  DOWNLOAD_START,
+  DOWNLOAD_CANCEL,
+  DOWNLOAD_ERASE,
+  DOWNLOAD_SEARCH,
+  DOWNLOAD_SUGGEST_REPLY,
 } = require("../shared/ipc");
 
 const extensionId = window.location.hostname; // id == hostname: load-bearing
@@ -77,6 +89,11 @@ const getManifest = () => manifestCache;
 let grants;
 const permissions = createGrantGate(() => grants);
 
+// chrome.alarms' clock multiplier, decided by the host and handed back at
+// registration (src/main/config.js). 1 = real time; the harness shortens it so a
+// headless run can observe a real timer fire inside a worker.
+let alarmClockScale = 1;
+
 // electron-store -> chrome-shim StorageBackend adapter.
 // NOTE: one Store instance per frame per area races on the shared JSON file;
 // swap for a main-process-backed backend (docs/LIMITATIONS.md).
@@ -103,11 +120,44 @@ const storage = createExtensionStorage({
 // Every call waits for RUNTIME_REGISTER, because the host derives this frame's
 // identity from the registered principal — an unregistered frame is not entitled
 // to the app's traffic.
-const registered = ipcRenderer.invoke(RUNTIME_REGISTER).then((reply) => {
-  grants = (reply && reply.granted) || {};
+// The one place the frame learns whether the host knows it. Registration can fail in
+// two ways — the host refuses (an answer of `{ok: false}`) or the handler throws (a
+// rejected invoke) — and BOTH have to settle the permission gate:
+//
+//   - if they did not, `permissions.check` would keep returning a promise that never
+//     resolves, and every gated API call in this context would hang forever with no
+//     error anywhere. Measured: a throwing RUNTIME_REGISTER handler made a worker's
+//     first `chrome.notifications.create` never call back at all.
+//   - the fallback is `{}` — nothing declared — which is the honest reading of "the
+//     host told us nothing about this frame". Chrome does not run an extension page it
+//     cannot identify either, and a gate that defaults to ALLOWED would be the worst
+//     possible guess.
+//
+// The reason is logged, because a frame that silently loses every capability is the
+// kind of failure a developer spends a day on.
+const registrationFailed = (reason) => {
+  grants = {};
   permissions.manifestLoaded();
-  return reply || { ok: false };
-});
+  console.error(
+    `[chrome] this frame could not register with the host (${reason}); every permission-gated ` +
+      "API will report that its permission is not declared."
+  );
+  return { ok: false, error: reason };
+};
+
+const registered = ipcRenderer
+  .invoke(RUNTIME_REGISTER)
+  .then((reply) => {
+    if (!reply || !reply.ok) {
+      return registrationFailed("the host refused the registration");
+    }
+    grants = reply.granted || {};
+    const scale = Number(reply.alarmClockScale);
+    alarmClockScale = Number.isFinite(scale) && scale > 0 ? scale : 1;
+    permissions.manifestLoaded();
+    return reply;
+  })
+  .catch((error) => registrationFailed((error && error.message) || "registration failed"));
 const asNetworkCaller = (call) => registered.then(() => call());
 
 const networkBridge = createNetworkBridge({
@@ -117,6 +167,11 @@ const networkBridge = createNetworkBridge({
   fetchBody: (requestId) =>
     asNetworkCaller(() => ipcRenderer.invoke(NETWORK_GET_BODY, { requestId })),
 });
+
+// Same rule as the network reads for every other host-backed call: the host derives
+// this frame's identity from the registered principal, so nothing is asked before
+// RUNTIME_REGISTER resolves.
+const asRegisteredCaller = asNetworkCaller;
 
 // chrome.runtime messaging transport over IPC (docs/features/RUNTIME-MESSAGING.md).
 // Registration gates all traffic: until it resolves the frame is unknown to
@@ -137,6 +192,10 @@ const transport = {
     registered.then(() => ipcRenderer.invoke(RUNTIME_PORT_CLOSE, { portId })),
 };
 
+// chrome.tabs' view of the inspected target, and the two things main can do that a
+// frame cannot (src/main/tab-host.js). Both are gated AGAIN in main from the host's
+// own grants, so a frame that ignored its RUNTIME_REGISTER reply gets neither the
+// target's url nor a launched window (docs/features/EXTENSION-MANAGEMENT.md).
 const chrome = createChromeNamespace({
   extensionId,
   getManifest,
@@ -147,6 +206,75 @@ const chrome = createChromeNamespace({
   storage,
   networkBridge,
   transport,
+  getTargetInfo: () =>
+    asRegisteredCaller(() => ipcRenderer.invoke(TABS_TARGET_INFO)).then((reply) =>
+      // A denial or a lost reply both mean the same thing to the shim: the host did
+      // not report a target, so the synthetic tab falls back to about:blank + "".
+      reply && reply.ok
+        ? { attached: Boolean(reply.attached), url: reply.url, title: reply.title }
+        : { attached: false }
+    ),
+  openTabIn: (details) =>
+    asRegisteredCaller(() =>
+      ipcRenderer.invoke(TABS_OPEN, {
+        url: details.url,
+        windowId: details.windowId,
+        active: details.active,
+      })
+    ).then((reply) => (reply && reply.ok ? { via: reply.via ?? null, handle: reply.handle } : { via: null })),
+  closeTabById: (handle) =>
+    asRegisteredCaller(() => ipcRenderer.invoke(TABS_CLOSE, { handle })).then(
+      (closed) => Boolean(closed)
+    ),
+  // chrome.notifications -> the host's Electron Notification. The OWNER of a
+  // notification is recorded in main from this frame's own identity, so the click
+  // comes back to this context alone — the frame never names a recipient.
+  showNotification: (notification) =>
+    asRegisteredCaller(() => ipcRenderer.invoke(NOTIFICATION_SHOW, notification)).then(
+      (reply) => (reply && reply.ok ? null : (reply && reply.error) || "notification could not be shown")
+    ),
+  hideNotification: (id) =>
+    asRegisteredCaller(() => ipcRenderer.invoke(NOTIFICATION_CLEAR, { id })).then(
+      (cleared) => Boolean(cleared)
+    ),
+  getNotificationPermissionLevel: () =>
+    asRegisteredCaller(() => ipcRenderer.invoke(NOTIFICATION_PERMISSION)).then(
+      // An absent answer is not "granted": say what is unknown rather than assume.
+      (level) => (typeof level === "string" ? level : "unspecifed")
+    ),
+  getAlarmClockScale: () => alarmClockScale,
+  // chrome.downloads -> the shell's one save path (src/main/save-service.js). The id
+  // this resolves is main's, so an extension can only ever refer to a save main is
+  // really tracking; a refusal comes back as main's error and rejects the call.
+  saveDownload: (request) =>
+    asRegisteredCaller(() => ipcRenderer.invoke(DOWNLOAD_START, request)),
+  cancelDownload: (downloadId) =>
+    asRegisteredCaller(() => ipcRenderer.invoke(DOWNLOAD_CANCEL, { id: downloadId })).then(
+      (canceled) => Boolean(canceled)
+    ),
+  eraseDownloads: (ids) =>
+    asRegisteredCaller(() => ipcRenderer.invoke(DOWNLOAD_ERASE, { ids })).then(
+      (erased) => erased || []
+    ),
+  searchDownloads: (query) =>
+    asRegisteredCaller(() => ipcRenderer.invoke(DOWNLOAD_SEARCH, { query })).then(
+      (items) => items || []
+    ),
+  // The extension's answer to one filename-suggestion request. `suggestion === null`
+  // is the shim's "no suggestion" (Chrome's callback called with no argument), which
+  // the host reads as "keep the name you derived".
+  respondSuggestion: (requestId, suggestion) => {
+    ipcRenderer
+      .invoke(DOWNLOAD_SUGGEST_REPLY, { requestId, filename: suggestion })
+      .catch(() => {});
+  },
+  // chrome.runtime.openOptionsPage -> a window for the manifest's options_ui.page.
+  // Main reads the manifest from disk, so an extension with no options_ui gets the
+  // refusal (see src/main/options-host.js) rather than a resolved promise.
+  openOptionsPage: () =>
+    asRegisteredCaller(() => ipcRenderer.invoke(OPTIONS_OPEN)).then(
+      (reply) => reply || { ok: false, error: "openOptionsPage: no answer from the host." }
+    ),
   // Declared permissions gate capability (docs/features/EXTENSION-MANAGEMENT.md).
   // The verdict this frame is gated on is the host's — RUNTIME_REGISTER read the
   // manifest from disk — so a page-world script cannot widen it by replacing
@@ -228,6 +356,16 @@ const startDeliveries = (channel, handle) => {
 };
 
 startDeliveries(RUNTIME_DELIVER, (delivery) => chrome.handleDelivery(delivery));
+
+// An alarm is a timer, and this context owns it: when the document goes away, nothing
+// may fire any more. Chrome's worker would be evicted and its alarms persisted; this
+// shell's worker is always-on, so the teardown is the one place the two models meet,
+// and doing it here is what keeps "an alarm outlived its context" from happening.
+window.addEventListener("pagehide", () => {
+  if (chrome._alarmsShim) {
+    chrome._alarmsShim._cancelAll();
+  }
+});
 
 // Network deliveries (devtools.network events + webRequest listeners). The host
 // wraps them as {kind, payload}; the shim consumes the payload shape. A frame

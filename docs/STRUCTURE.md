@@ -45,8 +45,9 @@ docs/
 │   │                                        hosting route rejected and why
 │   ├── WEBREQUEST.md                      🟨 observe-only (7 of 9 events), non-blocking only
 │   ├── SMALL-SHIMS.md                     🟨 Tier-2 one-offs: permissions, tabs,
-│   │                                        notifications, alarms, downloads, action, options_ui
-│   │                                        (+ exactly what the action/notifications shells owe)
+│   │                                        notifications, alarms, downloads, options_ui,
+│   │                                        and the commands/contextMenus/sidePanel shells
+│   │                                        (+ what each one's missing producer costs)
 │   └── TIER3-OMITTED.md                   🚫 deliberately omitted browser APIs +
 │                                            "no TypeError kills panels" acceptance test
 └── api/

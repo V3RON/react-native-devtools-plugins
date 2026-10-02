@@ -17,7 +17,14 @@ const { createMessageRouter } = require("./message-router");
 const { evalInPage, reloadInPage } = require("./inspected-window");
 const { createNetworkService } = require("./network-service");
 const { sendCommand, onEvent, status: bridgeStatus } = require("./cdp-bridge");
-const { createPermissionGate } = require("../shared/permissions");
+const { createPermissionGate, API_PERMISSIONS } = require("../shared/permissions");
+const tabHost = require("./tab-host");
+const notificationHost = require("./notification-host");
+const { getContextRegistry } = require("./context-registry");
+const { getRequestQueue } = require("./context-request");
+const saveService = require("./save-service");
+const optionsHost = require("./options-host");
+const config = require("./config");
 const {
   SHOW_CONTEXT_MENU,
   PREF_REGISTER,
@@ -44,6 +51,19 @@ const {
   NETWORK_GET_STATUS,
   NETWORK_GET_BODY,
   NETWORK_DELIVER,
+  TABS_TARGET_INFO,
+  TABS_OPEN,
+  TABS_CLOSE,
+  NOTIFICATION_SHOW,
+  NOTIFICATION_CLEAR,
+  NOTIFICATION_PERMISSION,
+  HOST_SAVE,
+  OPTIONS_OPEN,
+  DOWNLOAD_START,
+  DOWNLOAD_CANCEL,
+  DOWNLOAD_ERASE,
+  DOWNLOAD_SEARCH,
+  DOWNLOAD_SUGGEST_REPLY,
 } = require("../shared/ipc");
 
 // ── runtime messaging router wiring ─────────────────────────────────────────
@@ -122,13 +142,32 @@ const grantedPermissions = (event) => {
     return {};
   }
   const granted = {};
-  for (const permission of ["storage", "tabs", "webRequest", "notifications"]) {
+  // Every permission the shim's own table knows about, so a namespace added later
+  // is reported — and therefore gated — without anyone extending an array here.
+  // Under-reporting has one dangerous direction: `chrome.permissions.getAll`
+  // answers from this map, so a permission in the table but not here would be
+  // reported as NOT granted for a manifest that declares it.
+  for (const permission of new Set(Object.values(API_PERMISSIONS))) {
     granted[permission] = gate.has(permission);
   }
   return granted;
 };
 
 let unregisterRouterFrame; // set below to avoid closure-order issues
+
+/**
+ * The extension the calling frame belongs to, read from the frame's own URL by the
+ * host. Several features need an owner for host-side state (the download ledger,
+ * the options window) and this is the only source that is not something the frame
+ * asserted about itself. Returns null for a frame whose URL is not an extension URL.
+ */
+const extensionIdOfFrame = (event) => {
+  try {
+    return new URL(event.senderFrame.url).hostname;
+  } catch {
+    return null;
+  }
+};
 
 const makeFrameSender =
   (key, webContents, frame, channel = RUNTIME_DELIVER, filter = null) =>
@@ -204,6 +243,15 @@ const registerIpcHandlers = () => {
   unregisterRouterFrame = (key) => {
     principals.delete(key);
     grants.delete(key);
+    // A context that goes away stops being a target for host events. Without this a
+    // notification click would be pushed into a detached frame (the registry's own
+    // send throws for that, but the id would stay owned forever).
+    getContextRegistry().unregister(key);
+    // The same for a host->context REQUEST that is still open: a download waiting on
+    // a filename suggestion from a frame that has died would otherwise sit until its
+    // timeout. Settling it now lets the save proceed with the name it derived, and
+    // the save service reports that it did.
+    getRequestQueue().dropContext(key);
     router.unregisterFrame(key);
     // A frame that goes away also stops being a network subscriber; the model
     // stops asking the backend for Network events once no frame wants them.
@@ -226,6 +274,12 @@ const registerIpcHandlers = () => {
     }
     const key = `${event.sender.id}:${event.frameId}`;
     principals.set(key, frame);
+    // Reachability registry (src/main/context-registry.js): the same `send` closure
+    // the router gets, kept so a host-produced, context-owned event — a system
+    // notification the user clicked — can go to the ONE context that created it,
+    // which is what Chrome does and what the router (fan-out to every frame of the
+    // extension) is not.
+    getContextRegistry().register({ frameKey: key, extensionId, send: makeFrameSender(key, event.sender, frame) });
     // Which declared permissions this frame's extension has, decided from the
     // manifest on disk and handed back once, at registration. The frame's shim
     // uses it for lastError reporting; the network handlers below enforce the
@@ -246,7 +300,14 @@ const registerIpcHandlers = () => {
       send: makeFrameSender(key, event.sender, frame),
     });
     event.sender.once("destroyed", () => unregisterRouterFrame(key));
-    return { ok: true, granted };
+    // `alarmClockScale` is decided here rather than read in the frame: a page-world
+    // script must not be able to see or influence the host's test configuration
+    // (src/main/config.js explains what the value is for, and why the config exports
+    // it as a number: this reply crosses IPC through the structured-clone serializer,
+    // which DROPS a function-valued property rather than transferring it — so a
+    // function here reached the frame as `undefined` and every context ran unscaled,
+    // silently. tests/tier2-worker-electron.test.js is what measured that.)
+    return { ok: true, granted, alarmClockScale: config.alarmClockScale };
   });
 
   const registeredHandle = (channel, handler) =>
@@ -395,6 +456,221 @@ const registerIpcHandlers = () => {
     }
     return networkService.getBody(requestId);
   });
+  // ── chrome.tabs (docs/features/SMALL-SHIMS.md) ─────────────────────────────
+  // The frame's shim is already gated by its RUNTIME_REGISTER grants; these
+  // handlers enforce the same verdict from host state anyway, for the same reason
+  // the network handlers do: a frame that ignores the answer in its registration
+  // reply must still not be able to ask for the inspected target's url/title or
+  // launch a window. Identity from the frame, never from payload.
+  const tabsCaller = (event) => {
+    const key = resolveFrameKey(event);
+    if (!key) {
+      return false;
+    }
+    const frameGrants = grants.get(key) || {};
+    return frameGrants.tabs === true;
+  };
+
+  /** The calling frame's key when its extension declares `permission`, else false. */
+  const gatedFrameKey = (event, permission) => {
+    const key = resolveFrameKey(event);
+    if (!key) {
+      return null;
+    }
+    const frameGrants = grants.get(key) || {};
+    return frameGrants[permission] === true ? key : null;
+  };
+
+  ipcMain.handle(TABS_TARGET_INFO, (event) => {
+    if (!tabsCaller(event)) {
+      // Not `{attached: false}`: that would be the shape of a truthful "nothing is
+      // attached", which is a claim about the app the caller has not earned.
+      return { ok: false, error: "tabs: permission 'tabs' is not declared" };
+    }
+    return tabHost.getTabHost().targetInfo();
+  });
+
+  ipcMain.handle(TABS_OPEN, (event, details = {}) => {
+    if (!tabsCaller(event)) {
+      return { ok: false, error: "tabs: permission 'tabs' is not declared" };
+    }
+    return tabHost
+      .getTabHost()
+      .open({ url: details.url, windowId: details.windowId, active: details.active })
+      .then((outcome) => ({ ok: true, ...outcome }))
+      .catch((error) => ({ ok: false, error: error && error.message }));
+  });
+
+  // ── chrome.notifications (docs/features/SMALL-SHIMS.md) ────────────────────
+  // The `notifications` permission is enforced HERE as well as in the frame's gate:
+  // a frame that ignored its RUNTIME_REGISTER reply must not be able to raise a
+  // system notification. The OWNER is this event's own frame key, which main derives
+  // from the frame — a payload can never name a context to receive a click.
+  ipcMain.handle(NOTIFICATION_SHOW, (event, details = {}) => {
+    const key = gatedFrameKey(event, "notifications");
+    if (!key) {
+      return { ok: false, error: "notifications: permission 'notifications' is not declared" };
+    }
+    return notificationHost
+      .getNotificationHost()
+      .show({
+        frameKey: key,
+        id: details.id,
+        title: details.title,
+        message: details.message,
+        silent: details.silent,
+        iconUrl: details.iconUrl,
+      })
+      .catch((error) => ({ ok: false, error: (error && error.message) || "notification failed" }));
+  });
+
+  ipcMain.handle(NOTIFICATION_CLEAR, (event, { id } = {}) => {
+    if (!gatedFrameKey(event, "notifications")) {
+      return false;
+    }
+    return notificationHost.getNotificationHost().clear({ notificationId: id });
+  });
+
+  ipcMain.handle(NOTIFICATION_PERMISSION, (event) => {
+    if (!gatedFrameKey(event, "notifications")) {
+      return "unspecifed";
+    }
+    return notificationHost.getNotificationHost().permissionLevel();
+  });
+
+  ipcMain.handle(TABS_CLOSE, async (event, { handle } = {}) => {
+    if (!tabsCaller(event)) {
+      return false;
+    }
+    return tabHost.getTabHost().close(handle);
+  });
+
+  // ── chrome.downloads + runtime.openOptionsPage (docs/features/SMALL-SHIMS.md) ──
+  //
+  // The save machinery is src/main/save-service.js and the filename-suggestion
+  // round trip is src/main/context-request.js; both are transport-agnostic, so the
+  // DevTools frontend's own `InspectorFrontendHost.save` and an extension's
+  // `chrome.downloads.download` share one implementation and get the same honest
+  // states (in_progress → complete only after a write resolved, interrupted with
+  // the platform's own message otherwise).
+  //
+  // All of `downloads` is gated, including `erase`/`search`: in Chrome the same
+  // permission covers creating a download AND reading the history of the ones that
+  // exist. `OPTIONS_OPEN` is deliberately NOT gated, because Chrome does not gate
+  // `runtime.openOptionsPage` — the manifest on disk is the only authority, and an
+  // extension that declares no `options_ui` is told so (see options-host.js).
+
+  /**
+   * The calling frame when its extension declares `downloads`, with the extension id
+   * the host derived from the frame's own URL. That id is what scopes the download
+   * ledger: Chrome's download history belongs to one extension, so `search`/`erase`
+   * for one must never return another's files.
+   */
+  const downloadCaller = (event) => {
+    const frameKey = gatedFrameKey(event, "downloads");
+    if (!frameKey) {
+      return null;
+    }
+    return { frameKey, owner: extensionIdOfFrame(event) };
+  };
+
+  ipcMain.handle(DOWNLOAD_START, (event, details = {}) => {
+    const caller = downloadCaller(event);
+    if (!caller) {
+      return { ok: false, error: "downloads: permission 'downloads' is not declared" };
+    }
+    return saveService
+      .getSaveService()
+      .start({
+        // Owned by THIS frame: onChanged and any filename question go to the context
+        // that started the download, which is Chrome's rule. Both key and owner are
+        // main's own, never taken from the payload.
+        frameKey: caller.frameKey,
+        owner: caller.owner,
+        url: details.url,
+        content: details.content,
+        isBase64: details.isBase64 === true,
+        filename: details.filename,
+        saveAs: details.saveAs === true,
+        title: details.title,
+      })
+      .catch((error) => ({ ok: false, error: (error && error.message) || "the save failed" }));
+  });
+
+  ipcMain.handle(DOWNLOAD_CANCEL, (event, { id } = {}) => {
+    const caller = downloadCaller(event);
+    if (!caller) {
+      return false;
+    }
+    return saveService.getSaveService().cancel({ id, owner: caller.owner });
+  });
+
+  ipcMain.handle(DOWNLOAD_ERASE, (event, { ids } = {}) => {
+    const caller = downloadCaller(event);
+    if (!caller) {
+      return { id: [] };
+    }
+    return saveService.getSaveService().erase({ ids, owner: caller.owner });
+  });
+
+  ipcMain.handle(DOWNLOAD_SEARCH, (event, { query } = {}) => {
+    const caller = downloadCaller(event);
+    if (!caller) {
+      return [];
+    }
+    return saveService.getSaveService().search({ query: query || {}, owner: caller.owner });
+  });
+
+  ipcMain.handle(DOWNLOAD_SUGGEST_REPLY, (event, { requestId, filename } = {}) => {
+    const caller = downloadCaller(event);
+    if (!caller) {
+      return { ok: false };
+    }
+    // `resolve` returns false when nothing was waiting on THIS frame for that id, so
+    // a late or invented answer cannot influence a download that is already decided.
+    const answered = getRequestQueue().resolve(caller.frameKey, requestId, {
+      suggestion: typeof filename === "string" && filename ? filename : null,
+    });
+    return { ok: answered };
+  });
+
+  ipcMain.handle(OPTIONS_OPEN, (event) => {
+    // Identity from the frame's URL, like every other extension channel: a payload
+    // can never name the extension whose options page gets opened.
+    let extensionId;
+    try {
+      extensionId = new URL(event.senderFrame.url).hostname;
+    } catch {
+      return { ok: false, error: "openOptionsPage: the caller is not an extension page." };
+    }
+    if (!extensionServer.resolveExtensionFile(extensionId, "")) {
+      return { ok: false, error: "openOptionsPage: unknown extension." };
+    }
+    return optionsHost.getOptionsHost().openOptionsPage(extensionId);
+  });
+
+  // `InspectorFrontendHost.save` — the DevTools frontend's own save. Before this it
+  // built a Blob, hung an `<a download>` off the DevTools document and clicked it,
+  // which works only if the renderer may navigate to a `blob:` URL and tells nobody
+  // whether anything was written. Same service as chrome.downloads, no extension
+  // gating (the frontend is not an extension), and no filename suggestion because
+  // there is no extension to ask.
+  //
+  // Chrome's first argument is a NAME, not a location to fetch (the old hack used it
+  // as `a.download`), and the content arrives with the call — so it goes in as
+  // `filename` + `content` and nothing is fetched.
+  ipcMain.handle(HOST_SAVE, (_event, { url, content, forceSaveAs, isBase64 } = {}) =>
+    saveService
+      .getSaveService()
+      .start({
+        frameKey: null,
+        filename: String(url || "untitled.txt"),
+        content,
+        isBase64: isBase64 === true,
+        saveAs: forceSaveAs === true,
+      })
+      .catch((error) => ({ ok: false, error: (error && error.message) || "the save failed" }))
+  );
 };
 
 module.exports = { registerIpcHandlers, subscribeRouterFrames };

@@ -18,11 +18,18 @@
   nothing has to wake it, so `onSuspend`/`onUpdateAvailable` never fire and a worker that
   would have been torn down in Chrome keeps running here. That is a superset for a devtools
   host and a divergence from Chrome's resource model at the same time.
-- Still missing from the extension model: content-script injection, a working
-  `action`/popup, options UI, `tabs`, `notifications`, `alarms`, a `chrome.permissions`
-  prompt. `action` and `notifications` exist as **registrable no-op shells** so that a worker
-  naming them at module scope can load at all; they show nothing and their events never fire
-  ([features/SMALL-SHIMS.md](features/SMALL-SHIMS.md)).
+- Still missing from the extension model: content-script injection and a working
+  `action`/popup — plus a toolbar, browser menu, or shortcut routing, which is why
+  `action.onClicked`, `commands.onCommand`, and `contextMenus.onClicked` are registrable but
+  have no producer. What HAS arrived since (issue #4,
+  [features/SMALL-SHIMS.md](features/SMALL-SHIMS.md)): `notifications` raises real system
+  notifications, `alarms` runs real timers, `downloads` really saves over the shell's one
+  export path, manifest `options_ui` opens a real window, `permissions` reports the manifest's
+  truth, and `tabs` answers with one synthetic tab for the inspected target rather than an
+  empty list. A `chrome.permissions` prompt still does not exist, so `permissions.request`
+  grants nothing. **`chrome.windows` is not injected at all** — no window model exists to
+  report — so a worker naming it at module scope is the one remaining case where Tier 2
+  breaks the "a missing namespace must not kill the worker" rule.
 - DevTools pages are only "loaded" as iframes; no real separation between devtools page
   and panel frames like Chrome has.
 
@@ -43,13 +50,33 @@
   ([features/DEVTOOLS-NETWORK.md](features/DEVTOOLS-NETWORK.md)).
 - Network history is a bounded ring (500 settled records, in-flight requests never dropped);
   an evicted record's body then honestly reports itself as unavailable rather than stale.
-- `chrome.tabs.*` is an **inert shell** (`query()` → `[]`, `create()` resolves `undefined` and
-  opens nothing, events never fire — `src/chrome-shim/tabs.js`), enough for Altair's
-  `tabs.query` consumers to render its monitor panel. The background worker runs
-  ([features/BACKGROUND-WORKER.md](features/BACKGROUND-WORKER.md)), so `runtime.onInstalled`
-  and `onStartup` now have a producer; making `tabs.create` actually open something is
-  outstanding. `runtime.sendMessage`/Ports between extension frames — including to and from
-  the worker — work ([features/RUNTIME-MESSAGING.md](features/RUNTIME-MESSAGING.md)).
+- `chrome.tabs` answers with **one synthetic tab standing for the inspected RN
+  target** (`src/chrome-shim/tabs.js`, [features/SMALL-SHIMS.md](features/SMALL-SHIMS.md)).
+  `query`/`get`/`update` all return that same tab under the id
+  `devtools.inspectedWindow.tabId` reports; its `url`/`title` come from `Target.getTargetInfo`
+  while a CDP session is attached, and fall back to Chrome's own `about:blank` + `""` when it
+  is not — with `status` and `windowId` left absent rather than guessed. That is **one tab
+  standing in for a whole browser**: there is no tab strip, no window model, and no second
+  tab, so a `windowId`/`groupId`/`title` query filter matches nothing by design.
+- **`chrome.tabs.sendMessage` has no receiver yet.** It resolves `undefined` with one console
+  line and is deliberately *not* routed into the extension's own runtime messaging: doing
+  that would let an extension message itself and treat the success as a page having
+  answered. Delivery arrives with content scripts
+  ([features/CONTENT-SCRIPTS.md](features/CONTENT-SCRIPTS.md), issue #5). Deviation from
+  Chrome, stated: Chrome fails this call with a connection error; this shell resolves
+  `undefined`, so a caller that only checks for a response value could read it as success —
+  the console line is what says otherwise.
+- **`chrome.tabs.create` opens nothing by default.** It returns a real descriptor (id +
+  resolved url, which is what unblocks Altair's `tabs.js`), plus a non-Chrome `openedVia`
+  field saying `"external"` / `"window"` / `null`. The open itself is
+  `DEVTOOLS_TABS_OPEN=none|external|window` and defaults to `none`, because both shipped
+  extensions call `create` from an automated handler (graphql's `onInstalled` opens a
+  marketing URL) and launching the user's real browser because a devtools session started is
+  a side effect nobody asked for.
+  The background worker runs ([features/BACKGROUND-WORKER.md](features/BACKGROUND-WORKER.md)),
+  so `runtime.onInstalled` and `onStartup` have a producer, and
+  `runtime.sendMessage`/Ports between extension frames — including to and from the worker —
+  work ([features/RUNTIME-MESSAGING.md](features/RUNTIME-MESSAGING.md)).
 - **`chrome.tabs.create` inside a worker without the `tabs` permission fails differently than
   in Chrome.** GraphQL Network Inspector declares `["webRequest","storage"]` and no `tabs`, and
   its `onInstalled` handler calls `chrome.tabs.create`. Chrome would not inject `chrome.tabs`
@@ -139,6 +166,58 @@
   shim (`src/chrome-shim/permission-gate.js`). Deviation from Chrome, stated: Chrome omits
   an undeclared namespace entirely, this shell keeps the namespace and fails the call
   (shape-first rule, [OVERVIEW.md](OVERVIEW.md)).
+- **`chrome.notifications` is real, with three gaps.** It shows an Electron
+  `Notification`, allocates the id Chrome would, and fires `onClicked`/`onClosed` from the
+  notification's own click/close callbacks into the context that created it
+  ([features/SMALL-SHIMS.md](features/SMALL-SHIMS.md)). What it cannot do:
+  - **no real dismiss.** Electron 38 removed `Notification.close()`. `clear` drops the
+    host's ownership and stops forwarding that notification's events (and the extension is
+    told `onClosed`, as Chrome does), but the banner stays on screen until the user or the OS
+    dismisses it.
+  - **no buttons.** `onButtonClicked` and `onShowSettings` never fire; a `buttons` array in
+    the options is reported as ignored rather than dropped in silence.
+  - **`getPermissionLevel` is an observation, not a verdict.** It reports
+    `Notification.isSupported()`. There is no permission prompt in this host to read a real
+    answer from, so "granted" here means "the platform backend works", not "the user agreed".
+  A notification that could not be shown is given **no id** — an id is the promise of a click.
+- **`chrome.alarms` does not outlive the context that created it.** Chrome persists alarms and
+  wakes the service worker to fire them; this host's background context is always-on, so there
+  is nothing to wake and nothing is persisted (claiming persistence without a store would be a
+  fabrication). An alarm dies with its window — the preload cancels every alarm on `pagehide`,
+  asserted in `tests/alarms.test.js` — and does not survive a shell restart. Alarms are
+  therefore tied to a live always-on worker rather than to MV3's evict-and-wake lifecycle
+  ([features/BACKGROUND-WORKER.md](features/BACKGROUND-WORKER.md)).
+- **`chrome.permissions.request` grants nothing.** `contains`/`getAll` report exactly what
+  the manifest declares (the host's own verdict), and `request` resolves `true` only for
+  permissions already declared — `false` for anything else, with one console line. There is
+  no prompt to show and no grant to record: capability is decided from the manifest on disk,
+  so an accepting `request` could only defer the refusal to the first real call. `remove`
+  resolves and changes nothing; `onAdded`/`onRemoved` are registrable and never fire, because
+  nothing in this shell changes a grant ([features/SMALL-SHIMS.md](features/SMALL-SHIMS.md)).
+- **`chrome.downloads` is a real save with a registry scoped to this shell.** The bytes are
+  written and `totalBytes` is counted from what was written
+  ([features/SMALL-SHIMS.md](features/SMALL-SHIMS.md)), but:
+  - **`show` and `showDefaultFolder` do nothing** — Electron 38 exposes no reveal. Both report
+    that once per key rather than pretending a window was raised.
+  - **the ledger is this shell's own**, so `search` answers for what this shell saved while it
+    has been running: no browser download history, and nothing from before the shell started.
+  - **`filename` is the path the shell wrote to**, not Chrome's `<downloads>/<n> name.ext`
+    numbering, and `search`/`erase`/`cancel` are scoped to the caller's own extension id.
+  - `onDeterminingFilename` runs on the timer rather than the Chrome extension thread, so an
+    async suggestion must arrive within the host's window (`DEVTOOLS_SUGGEST_TIMEOUT`, 3 s) or
+    the host saves under its own name and logs that it decided.
+- **`options_ui.open_in_tab` means a window here, not a tab.** This shell has no browser tab,
+  so the flag is reported in the window's title. Altair declares `open_in_tab: true` with no
+  `tabs` permission — a combination Chrome itself warns about — and the options host reports
+  that gap too rather than dropping it.
+- **`commands`, `contextMenus` and `sidePanel` are injected, and none can do its headline
+  trick.** They exist with the real method shape so a worker naming them at module scope loads,
+  and each names what it lacks once: `commands.getAll` answers from the manifest but
+  `onCommand` never fires (no shortcut routing); `contextMenus` maintains a real registry with
+  Chrome's validations but `onClicked` never fires (no right-click menu to click);
+  `sidePanel` round-trips its configuration, and **`open` rejects** rather than resolving,
+  because its promise means a panel came up and none can
+  ([features/SMALL-SHIMS.md](features/SMALL-SHIMS.md)).
 - **Per-extension CSP.** Every `rozenite://` response carries that extension's
   `content_security_policy`; an extension declaring none gets Chrome's MV3 default
   (`script-src 'self'; object-src 'self'`, plus `wasm-unsafe-eval` when it has a service

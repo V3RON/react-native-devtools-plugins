@@ -425,15 +425,19 @@ suite("a background worker in a real Electron process", { timeout: 180000 }, asy
     "the denial did not surface as an uncaught error in the worker"
   );
 
-  // ── 5. the [STUB] browser-UI namespaces exist and do not kill the worker ──
+  // ── 5. the browser-UI namespaces exist and do not kill the worker ──────────
   // The ESM worker references chrome.action.onClicked and chrome.notifications.create
   // at module scope; a missing namespace is a load-time TypeError that would take the
   // whole context down, and run 1 would then have no `ready` line at all.
   assert.equal(r1.said("WORKER:ready"), true, "action/notifications references did not throw");
+  // `notifications.create` is real now (issue #4): the harness's recording notifier
+  // showed something, so the callback names the id. That it names NOTHING when
+  // nothing was shown is asserted in tests/notifications-shim.test.js and against the
+  // harness's `--notifier=deny` run in tests/tier2-worker-electron.test.js.
   assert.match(
     JSON.stringify(r1.workerConsole.map((line) => line.message)),
-    /WORKER:notifications-callback:undefined/,
-    "notifications.create calls back with no id rather than naming a notification that does not exist"
+    /WORKER:notifications-callback:fixture-notification/,
+    "notifications.create names the id of a notification that really showed"
   );
   assert.equal(
     r1.said("WORKER:onInstalled:update"),

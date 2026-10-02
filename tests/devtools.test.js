@@ -292,13 +292,12 @@ test("inspectedWindow.tabId is a stable positive int per extension", () => {
   assert.ok(Number.isInteger(tabIdFor("graphql")) && tabIdFor("graphql") > 0);
 });
 
-test("chrome.tabs inert shell: shapes exist, query answers empty", async () => {
+test("chrome.tabs keeps its shape: events, TAB_ID_NONE, and the honest sendMessage", async () => {
   const { createTabs } = require("../src/chrome-shim/tabs");
   const tabs = createTabs();
-  const viaCb = await new Promise((resolve) => tabs.query({}, resolve));
-  assert.deepStrictEqual(viaCb, []);
-  assert.deepStrictEqual(await tabs.query({ active: true }), []);
   tabs.onUpdated.addListener(() => {});
   assert.strictEqual(tabs.TAB_ID_NONE, -1);
-  await tabs.sendMessage(1, "hi"); // resolves undefined, like a failed Chrome send
+  assert.deepStrictEqual(await tabs.sendMessage(1, "hi"), undefined); // no receivers, yet
+  // The one-tab model itself (query/get/create/update/remove) is tested in
+  // tests/tabs.test.js, where its host-backed injections can be faked.
 });

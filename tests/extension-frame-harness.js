@@ -44,12 +44,41 @@ const SETTLE_MS = Number(arg("settle") || 900);
 const withBackgroundHost = ["on", "true", "1"].includes(arg("background-host"));
 // Which extension id's CSP to report in the `harness` line.
 const reportedExtensionId = arg("extension-id") || "probe.local";
+// The chrome.notifications backend, chosen per run:
+//   fake   (default) — RECORDS the show and raises nothing. No click, no close.
+//   click            — records, then scripts a user who clicks and dismisses it, so a
+//                      worker's notifications.onClicked can be observed end to end.
+//   deny             — records AND fails every show: the "nothing was shown, so no id
+//                      is named" path.
+//   real             — Electron's own Notification. NO TEST USES IT: a suite that
+//                      raises a real notification on the user's machine is not a suite.
+// `fake` is the default so every pre-existing run of this harness stays unchanged.
+const notifierMode = (arg("notifier") || "fake").toLowerCase();
+// Compress the background context's alarm clock (src/main/config.js). 1 = real time.
+const alarmClockScale = Number(arg("alarm-clock-scale") || "1");
+// Where a save lands, and whether the save dialog and the download's fetch are real.
+// A run that names a directory gets a save service whose dialog is auto-answered and
+// whose fetch is canned — so a headless test can prove bytes reached a real file
+// without raising a dialog on the developer's machine or depending on the network.
+// Unset means the production save service: the real dialog and `~/Downloads`, which
+// no test ever runs.
+const downloadsDir = arg("downloads-dir");
+// Whether `runtime.openOptionsPage` may create a window. The production host would
+// open a VISIBLE one, and a suite that pops windows on the developer's machine is not
+// a suite, so the default is `record`: the harness installs a recording opener and
+// reports the URL each window was asked for. `real` additionally creates a HIDDEN
+// window that loads the page through the production preload, which is the only way to
+// observe that the options page really is an extension page with a working shim.
+// Either way the manifest decision, the URL from the file server's containment rules,
+// and the open-window tracking are the production host's own.
+const optionsWindowMode = (arg("options-windows") || "record").toLowerCase();
 
 // Must precede requiring config: it captures DEVTOOLS_EXTENSIONS_DIR at module
 // load and the file server resolves against it. Production code unchanged,
 // pointed at the caller's extensions dir.
 process.env.DEVTOOLS_EXTENSIONS_DIR = extensionsDir;
 process.env.DEVTOOLS_CDP_BRIDGE = "off";
+process.env.DEVTOOLS_ALARM_CLOCK_SCALE = String(alarmClockScale);
 
 // Keep electron-store (and every other userData writer) inside the test tree.
 const userDataDir = arg("user-data-dir");
@@ -59,10 +88,13 @@ if (userDataDir) {
 
 const production = require("../src/main/extension-server");
 const { registerIpcHandlers } = require("../src/main/ipc");
-const { frontendPreferences } = require("../src/main/frame-security");
+const { frontendPreferences, extensionFramePreferences } = require("../src/main/frame-security");
 const config = require("../src/main/config");
 const { createBackgroundHost } = require("../src/main/background-host");
 const { createInstallState } = require("../src/main/install-state");
+const notificationHost = require("../src/main/notification-host");
+const saveService = require("../src/main/save-service");
+const optionsHost = require("../src/main/options-host");
 
 // Production privileges, once, before ready.
 production.registerExtensionSchemePrivileges();
@@ -82,6 +114,151 @@ app
     // src/main/index.js does for electron-store's renderer adapter.
     Store.initRenderer();
     registerIpcHandlers();
+
+    // chrome.notifications: a RECORDING notifier, so this suite never raises a real
+    // system notification (the rule the whole harness runs under). It behaves like
+    // the platform: it records what was asked for, and then hands back the click and
+    // close callbacks the OS would call — the test decides whether a click happens,
+    // so `onClicked` firing in a worker is evidence about the DELIVERY path, not a
+    // notification this process invented.
+    //
+    // `--notifier=deny` additionally makes every show FAIL, which is how the "nothing
+    // was shown, so no id is named" path is observed. Electron's own notifier is
+    // installed only by a run that asks for it with `--notifier=real`, and no test
+    // does (asserted in tests/notifications-shim.test.js).
+    if (notifierMode !== "real") {
+      const deny = notifierMode === "deny";
+      const scriptedUser = notifierMode === "click";
+      const live = new Map();
+      const fakeNotifier = async (notification, handlers) => {
+        note({
+          kind: "notification-show",
+          id: notification.id,
+          title: notification.title,
+          message: notification.message,
+          silent: notification.silent,
+        });
+        if (deny) {
+          return "fake notifier refusing (test condition)";
+        }
+        live.set(notification.id, handlers);
+        if (scriptedUser) {
+          // The harness plays the user. The shell only ever forwards what this
+          // backend calls, so a click observed in a worker is evidence about the
+          // delivery path — never a click the shell invented.
+          setTimeout(() => handlers.onClick(), 60);
+          setTimeout(() => handlers.onClose(), 160);
+        }
+        return null;
+      };
+      fakeNotifier.hide = (id) => live.delete(id);
+      notificationHost.attachNotificationHost({
+        notifier: fakeNotifier,
+        permissionLevel: () => "granted",
+      });
+    }
+
+    // chrome.downloads / InspectorFrontendHost.save: the PRODUCTION save service with
+    // two capabilities replaced. `showSaveDialog` is answered without a dialog (a
+    // suite that raised a modal on the developer's screen could not finish), and
+    // `fetchUrl` is canned, so a URL download needs no network. The filesystem is the
+    // REAL one and the directory is the run's temp dir, which is what makes "the bytes
+    // really landed" an observable rather than a claim.
+    //
+    // Without --downloads-dir the production service is not installed at all: it would
+    // open Electron's dialog and write into ~/Downloads, and no run of this harness
+    // does that.
+    if (downloadsDir) {
+      const bodyFor = (url) => `fake body for ${url}`;
+      saveService.attachSaveService({
+        showSaveDialog: async ({ defaultPath }) => {
+          note({ kind: "save-dialog", defaultPath });
+          // `--dialog=cancel` exercises the "user said no" path through the same code.
+          return arg("dialog") === "cancel"
+            ? { canceled: true }
+            : { canceled: false, filePath: path.join(downloadsDir, path.basename(String(defaultPath))) };
+        },
+        fetchUrl: async (url) => {
+          note({ kind: "save-fetch", url });
+          return { buffer: Buffer.from(bodyFor(url)), contentType: "text/plain" };
+        },
+        // The REAL filesystem, into the run's temp dir, with each write recorded so a
+        // test can tell "the service said complete" from "bytes reached a file".
+        writeFile: async (target, data, options) => {
+          await fs.promises.writeFile(target, data, options);
+          note({
+            kind: "save-write",
+            path: target,
+            name: path.basename(target),
+            bytes: Buffer.byteLength(Buffer.isBuffer(data) ? data : String(data)),
+          });
+        },
+        unlink: (target) =>
+          fs.promises.unlink(target).then(() => note({ kind: "save-unlink", path: target })),
+        downloadsDir: () => downloadsDir,
+      });
+    }
+
+    // runtime.openOptionsPage: the PRODUCTION options host (it reads the manifest from
+    // disk, builds the URL through the file server's containment rules, tracks what it
+    // opened, and refuses an extension with no options_ui) with the window step
+    // observed rather than assumed.
+    //
+    //   record (default) — the opener RECORDS the url it was handed, so a headless run
+    //                      pops nothing on the developer's machine.
+    //   real             — additionally creates a HIDDEN window that loads the page
+    //                      through the production preload, which is the only way to
+    //                      observe that the options page really is an extension page
+    //                      with a working chrome.* shim, and reports its console.
+    // Either way the manifest decision, the URL from the file server's containment
+    // rules, and the open-window tracking are the production host's own.
+    const openedOptions = [];
+    optionsHost.attachOptionsHost({
+      openWindow: (url) => {
+        const record = { url, extensionId: (() => {
+          try {
+            return new URL(url).hostname;
+          } catch {
+            return null;
+          }
+        })(), loaded: false };
+        openedOptions.push(record);
+        if (optionsWindowMode === "real") {
+          const win = new BrowserWindow({
+            show: false,
+            width: 700,
+            height: 500,
+            webPreferences: extensionFramePreferences({ preloadPath: config.preloadPath }),
+          });
+          record.win = win;
+          win.webContents.on("console-message", (...args) => {
+            const first = args[0];
+            const message =
+              first && typeof first === "object"
+                ? first.message || ""
+                : args[2] || "";
+            if (String(message).includes("OPTIONS:")) {
+              record.loaded = true;
+              note({ kind: "options-console", message: String(message).slice(0, 300), url: record.url });
+            }
+          });
+          win.webContents.on("did-fail-load", (_e, code, description) =>
+            note({ kind: "options-fail-load", code, description, url: record.url })
+          );
+          win.loadURL(url).catch(() => {});
+        }
+        note({ kind: "options-window", url, extensionId: record.extensionId, mode: optionsWindowMode });
+        return record;
+      },
+      closeWindow: (handle) => {
+        if (handle && handle.win && !handle.win.isDestroyed()) {
+          handle.win.close();
+          return true;
+        }
+        return false;
+      },
+    });
+
     const policyFor = production.registerExtensionProtocol();
 
     // The production background host, in the process that will actually hold it
@@ -192,6 +369,15 @@ app
       // the same function the protocol handler uses.
       servedCsp: policyFor(reportedExtensionId),
       backgroundHost: Boolean(host),
+      notifier: notifierMode,
+      // Which save backend this run installed: "fake" means the dialog and the fetch
+      // were answered by the harness and the files went to a temp dir. Asserted by the
+      // tier-2 tests, because a run that silently used the real dialog would be a test
+      // that interrupts a human.
+      saveDialog: downloadsDir ? "fake" : "production",
+      downloadsDir: downloadsDir || null,
+      optionsWindows: optionsWindowMode,
+      alarmClockScale,
       electronVersion: process.versions.electron,
       chromeVersion: process.versions.chrome,
     });
@@ -245,6 +431,13 @@ app
     if (host) {
       note({ kind: "background-windows", windows: host.list() });
     }
+    // What the production options host ended up with, as main knows it: one record per
+    // window it was asked to open, and whether that window's page ever reported.
+    note({
+      kind: "options-windows",
+      windows: openedOptions.map(({ url, extensionId, loaded }) => ({ url, extensionId, loaded })),
+      tracked: optionsHost.getOptionsHost().list(),
+    });
     server.close();
     app.exit(0);
   })

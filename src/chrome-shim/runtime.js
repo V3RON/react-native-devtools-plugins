@@ -8,17 +8,8 @@
 //   - Lifecycle events (onInstalled / onStartup) are registrable now; their
 //     producer arrives with the background host (bucket 3).
 const { createEvent } = require("./event");
+const { promiseOrCallback } = require("./async-style");
 const { buildExtensionURL } = require("../shared/protocol");
-
-// Chrome's dual promise + callback style for value-returning methods.
-const promiseOrCallback = (produce, callback) => {
-  const value = produce();
-  if (callback) {
-    callback(value);
-    return undefined;
-  }
-  return Promise.resolve(value);
-};
 
 /**
  * @param {object} deps
@@ -27,8 +18,18 @@ const promiseOrCallback = (produce, callback) => {
  * @param {{os: string, arch: string}} deps.platform
  * @param {{value: any}} deps.lastError shared mutable holder — the messaging
  *        client sets it around callback invocations (Chrome scoping).
+ * @param {() => Promise<{ok: boolean, url?: string, error?: string}>} [deps.openOptionsPage]
+ *        host capability behind `runtime.openOptionsPage` (src/main/options-host.js).
+ *        Absent = this context cannot have an options page opened for it, which the
+ *        shim reports as Chrome's failure rather than a silent no-op.
  */
-const createRuntime = ({ extensionId, getManifest, platform, lastError }) => {
+const createRuntime = ({
+  extensionId,
+  getManifest,
+  platform,
+  lastError,
+  openOptionsPage = null,
+}) => {
   const events = {
     onMessage: createEvent(),
     onConnect: createEvent(),
@@ -58,10 +59,49 @@ const createRuntime = ({ extensionId, getManifest, platform, lastError }) => {
 
     getPackages: (callback) => promiseOrCallback(() => [], callback),
 
-    // No options pages, no updater, no restart — honest inert answers.
-    openOptionsPage: (callback) => {
-      if (callback) callback();
-    },
+    /**
+     * `chrome.runtime.openOptionsPage` — Chrome opens the extension's
+     * `options_ui.page`, and fails with lastError when the manifest does not
+     * declare one. Only the host can tell either way (it owns the manifest on
+     * disk and the window), so this delegates to an injected opener and reports
+     * honestly what came back: a window that really opened, or lastError.
+     * Without an opener (a context the host cannot open pages for, such as the
+     * devtools frontend itself) it fails the same way Chrome fails an extension
+     * with no options page — a silent no-op would leave an extension waiting
+     * for a window that never appears.
+     */
+    openOptionsPage: (callback) =>
+      promiseOrCallback(
+        () =>
+          Promise.resolve().then(() => {
+            if (typeof openOptionsPage !== "function") {
+              throw new Error(
+                "Cannot open the options page: this host cannot open a page for this context."
+              );
+            }
+            return openOptionsPage();
+          }).then((reply) => {
+            // The host says in one word whether a window appeared. Resolving on
+            // `ok: false` would tell the extension an options page opened when the
+            // host refused to open one, so the refusal becomes this call's failure.
+            if (reply && reply.ok === false) {
+              throw new Error(reply.error || "Cannot open the options page.");
+            }
+            return undefined;
+          }),
+        callback,
+        {
+          setError: (error) => {
+            lastError.value = error.message;
+          },
+          clearError: () => {
+            lastError.value = undefined;
+          },
+        }
+      ),
+
+    // No updater and no reload: those belong to a packaged install, which this
+    // is not. Both stay inert, which is what an unpacked extension sees too.
     requestUpdate: (callback) => {
       if (callback) callback(false);
     },
