@@ -1,0 +1,106 @@
+{
+  "runtime-info": {
+    "state": "ok",
+    "text": "id gjnjiccaaeeipkfghcgameomolkeombm\nDevTools Showcase v1.0.0 (MV3)\nchrome-extension://gjnjiccaaeeipkfghcgameomolkeombm/panel.html"
+  },
+  "theme": {
+    "state": "ok",
+    "text": "theme changed to \"dark\" (observed 1x): page is now dark"
+  },
+  "visibility": {
+    "state": "ok",
+    "text": "shown 2x, hidden 1x, last: shown (onShown got a window)"
+  },
+  "eval": {
+    "state": "ok",
+    "text": "eval ->\n{\"href\":\"http://127.0.0.1:9253/\",\"title\":\"Showcase target\",\"demo\":\"hello from the inspected page\",\"now\":\"2026-10-13T15:30:23.599Z\"}"
+  },
+  "reload": {
+    "state": "ok",
+    "text": "reloaded: the page's performance.timeOrigin changed (1791905394401.5 to 1791905418596.5)"
+  },
+  "tabs": {
+    "state": "ok",
+    "text": "tabId 1992025274\nhttp://127.0.0.1:9253/\nShowcase target\ntabs.query({}) -> 1 tab(s)"
+  },
+  "net-live": {
+    "state": "ok",
+    "text": "5 seen\nlatest: GET http://127.0.0.1:9253/favicon.ico -> 404 (17 ms)"
+  },
+  "net-content": {
+    "state": "ok",
+    "text": "http://127.0.0.1:9253/favicon.ico\nnot found"
+  },
+  "net-har": {
+    "state": "ok",
+    "text": "5 entries\nlatest: GET http://127.0.0.1:9253/favicon.ico -> 404"
+  },
+  "webrequest": {
+    "state": "ok",
+    "text": "background: 6 before / 6 completed / 0 errors (localhost only)\npanel listener: 5 completed"
+  },
+  "msg-bg": {
+    "state": "ok",
+    "text": "reply from background at 3:30:15 PM"
+  },
+  "msg-dev": {
+    "state": "ok",
+    "text": "reply from devtools-page; its tabId 1992025274, its themeName \"default\""
+  },
+  "port": {
+    "state": "ok",
+    "text": "echo {\"n\":1791905415440,\"hello\":\"from the panel\"} from background"
+  },
+  "lifecycle": {
+    "state": "ok",
+    "text": "onInstalled reason=install at 3:29:54 PM\nonStartup fired 0x"
+  },
+  "bridge": {
+    "state": "ok",
+    "text": "content script answered from http://127.0.0.1:9253/"
+  },
+  "storage-local": {
+    "state": "ok",
+    "text": "showcase:local-probe: 0 -> 1 (round-trip OK)"
+  },
+  "storage-sync": {
+    "state": "ok",
+    "text": "showcase:sync-probe: 0 -> 1 (round-trip OK)"
+  },
+  "storage-session": {
+    "state": "ok",
+    "text": "showcase:session-probe: 0 -> 1 (round-trip OK)"
+  },
+  "storage-changed": {
+    "state": "ok",
+    "text": "21 change event(s)\nlast: local showcase:alarms"
+  },
+  "i18n": {
+    "state": "ok",
+    "text": "DevTools Showcase / locale name: English / UI language en-US\nplaceholder: Hello, Ada!  |  $1 $2: item 2 of 5\nfallback (default_locale): only defined in en (locale fallback works)\n@@ui_locale=en_US @@extension_id=gjnjiccaaeei @@bidi_dir=ltr\ngetAcceptLanguages: en-US,en"
+  },
+  "xframe": {
+    "state": "ok",
+    "text": "wrote session+local\nbackground heard: session 1x, local 1x\ndevtools page heard: session 1x, local 1x\nsession readable back: true"
+  },
+  "alarms": {
+    "state": "ok",
+    "text": "armed 3:30:23 PM, onAlarm fired 3:30:53 PM (one-shot, now cleared)"
+  },
+  "notifications": {
+    "state": "ok",
+    "text": "created at 3:30:23 PM, id 2092e414-a6dd-47ca-b056-4419d95f5ca2; clicked 0x, closed 1x"
+  },
+  "downloads": {
+    "state": "ok",
+    "text": "download #2 complete: showcase-results.json"
+  },
+  "permissions": {
+    "state": "ok",
+    "text": "contains(storage)=true, contains(bookmarks)=false\ngetAll: alarms, devtools, downloads, notifications, storage, tabs, webRequest"
+  },
+  "options": {
+    "state": "idle",
+    "text": "press Open options"
+  }
+}

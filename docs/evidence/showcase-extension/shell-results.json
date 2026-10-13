@@ -1,0 +1,106 @@
+{
+  "runtime-info": {
+    "state": "ok",
+    "text": "id showcase\nDevTools Showcase v1.0.0 (MV3)\nrozenite://showcase/panel.html"
+  },
+  "theme": {
+    "state": "ok",
+    "text": "theme changed to \"default\" (observed 2x): page is now light"
+  },
+  "visibility": {
+    "state": "ok",
+    "text": "shown 2x, hidden 1x, last: shown (onShown got a window)"
+  },
+  "eval": {
+    "state": "warn",
+    "text": "Runtime.evaluate: CDP bridge is not running (external relay mode?)"
+  },
+  "reload": {
+    "state": "warn",
+    "text": "reload() sent, but this host has no eval to confirm it and no onNavigated fired"
+  },
+  "tabs": {
+    "state": "ok",
+    "text": "tabId 91124\nabout:blank\n\ntabs.query({}) -> 1 tab(s)"
+  },
+  "net-live": {
+    "state": "idle",
+    "text": "listening... (press Reload target to generate traffic)"
+  },
+  "net-content": {
+    "state": "idle",
+    "text": "waiting for a request"
+  },
+  "net-har": {
+    "state": "idle",
+    "text": "0 entries so far (press Reload on the target)"
+  },
+  "webrequest": {
+    "state": "idle",
+    "text": "background: 0 before / 0 completed / 0 errors (localhost only)\npanel listener: 0 completed"
+  },
+  "msg-bg": {
+    "state": "warn",
+    "text": "no reply from background (undefined): either nothing answered, or a silent peer's empty answer replaced the real one on a host that settles on the last response; Chrome keeps the first real one"
+  },
+  "msg-dev": {
+    "state": "ok",
+    "text": "reply from devtools-page; its tabId 91124, its themeName \"default\""
+  },
+  "port": {
+    "state": "ok",
+    "text": "echo {\"n\":1791905147953,\"hello\":\"from the panel\"} from background"
+  },
+  "lifecycle": {
+    "state": "ok",
+    "text": "onInstalled reason=install at 2:06:07 PM\nonStartup fired 10x"
+  },
+  "bridge": {
+    "state": "warn",
+    "text": "no content script in the target (tabs.sendMessage: no content script of \"showcase\" is running in the inspected target, so nothing can receive this message. docs/features/CONTENT-SCRIPTS.md is the opt-in; its current state here is not injected (nothing allowlisted)). In the shell it is opt-in: DEVTOOLS_CONTENT_SCRIPTS=showcase"
+  },
+  "storage-local": {
+    "state": "ok",
+    "text": "showcase:local-probe: 22 -> 23 (round-trip OK)"
+  },
+  "storage-sync": {
+    "state": "ok",
+    "text": "showcase:sync-probe: 22 -> 23 (round-trip OK)"
+  },
+  "storage-session": {
+    "state": "ok",
+    "text": "showcase:session-probe: 0 -> 1 (round-trip OK)"
+  },
+  "storage-changed": {
+    "state": "ok",
+    "text": "20 change event(s)\nlast: local showcase:alarms"
+  },
+  "i18n": {
+    "state": "ok",
+    "text": "DevTools Showcase / locale name: English / UI language en-US\nplaceholder: Hello, Ada!  |  $1 $2: item 2 of 5\nfallback (default_locale): only defined in en (locale fallback works)\n@@ui_locale=en_US @@extension_id=showcase @@bidi_dir=ltr\ngetAcceptLanguages: en-US,en"
+  },
+  "xframe": {
+    "state": "ok",
+    "text": "wrote session+local\nbackground heard: session 1x, local 1x\ndevtools page heard: session 1x, local 1x\nsession readable back: true"
+  },
+  "alarms": {
+    "state": "ok",
+    "text": "armed 3:25:48 PM, onAlarm fired 3:26:18 PM (one-shot, now cleared)"
+  },
+  "notifications": {
+    "state": "warn",
+    "text": "notifications.create ran but no id came back: the platform cannot show notifications here"
+  },
+  "downloads": {
+    "state": "ok",
+    "text": "download #1 complete: showcase-results.json"
+  },
+  "permissions": {
+    "state": "ok",
+    "text": "contains(storage)=true, contains(bookmarks)=false\ngetAll: storage, tabs, webRequest, notifications, alarms, downloads"
+  },
+  "options": {
+    "state": "idle",
+    "text": "press Open options"
+  }
+}

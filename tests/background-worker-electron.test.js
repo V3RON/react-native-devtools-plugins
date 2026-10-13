@@ -497,7 +497,7 @@ suite(
       hostPage: "<!DOCTYPE html><html><body>no extension frames</body></html>",
       // Neither worker logs on startup (neither script prints anything at module
       // scope), so this run settles on its deadline; the assertions are about what
-      // did NOT happen and about the two windows that did.
+      // did NOT happen and about the windows that did.
       waitFor: "never-observed-marker",
       timeoutMs: 16000,
       settleMs: 2500,
@@ -516,10 +516,21 @@ suite(
       ].join("\n")
     );
 
-    assert.equal(windows.length, 2, "graphql and altair both get a background context");
+    assert.equal(windows.length, 3, "graphql, altair and showcase each get a background context");
     assert.ok(
       windows.every((win) => win.visible === false),
-      "both worker windows are hidden"
+      "every worker window is hidden"
+    );
+    assert.ok(
+      windows.some((win) => win.extensionId === "showcase"),
+      "the showcase worker has its window"
+    );
+    assert.equal(
+      errors.filter((l) => l.extensionId === "showcase").length,
+      0,
+      `the showcase worker logged no error-level output: ${JSON.stringify(
+        errors.filter((l) => l.extensionId === "showcase").map((l) => l.message)
+      )}`
     );
     const altair = windows.find((win) => win.extensionId === "altair");
     assert.match(altair.url, /type=module$/, "altair's worker is loaded as an ES module");
