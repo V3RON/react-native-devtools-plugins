@@ -6,9 +6,11 @@
 // Steps (each screenshot proves a distinct state):
 //   01 panel A, nothing written yet
 //   02 panel A writes storage.session -> the background worker and the devtools page of
-//      the SAME extension report hearing onChanged; the panel's own listener fired too
-//   03 options page of A (a separate window) opened, then written to again from the panel:
-//      the options page read the earlier value and heard the new change
+//      the SAME extension report hearing onChanged (global and per-area events)
+//   03 options page of A (a separate window) opened AFTER that write: it reads the value
+//      (counter 1) and has heard nothing yet
+//   03b the panel writes again: the options page now shows counter 2 and heard 1 -> 2
+//   03c the panel's list shows the worker, the devtools page and the options page reporting
 //   04 panel of extension B: its session storage is EMPTY and it heard none of A's changes
 //   05 panel B writes the same key; only B's contexts report it
 //   06 panel A reloaded (tab switch recreates it): reads the value from the host's store
@@ -108,15 +110,16 @@ const text = (client, id) => evaluate(client, `document.getElementById(${JSON.st
   await sleep(1200);
   const optionsBefore = await text(options, "snapshot");
   expect(/"counter": 1/.test(optionsBefore), "A: the options page READ the value the panel wrote before it existed");
+  await shot(options, "03-options-page-a-reads-existing-value.png");
   await evaluate(a, `document.getElementById("write").click()`);
   await sleep(1200);
   const optionsHeard = await text(options, "heard");
   console.log(`options heard:\n${optionsHeard}`);
   expect(/session\.counter: 1 -> 2/.test(optionsHeard), "A: the options page's onChanged saw counter 1 -> 2 (oldValue/newValue)");
-  await shot(options, "03-options-page-a-read-and-heard.png");
+  await shot(options, "03b-options-page-a-heard-change.png");
   const heardA2 = await text(a, "heard");
   expect(/\[options page\] session\.counter: 1 -> 2/.test(heardA2), "A: the panel's list now includes the options page's report");
-  await shot(frontend, "03b-panel-a-all-contexts-heard.png");
+  await shot(frontend, "03c-panel-a-all-contexts-heard.png");
 
   // ── 04 ────────────────────────────────────────────────────────────────────
   await clickTab(frontend, "tab-ext.storage-demo-b.panel.html");

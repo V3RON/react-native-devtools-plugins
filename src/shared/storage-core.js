@@ -48,12 +48,23 @@ const invocationError = (call) =>
 /** Chrome's byte accounting: key length + the JSON text of the value, in UTF-8. */
 const bytesOf = (key, value) => utf8Length(key) + utf8Length(JSON.stringify(value));
 
-const totalBytes = (map) => {
-  let total = 0;
-  for (const [key, value] of map) {
-    total += bytesOf(key, value);
+// Result and change objects are built from entry lists with Object.fromEntries, which
+// defines own properties: `result[key] = …` on a plain object would run the
+// `__proto__` setter instead for that one key name, silently dropping the value.
+const toObject = (entries) => Object.fromEntries(entries);
+
+// The area's byte total is kept on the Map (`map.usedBytes`) and maintained by every
+// write, so a write costs the size of what it touches rather than re-serializing the
+// whole area. A Map built from outside (a loaded file, a test) is totalled once.
+const usedBytes = (map) => {
+  if (map.usedBytes === undefined) {
+    let total = 0;
+    for (const [key, value] of map) {
+      total += bytesOf(key, value);
+    }
+    map.usedBytes = total;
   }
-  return total;
+  return map.usedBytes;
 };
 
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
@@ -63,40 +74,38 @@ const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
  * @param {null|undefined|string|string[]|object} keys
  */
 const get = (map, keys) => {
-  const result = {};
   if (keys === null || keys === undefined) {
-    for (const [key, value] of map) {
-      result[key] = copyValue(value);
-    }
-    return result;
+    return toObject([...map].map(([key, value]) => [key, copyValue(value)]));
   }
   if (typeof keys === "string") {
     keys = [keys];
   }
   if (Array.isArray(keys)) {
+    const entries = [];
     for (const key of keys) {
       if (typeof key !== "string") {
         throw invocationError("storage.get(optional string or array or object keys, function callback)");
       }
       if (map.has(key)) {
-        result[key] = copyValue(map.get(key));
+        entries.push([key, copyValue(map.get(key))]);
       }
     }
-    return result;
+    return toObject(entries);
   }
   if (isPlainObject(keys)) {
     // The object form: its values are defaults for absent keys.
+    const entries = [];
     for (const key of Object.keys(keys)) {
       if (map.has(key)) {
-        result[key] = copyValue(map.get(key));
+        entries.push([key, copyValue(map.get(key))]);
       } else {
         const fallback = copyValue(keys[key]);
         if (fallback !== undefined) {
-          result[key] = fallback;
+          entries.push([key, fallback]);
         }
       }
     }
-    return result;
+    return toObject(entries);
   }
   throw invocationError("storage.get(optional string or array or object keys, function callback)");
 };
@@ -110,7 +119,9 @@ const quotaError = (area, reason) => {
 
 /**
  * Apply a set(). All-or-nothing: the quota is checked against the state the write
- * would produce, before anything is stored.
+ * would produce, before anything is stored. Like Chrome, a write is refused when the
+ * area WOULD exceed its quota; one that leaves the area no bigger than it already was
+ * is never refused for that reason (data that predates a limit stays writable down).
  *
  * @returns {Object<string, {oldValue?: any, newValue?: any}>} only the keys that changed
  */
@@ -127,7 +138,8 @@ const set = (map, area, items) => {
   }
 
   const limits = LIMITS[area] || LIMITS.local;
-  let bytes = totalBytes(map);
+  const before = usedBytes(map);
+  let bytes = before;
   let count = map.size;
   for (const [key, value] of incoming) {
     if (map.has(key)) {
@@ -141,14 +153,14 @@ const set = (map, area, items) => {
       throw quotaError(area, "QUOTA_BYTES_PER_ITEM");
     }
   }
-  if (limits.MAX_ITEMS && count > limits.MAX_ITEMS) {
+  if (limits.MAX_ITEMS && count > limits.MAX_ITEMS && count > map.size) {
     throw quotaError(area, "MAX_ITEMS");
   }
-  if (bytes > limits.QUOTA_BYTES) {
+  if (bytes > limits.QUOTA_BYTES && bytes > before) {
     throw quotaError(area, "QUOTA_BYTES");
   }
 
-  const changes = {};
+  const entries = [];
   for (const [key, value] of incoming) {
     const had = map.has(key);
     const oldValue = map.get(key);
@@ -156,9 +168,10 @@ const set = (map, area, items) => {
       continue;
     }
     map.set(key, value);
-    changes[key] = had ? { oldValue, newValue: copyValue(value) } : { newValue: copyValue(value) };
+    entries.push([key, had ? { oldValue, newValue: copyValue(value) } : { newValue: copyValue(value) }]);
   }
-  return changes;
+  map.usedBytes = bytes;
+  return toObject(entries);
 };
 
 const remove = (map, keys) => {
@@ -166,32 +179,33 @@ const remove = (map, keys) => {
   if (!Array.isArray(list) || list.some((key) => typeof key !== "string")) {
     throw invocationError("storage.remove(string or array keys, optional function callback)");
   }
-  const changes = {};
+  const entries = [];
+  let bytes = usedBytes(map);
   for (const key of list) {
     if (map.has(key)) {
-      changes[key] = { oldValue: map.get(key) };
+      bytes -= bytesOf(key, map.get(key));
+      entries.push([key, { oldValue: map.get(key) }]);
       map.delete(key);
     }
   }
-  return changes;
+  map.usedBytes = bytes;
+  return toObject(entries);
 };
 
 const clear = (map) => {
-  const changes = {};
-  for (const [key, value] of map) {
-    changes[key] = { oldValue: value };
-  }
+  const changes = toObject([...map].map(([key, value]) => [key, { oldValue: value }]));
   map.clear();
+  map.usedBytes = 0;
   return changes;
 };
 
 const getBytesInUse = (map, keys) => {
   if (keys === null || keys === undefined) {
-    return totalBytes(map);
+    return usedBytes(map);
   }
   const list = typeof keys === "string" ? [keys] : keys;
   if (!Array.isArray(list) || list.some((key) => typeof key !== "string")) {
-    throw invocationError("storage.getBytesInUse(optional string or array keys, function callback)");
+    throw invocationError("storage.getBytesInUse(optional string or array keys, optional function callback)");
   }
   let total = 0;
   for (const key of new Set(list)) {

@@ -7,7 +7,7 @@
 // frontend-supplied script to `new Function`. `chrome.devtools.*` is implemented
 // shell-side now (docs/features/DEVTOOLS-PANELS.md), so there is nothing to
 // deliver synchronously and no arbitrary-code-evaluation channel left.
-const { ipcMain } = require("electron");
+const { app, ipcMain } = require("electron");
 const preferences = require("./preferences");
 const windowOps = require("./window");
 const { showContextMenu } = require("./context-menu");
@@ -245,6 +245,11 @@ const resolveFrameKey = (event) => {
 };
 
 const registerIpcHandlers = () => {
+  // chrome.storage persists write-behind (src/main/storage-service.js): whatever is still
+  // waiting for its debounce goes to disk before the shell goes away.
+  app.on("before-quit", () => storageService.flush());
+  app.on("will-quit", () => storageService.flush());
+
   // ── async channels (the house rule; there is nothing else) ───────────────
 
   ipcMain.handle(SHOW_CONTEXT_MENU, (_event, { x, y, items }) => {

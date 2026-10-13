@@ -1,6 +1,6 @@
 // chrome.storage shared per extension, in a REAL Electron process.
 //
-// The unit suites (storage-core, storage-service, storage-shim) cover the rules; this
+// The unit suites (storage-core, storage-host) cover the rules; this
 // file covers the claim only the whole shell can make: a value one context writes is
 // seen by the OTHER contexts of the same extension — a panel page, a second panel page,
 // the background worker — with the right onChanged in each, and a second extension

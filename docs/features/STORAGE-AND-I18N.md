@@ -60,6 +60,15 @@ Behaviors that match Chrome (all covered by `tests/storage-core.test.js`,
   when the browser restarts). `local`/`sync` persist through `electron-store`, in the same
   `extension-<id>-<area>.json` files as before, so earlier data is still read. Main is now the
   only writer, which also ends the old one-store-per-frame race on those files.
+- **Write-behind persistence.** A write updates the store and is announced immediately; the
+  file is rewritten on a 250 ms per-(extension, area) debounce and on quit (`before-quit` /
+  `will-quit`). Rewriting a whole 10 MB area on every write measured ~70 ms of main's event
+  loop per tiny `set`, which a frequent writer would turn into a stalled shell; the running
+  byte total is kept per area for the same reason. Consequences: a disk error can no longer
+  reject the write that caused it (it is logged by main and retried on the next write or
+  flush), and a crash or kill loses at most the last 250 ms of `local`/`sync` writes.
+- **Key names are plain keys.** `__proto__`, `constructor` and friends are stored, returned and
+  reported like any other key.
 
 What remains different from Chrome:
 
@@ -70,9 +79,26 @@ What remains different from Chrome:
 | signature errors | 🟨 | a non-object `set()` etc. rejects / sets `lastError` instead of throwing synchronously |
 | `unlimitedStorage` | ❌ | not honored: `local` is always capped at 10 MB |
 | `QUOTA_BYTES` accounting | 🟨 | close to Chrome's, not byte-identical (Chrome's per-key overhead is internal) |
-| dotted keys in old `local`/`sync` files | 🟨 | the old per-frame store let electron-store treat `"a.b"` as a path and nested it on disk; main now stores keys verbatim, so such a legacy key reads back as the nested object |
+| `session` across extension reload/disable | 🟨 | Chrome clears session storage (and resets `setAccessLevel`) when an extension is reloaded or disabled. This shell has no reload/disable path for an extension, so both live for main's lifetime (until the shell quits) |
+| dotted keys in old `local`/`sync` files | 🟨 | see "Upgrading" below: readable by name, not rewritten |
 | event delivery before the page listens | 🟨 | storage events are pushed immediately (not queued until `DOMContentLoaded` like runtime messages), so a change made before a context has added its listener is not replayed to it — which is also Chrome's behavior for an already-running context |
 | frame-less contexts | 🟨 | only frames that registered with the router take part; the content-script app context has no `chrome.storage` |
+
+### Upgrading from the per-frame stores
+
+- **Dotted keys.** The old shim let electron-store treat a dot as a path, so
+  `set({"settings.theme": "dark"})` was saved as `{settings: {theme: "dark"}}` and read back by
+  path. Which nested objects came from dotted keys cannot be recovered from the file, so nothing is
+  rewritten. A file with no format marker (`__rozenite_storage_format__`, written on first save) is
+  treated as legacy: it is read as it is, and a key that is not stored under its own name
+  (`get("settings.theme")`) falls back to a dotted-path lookup. The marker records "legacy" so the
+  fallback survives restarts; a key written after the upgrade is stored verbatim and wins. New
+  files have no fallback. Covered by a test on the real `electronStorePersistence`.
+- **`sync` over the new limits.** The old shim never enforced sync's 100 KB / 8 KB-per-item /
+  512-item limits, so an existing area can already be over them. The check compares the state
+  AFTER the write: a write that leaves the area no larger than it was (replacing a value with a
+  smaller one, `remove`, `clear`) is accepted; one that grows it past the limit is rejected with
+  `QUOTA_BYTES quota exceeded`. A single value over `QUOTA_BYTES_PER_ITEM` is always rejected.
 
 ### What this changed for Altair
 

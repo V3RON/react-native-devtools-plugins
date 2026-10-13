@@ -17,6 +17,14 @@
 //     extension id read from the frame's own URL). A call names a `frameKey` the router
 //     already verified; nothing in a payload says whose storage it is.
 //
+// Persistence is write-behind. A write updates the Map and broadcasts at once; the file is
+// rewritten on a short per-(extension, area) debounce and on `flush()` (src/main/ipc.js calls
+// it on quit). Rewriting a whole 10 MB area synchronously on every write cost ~70 ms of main's
+// event loop per tiny `set`, which a busy extension would turn into a stalled shell. The price
+// is the failure model: a disk error can no longer reject the write that caused it (the write
+// already succeeded and was announced) — it is logged and retried with the next write/flush —
+// and a crash can lose up to `persistDelayMs` of writes.
+//
 // Ordering: each extension has a counter, and every event carries its number. A write's
 // reply carries the number of the last event it produced, so the calling context can
 // hold its callback until that event has been delivered to it — the order Chrome shows
@@ -40,8 +48,14 @@ const memoryPersistence = () => null;
  *        called for `local` and `sync` only; null means "memory only"
  * @param {(message: string) => void} [deps.log]
  */
-const createStorageService = ({ openPersistence = memoryPersistence, log = () => {} } = {}) => {
-  const areas = new Map(); // `${extensionId}\0${area}` -> {map, persistence}
+const createStorageService = ({
+  openPersistence = memoryPersistence,
+  log = () => {},
+  persistDelayMs = 250,
+  setTimer = setTimeout,
+  clearTimer = clearTimeout,
+} = {}) => {
+  const areas = new Map(); // `${extensionId}\0${area}` -> {map, persistence, legacy, dirty, timer}
   const contexts = new Map(); // frameKey -> {frameKey, extensionId, send, allowed, trusted}
   const sequences = new Map(); // extensionId -> last event number
   const accessLevels = new Map(); // extensionId -> session access level
@@ -59,10 +73,54 @@ const createStorageService = ({ openPersistence = memoryPersistence, log = () =>
           log(`could not read ${area} storage of ${extensionId}: ${error.message}`);
         }
       }
-      entry = { map: new Map(Object.entries(loaded)), persistence };
+      entry = {
+        map: new Map(Object.entries(loaded)),
+        persistence,
+        // Written by the old per-frame shim (see electronStorePersistence): dotted keys are
+        // still readable by name.
+        legacy: Boolean(persistence && persistence.legacy),
+        dirty: false,
+        timer: null,
+        id,
+      };
       areas.set(id, entry);
     }
     return entry;
+  };
+
+  const save = (entry) => {
+    if (entry.timer) {
+      clearTimer(entry.timer);
+      entry.timer = null;
+    }
+    if (!entry.dirty || !entry.persistence) {
+      return;
+    }
+    try {
+      entry.persistence.save(Object.fromEntries(entry.map));
+      entry.dirty = false;
+    } catch (error) {
+      // Stays dirty: the next write or flush retries.
+      log(`could not persist ${entry.id.replace("\0", "/")}: ${error.message}`);
+    }
+  };
+  const markDirty = (entry) => {
+    if (!entry.persistence) {
+      return;
+    }
+    entry.dirty = true;
+    if (!entry.timer) {
+      entry.timer = setTimer(() => save(entry), persistDelayMs);
+      if (entry.timer && typeof entry.timer.unref === "function") {
+        entry.timer.unref();
+      }
+    }
+  };
+  /** Write every pending change to disk now (quit, tests). */
+  const flush = () => {
+    for (const entry of areas.values()) {
+      save(entry);
+    }
   };
 
   const sessionLevel = (extensionId) => accessLevels.get(extensionId) || "TRUSTED_CONTEXTS";
@@ -85,6 +143,43 @@ const createStorageService = ({ openPersistence = memoryPersistence, log = () =>
       }
     }
     return seq;
+  };
+
+  // An old-format file nested `"a.b"` as {a: {b}}. For such an area a key that is not stored
+  // under its own name is looked up as a dotted path, so `get("settings.theme")` still finds
+  // what an extension saved under that name. Reads only: nothing is rewritten, and a key
+  // stored verbatim (a write after the upgrade) always wins.
+  const dottedLookup = (map, key) => {
+    const [first, ...rest] = key.split(".");
+    let value = map.get(first);
+    for (const part of rest) {
+      if (value === null || typeof value !== "object" || !Object.hasOwn(value, part)) {
+        return undefined;
+      }
+      value = value[part];
+    }
+    return value;
+  };
+  const legacyView = (map, keys) => {
+    const names =
+      typeof keys === "string"
+        ? [keys]
+        : Array.isArray(keys)
+          ? keys
+          : keys && typeof keys === "object"
+            ? Object.keys(keys)
+            : [];
+    let view = map;
+    for (const name of names) {
+      if (typeof name === "string" && name.includes(".") && !map.has(name)) {
+        const value = dottedLookup(map, name);
+        if (value !== undefined) {
+          view = view === map ? new Map(map) : view;
+          view.set(name, value);
+        }
+      }
+    }
+    return view;
   };
 
   const attach = ({ frameKey, extensionId, send, allowed = () => true, trusted = true }) => {
@@ -135,7 +230,7 @@ const createStorageService = ({ openPersistence = memoryPersistence, log = () =>
       let changes = null;
       switch (op) {
         case "get":
-          value = core.get(entry.map, arg);
+          value = core.get(entry.legacy ? legacyView(entry.map, arg) : entry.map, arg);
           break;
         case "getBytesInUse":
           value = core.getBytesInUse(entry.map, arg);
@@ -157,16 +252,7 @@ const createStorageService = ({ openPersistence = memoryPersistence, log = () =>
       if (!changes || Object.keys(changes).length === 0) {
         return { ok: true, value, seq: 0 };
       }
-      if (entry.persistence) {
-        try {
-          entry.persistence.save(Object.fromEntries(entry.map));
-        } catch (error) {
-          // The disk refused: the Map is ahead of it. Forget the Map so the next call
-          // reloads what is really there, and tell the caller its write did not land.
-          areas.delete(`${context.extensionId}\0${area}`);
-          return { ok: false, error: `storage: could not persist (${error.message})` };
-        }
-      }
+      markDirty(entry);
       return { ok: true, value, seq: broadcast(context.extensionId, area, changes) };
     } catch (error) {
       return { ok: false, error: (error && error.message) || String(error) };
@@ -177,6 +263,7 @@ const createStorageService = ({ openPersistence = memoryPersistence, log = () =>
     attach,
     detach,
     call,
+    flush,
     /** Diagnostics/tests: which contexts would hear an extension's events. */
     contextsOf: (extensionId) =>
       [...contexts.values()].filter((c) => c.extensionId === extensionId).map((c) => c.frameKey),
@@ -189,16 +276,34 @@ const createStorageService = ({ openPersistence = memoryPersistence, log = () =>
 // (`store.store = …`) rather than `store.set(items)`: electron-store treats a dot in
 // a key as a path, which would store `{"a.b": 1}` as `{a: {b: 1}}` and read back
 // a different key than the extension wrote.
-const electronStorePersistence = () => {
+//
+// That is exactly what the OLD per-frame shim did, so a file it wrote can hold `a.b` as
+// `{a: {b}}`, and which nested objects came from dotted keys is not recoverable. Choice:
+// do not guess and rewrite. Files carry a format marker; a non-empty file WITHOUT one is
+// legacy, is read as-is (a nested value is still there under its first segment) and is
+// flagged `legacy`, which makes the service resolve not-found dotted keys as paths. The
+// marker records the flag, so it survives the first save and the fallback keeps working
+// for as long as the file lives. A new or empty file is written in the new format and
+// has no fallback.
+const FORMAT_KEY = "__rozenite_storage_format__";
+
+const electronStorePersistence = ({ cwd } = {}) => {
   const { default: Store } = require("electron-store");
   return (extensionId, area) => {
-    const store = new Store({ name: `extension-${extensionId}-${area}` });
-    return {
-      load: () => store.store,
+    const store = new Store({ name: `extension-${extensionId}-${area}`, ...(cwd ? { cwd } : {}) });
+    const persistence = {
+      legacy: false,
+      load: () => {
+        const raw = store.store;
+        const marker = raw[FORMAT_KEY];
+        persistence.legacy = marker ? Boolean(marker.legacy) : Object.keys(raw).length > 0;
+        return Object.fromEntries(Object.entries(raw).filter(([key]) => key !== FORMAT_KEY));
+      },
       save: (items) => {
-        store.store = items;
+        store.store = { ...items, [FORMAT_KEY]: { version: 2, legacy: persistence.legacy } };
       },
     };
+    return persistence;
   };
 };
 
@@ -207,4 +312,5 @@ module.exports = {
   electronStorePersistence,
   SESSION_ACCESS_LEVELS,
   NOT_ALLOWED,
+  FORMAT_KEY,
 };

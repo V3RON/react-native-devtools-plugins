@@ -17,7 +17,6 @@ const world = (serviceOptions = {}) => {
   const context = (extensionId, { trusted = true, granted = true, pushDelayMs = 0 } = {}) => {
     const frameKey = `ctx:${(count += 1)}`;
     let shim;
-    const lastErrors = [];
     service.attach({
       frameKey,
       extensionId,
@@ -42,7 +41,7 @@ const world = (serviceOptions = {}) => {
     });
     const events = [];
     shim.onChanged.addListener((changes, area) => events.push({ area, changes }));
-    return { frameKey, storage: shim, events, lastErrors, lastError: () => current };
+    return { frameKey, storage: shim, events, lastError: () => current };
   };
   return { service, context };
 };
@@ -222,37 +221,110 @@ test("an unknown area or operation is refused, not guessed at", () => {
   assert.strictEqual(service.call({ frameKey: "nobody", area: "local", op: "get" }).ok, false);
 });
 
-test("local/sync persist through the injected store, session never does", async () => {
-  const disk = new Map(); // `${ext}/${area}` -> object
-  const opened = [];
-  const openPersistence = (extensionId, area) => {
-    opened.push(`${extensionId}/${area}`);
-    return {
-      load: () => disk.get(`${extensionId}/${area}`) || {},
-      save: (items) => disk.set(`${extensionId}/${area}`, JSON.parse(JSON.stringify(items))),
-    };
+/** A manual clock: timers run only when the test says so. */
+const manualTimers = () => {
+  const pending = new Map();
+  let next = 1;
+  return {
+    setTimer: (fn) => {
+      pending.set(next, fn);
+      return next++;
+    },
+    clearTimer: (id) => pending.delete(id),
+    pending: () => pending.size,
+    fire: () => {
+      const fns = [...pending.values()];
+      pending.clear();
+      fns.forEach((fn) => fn());
+    },
   };
-  disk.set("ext.a/local", { before: "restart" });
+};
 
-  const first = world({ openPersistence });
+const memoryDisk = () => {
+  const disk = new Map(); // `${ext}/${area}` -> object
+  const saves = [];
+  const opened = [];
+  return {
+    disk,
+    saves,
+    opened,
+    openPersistence: (extensionId, area) => {
+      opened.push(`${extensionId}/${area}`);
+      return {
+        load: () => disk.get(`${extensionId}/${area}`) || {},
+        save: (items) => {
+          saves.push(`${extensionId}/${area}`);
+          disk.set(`${extensionId}/${area}`, JSON.parse(JSON.stringify(items)));
+        },
+      };
+    },
+  };
+};
+
+test("local/sync persist through the injected store, session never does", async () => {
+  const d = memoryDisk();
+  d.disk.set("ext.a/local", { before: "restart" });
+  const timers = manualTimers();
+
+  const first = world({ openPersistence: d.openPersistence, ...timers });
   const a = first.context("ext.a");
   assert.deepStrictEqual(await a.storage.local.get(null), { before: "restart" }, "what an earlier run saved is there");
   await a.storage.local.set({ "dotted.key": 1 });
   await a.storage.session.set({ volatile: 1 });
-  assert.deepStrictEqual(disk.get("ext.a/local"), { before: "restart", "dotted.key": 1 });
-  assert.ok(!opened.some((entry) => entry.endsWith("/session")), "session never touches the disk");
+  first.service.flush();
+  assert.deepStrictEqual(d.disk.get("ext.a/local"), { before: "restart", "dotted.key": 1 });
+  assert.ok(!d.opened.some((entry) => entry.endsWith("/session")), "session never touches the disk");
 
   // "Restart the shell": a new service over the same disk.
-  const second = world({ openPersistence });
+  const second = world({ openPersistence: d.openPersistence, ...timers });
   const b = second.context("ext.a");
   assert.deepStrictEqual(await b.storage.local.get(null), { before: "restart", "dotted.key": 1 });
   assert.deepStrictEqual(await b.storage.session.get(null), {}, "session is cleared by the restart");
 });
 
-test("a failing disk fails the write, changes nothing, and is retried from disk next time", async () => {
+test("writes are announced at once and persisted write-behind, coalesced per area", async () => {
+  const d = memoryDisk();
+  const timers = manualTimers();
+  const { context, service } = world({ openPersistence: d.openPersistence, ...timers });
+  const a = context("ext.a");
+  const b = context("ext.a");
+
+  for (let i = 1; i <= 20; i += 1) {
+    await a.storage.local.set({ counter: i });
+  }
+  await a.storage.sync.set({ other: 1 });
+  assert.strictEqual(a.events.length, 21, "every write was announced immediately");
+  assert.deepStrictEqual(await b.storage.local.get("counter"), { counter: 20 }, "and is readable at once");
+  assert.deepStrictEqual(d.saves, [], "nothing hit the disk yet");
+  assert.strictEqual(timers.pending(), 2, "one pending save per (extension, area), not per write");
+
+  timers.fire();
+  assert.deepStrictEqual(d.saves.sort(), ["ext.a/local", "ext.a/sync"], "one save each");
+  assert.deepStrictEqual(d.disk.get("ext.a/local"), { counter: 20 });
+
+  // A read-only call or a no-op write schedules nothing.
+  await a.storage.local.get(null);
+  await a.storage.local.set({ counter: 20 });
+  assert.strictEqual(timers.pending(), 0);
+
+  // flush() writes what is pending right now (quit), and cancels the timer.
+  await a.storage.local.set({ counter: 21 });
+  assert.strictEqual(timers.pending(), 1);
+  service.flush();
+  assert.strictEqual(timers.pending(), 0);
+  assert.deepStrictEqual(d.disk.get("ext.a/local"), { counter: 21 });
+  service.flush();
+  assert.strictEqual(d.saves.length, 3, "a clean area is not rewritten");
+});
+
+test("a failing disk is logged and retried, and does not undo or reject the write", async () => {
   let failing = true;
   const disk = {};
-  const { context } = world({
+  const logged = [];
+  const timers = manualTimers();
+  const { context, service } = world({
+    log: (message) => logged.push(message),
+    ...timers,
     openPersistence: () => ({
       load: () => ({ ...disk }),
       save: (items) => {
@@ -264,10 +336,92 @@ test("a failing disk fails the write, changes nothing, and is retried from disk 
     }),
   });
   const a = context("ext.a");
-  await assert.rejects(a.storage.local.set({ k: 1 }), /could not persist \(disk full\)/);
-  assert.deepStrictEqual(await a.storage.local.get(null), {}, "the in-memory copy did not run ahead of the disk");
-  assert.deepStrictEqual(a.events, []);
-  failing = false;
   await a.storage.local.set({ k: 1 });
-  assert.deepStrictEqual(disk, { k: 1 });
+  timers.fire();
+  assert.match(logged.join("\n"), /could not persist ext\.a\/local: disk full/);
+  assert.deepStrictEqual(await a.storage.local.get(null), { k: 1 }, "the write stands and was announced");
+  assert.strictEqual(a.events.length, 1);
+  failing = false;
+  service.flush();
+  assert.deepStrictEqual(disk, { k: 1 }, "the next flush retries");
+});
+
+test("a legacy file's dotted keys stay readable by name; verbatim keys win", async () => {
+  const d = memoryDisk();
+  // What the old per-frame shim left on disk for set({"settings.theme": "dark", plain: 1}).
+  d.disk.set("ext.a/local", { settings: { theme: "dark" }, plain: 1 });
+  const timers = manualTimers();
+  const { context, service } = world({
+    ...timers,
+    openPersistence: (extensionId, area) => {
+      const p = d.openPersistence(extensionId, area);
+      return { ...p, legacy: true };
+    },
+  });
+  const a = context("ext.a");
+  assert.deepStrictEqual(await a.storage.local.get("settings.theme"), { "settings.theme": "dark" });
+  assert.deepStrictEqual(await a.storage.local.get({ "settings.theme": "x", "settings.none": "d" }), {
+    "settings.theme": "dark",
+    "settings.none": "d",
+  });
+  assert.deepStrictEqual(await a.storage.local.get("settings"), { settings: { theme: "dark" } }, "the nested form too");
+  await a.storage.local.set({ "settings.theme": "light" });
+  assert.deepStrictEqual(await a.storage.local.get("settings.theme"), { "settings.theme": "light" });
+  service.flush();
+  assert.deepStrictEqual(Object.keys(d.disk.get("ext.a/local")).sort(), ["plain", "settings", "settings.theme"]);
+});
+
+test("the real electron-store persistence reads an old-format file and keeps dotted keys readable", async () => {
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const path = require("node:path");
+  const { electronStorePersistence, FORMAT_KEY } = require("../src/main/storage-service");
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "rozenite-storage-legacy-"));
+  try {
+    // Written by the old shim: store.set({"settings.theme": "dark", plain: 1}) nested it.
+    fs.writeFileSync(
+      path.join(cwd, "extension-ext.a-local.json"),
+      JSON.stringify({ settings: { theme: "dark" }, plain: 1 })
+    );
+    const open = electronStorePersistence({ cwd });
+    const { context, service } = world({ openPersistence: open });
+    const a = context("ext.a");
+    assert.deepStrictEqual(await a.storage.local.get(["settings.theme", "plain"]), {
+      "settings.theme": "dark",
+      plain: 1,
+    });
+    assert.deepStrictEqual(Object.keys(await a.storage.local.get(null)).sort(), ["plain", "settings"], "the marker is not data");
+    await a.storage.local.set({ fresh: 1 });
+    service.flush();
+    const onDisk = JSON.parse(fs.readFileSync(path.join(cwd, "extension-ext.a-local.json"), "utf8"));
+    assert.deepStrictEqual(onDisk[FORMAT_KEY], { version: 2, legacy: true });
+
+    // Next launch: the marker keeps the fallback alive.
+    const again = world({ openPersistence: electronStorePersistence({ cwd }) }).context("ext.a");
+    assert.deepStrictEqual(await again.storage.local.get("settings.theme"), { "settings.theme": "dark" });
+    assert.deepStrictEqual(await again.storage.local.get("fresh"), { fresh: 1 });
+
+    // A brand-new area is new-format and has no fallback: dots mean nothing there.
+    const fresh = world({ openPersistence: electronStorePersistence({ cwd }) }).context("ext.new");
+    await fresh.storage.local.set({ nested: { x: 1 } });
+    assert.deepStrictEqual(await fresh.storage.local.get("nested.x"), {});
+  } finally {
+    fs.rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test("legacy data over the new limits can shrink but not grow", async () => {
+  // 20 items of ~7 KB: 140 KB, over sync's 100 KB, as the unlimited old shim allowed.
+  const legacy = {};
+  for (let i = 0; i < 20; i += 1) {
+    legacy[`k${i}`] = "x".repeat(7000);
+  }
+  const { context } = world({ openPersistence: () => ({ load: () => legacy, save() {} }) });
+  const a = context("ext.a");
+  await assert.rejects(a.storage.sync.set({ extra: "y".repeat(100) }), /QUOTA_BYTES quota exceeded/);
+  await a.storage.sync.set({ k0: "tiny" });
+  await a.storage.sync.remove(["k1", "k2"]);
+  await a.storage.sync.set({ k3: "x".repeat(6000) });
+  assert.strictEqual((await a.storage.sync.get("k0")).k0, "tiny", "writes that shrink the area succeed");
+  assert.ok((await a.storage.sync.getBytesInUse(null)) < 100000 + 20 * 7010, "and the running total tracked them");
 });

@@ -96,3 +96,40 @@ test("sync keeps Chrome's tighter limits", () => {
   assert.throws(() => core.set(sync, "sync", fat), /QUOTA_BYTES quota exceeded/);
   assert.strictEqual(sync.size, 0, "and a failed write stores nothing");
 });
+
+test("key names that are special on plain objects are ordinary keys", () => {
+  for (const key of ["__proto__", "constructor", "toString", "hasOwnProperty"]) {
+    const map = area();
+    const changes = core.set(map, "local", Object.fromEntries([[key, { v: 1 }]]));
+    assert.deepStrictEqual(Object.keys(changes), [key], `${key}: reported as changed`);
+    assert.deepStrictEqual(changes[key], { newValue: { v: 1 } });
+    assert.deepStrictEqual(Object.keys(core.get(map, null)), [key], `${key}: get(null) returns it`);
+    assert.deepStrictEqual(core.get(map, key)[key], { v: 1 });
+    assert.deepStrictEqual(Object.keys(core.get(map, { [key]: 0 })), [key]);
+    assert.deepStrictEqual(core.getKeys(map), [key]);
+    assert.strictEqual(core.getBytesInUse(map, null), core.getBytesInUse(map, [key]));
+    assert.strictEqual(Object.getPrototypeOf(core.get(map, null)), Object.prototype, "no prototype was replaced");
+    assert.deepStrictEqual(Object.keys(core.set(map, "local", Object.fromEntries([[key, 2]]))), [key]);
+    const removed = core.remove(map, [key]);
+    assert.deepStrictEqual(Object.keys(removed), [key], `${key}: remove reports it`);
+    assert.strictEqual(map.size, 0);
+  }
+  const map = area({ a: 1 });
+  map.set("__proto__", 2);
+  assert.deepStrictEqual(Object.keys(core.clear(map)).sort(), ["__proto__", "a"]);
+});
+
+test("the running byte total follows every write, and a shrinking write is never refused", () => {
+  const map = area();
+  core.set(map, "local", { a: "xx", b: "yyy" });
+  core.remove(map, "a");
+  core.set(map, "local", { b: "z" });
+  const recomputed = [...map].reduce((n, [k, v]) => n + core.bytesOf(k, v), 0);
+  assert.strictEqual(core.getBytesInUse(map, null), recomputed);
+  core.clear(map);
+  assert.strictEqual(core.getBytesInUse(map, null), 0);
+
+  const over = new Map([["k", "x".repeat(core.LIMITS.local.QUOTA_BYTES + 50)]]);
+  assert.throws(() => core.set(over, "local", { more: 1 }), /QUOTA_BYTES quota exceeded/);
+  assert.doesNotThrow(() => core.set(over, "local", { k: "x".repeat(core.LIMITS.local.QUOTA_BYTES + 10) }));
+});
