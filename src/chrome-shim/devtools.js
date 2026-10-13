@@ -82,18 +82,30 @@ const createDevtools = ({
   // pre-detection default; the host's answer arrives via setThemeName()
   // (RUNTIME_REGISTER reply, then "theme" deliveries) — docs/features/DEVTOOLS-PANELS.md.
   let themeName = "default";
-  const themeChanged = createEvent();
+  // Chrome has NO `themeChanged` event: the API is `setThemeChangeHandler(callback)` — one
+  // handler, replaced by each call, cleared by a non-function. The frontend's own
+  // extension API (models/extensions) calls it only when the host's theme CHANGES (never on
+  // registration), with the new name, after updating `panels.themeName`.
+  let themeHandler = null;
   const setThemeName = (next) => {
     if ((next !== "default" && next !== "dark") || next === themeName) {
       return false;
     }
     themeName = next;
-    themeChanged._fire(next);
+    if (themeHandler) {
+      try {
+        themeHandler.call(null, next);
+      } catch (error) {
+        logger.error("[devtools.panels.setThemeChangeHandler] handler threw:", error);
+      }
+    }
     return true;
   };
 
   const panels = {
-    themeChanged,
+    setThemeChangeHandler(callback) {
+      themeHandler = typeof callback === "function" ? callback : null;
+    },
     // contextBridge clones a getter ONCE, so the preload re-establishes
     // `themeName` as a live getter in the page world over this helper (same
     // trick as runtime.lastError) and deletes it from the exposed object.

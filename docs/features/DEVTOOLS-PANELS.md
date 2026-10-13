@@ -2,7 +2,7 @@
 
 | | |
 | --- | --- |
-| **Status** | 🟨 partial — `panels.create` and `themeName`/`themeChanged` are real and **shell-driven** (no fork knowledge); the rest is inert stubs |
+| **Status** | 🟨 partial — `panels.create` and `themeName`/`setThemeChangeHandler` are real and **shell-driven** (no fork knowledge); the rest is inert stubs |
 | **Tier** | 1 (create/theme) / 2 (elements, sources, performance) |
 | **Blocked by** | [DISPATCH-CHANNEL.md](DISPATCH-CHANNEL.md) (panel events, context menus) |
 
@@ -10,7 +10,8 @@
 
 - `devtools.panels.create(title, iconPath, pagePath, cb) → Panel`
   - `Panel`: `onShown`, `onHidden`, `setWidth`
-- `devtools.panels.themeName`, `themeChanged`
+- `devtools.panels.themeName`, `setThemeChangeHandler(callback)` (Chrome 99+; there is no
+  `themeChanged` event in any Chrome version — an earlier revision of this shim invented one)
 - `devtools.panels.elements` (`ElementsPanel`): `createSidebarPane(title) →
   ExtensionSidebarPane` (`setObject`/`setExpression`/`setTitle`/`onContextMenu`),
   `openResource`, `inspectedObject`, `onCreateContextMenu`
@@ -42,7 +43,7 @@ All three bundled extensions (`sample-extension` "Osudio", GraphQL Network Inspe
 Altair GraphQL) register and render this way. The old `setInjectedScriptForOrigin`
 channel (fork-provided devtools script) remains, unused by the stock frontend.
 
-### Theme (`themeName` / `themeChanged`)
+### Theme (`themeName` / `setThemeChangeHandler`)
 
 Chrome's values: `"default"` (light) and `"dark"`. The frontend is the authority, so the
 bridge asks *it*, not the OS:
@@ -61,7 +62,9 @@ bridge asks *it*, not the OS:
    anything but the two names.
 3. A real change is broadcast to **every** registered extension context (devtools pages,
    panel pages, background contexts) as a `RUNTIME_DELIVER` `{kind: "theme"}` push through
-   the context registry; the shim updates `themeName` and fires `themeChanged(name)`.
+   the context registry; the shim updates `themeName` and calls the registered `setThemeChangeHandler` callback with the name (one handler; each call
+   replaces it; a non-function clears it; it is never called at registration, only on a change —
+   the semantics of the frontend's own `models/extensions` implementation).
    Repeated reports of the same theme fire nothing.
 4. **Boot value.** The bridge also appends `?__rozenite_theme=<name>` to the URL of every
    frame it creates (devtools pages and panels). The extension-frame preload runs before
@@ -78,7 +81,7 @@ bridge asks *it*, not the OS:
 Divergences, stated plainly:
 - For frames the bridge creates, `themeName` is correct from the first script, with no
   IPC timing involved. For other frames (background workers/pages) it starts at `"default"`
-  until the register reply lands, then `themeChanged` fires if the theme is `"dark"`.
+  until the register reply lands, then the handler is called if the theme is `"dark"`.
   Chrome exposes `chrome.devtools` only in DevTools frames, so that second case has no Chrome
   counterpart; the shim installs the API everywhere.
 - The hint is in the frame's URL only until the preload strips it, before any extension
@@ -91,7 +94,7 @@ Divergences, stated plainly:
   strip) and `tests/theme-electron.test.js` (real broadcast, page-world surface, stripping,
   `sender.url`). The Electron run holds every register reply back (`--register-delay-ms`), so
   the hint is measured in isolation: with the host at "default" and a `dark` hint, the head
-  script reads "dark" and the reply then overrides it with `themeChanged("default")` (the
+  script reads "dark" and the reply then overrides it with `setThemeChangeHandler("default")` (the
   host's state wins over the hint). Live evidence: `docs/evidence/panels-theme/`.
 
 Note: the frontend's `View` ids reject anything outside `[A-Za-z0-9.-]` ("Invalid view
@@ -103,7 +106,7 @@ ID") — `panelIdFor` sanitizes path separators/underscores accordingly.
 | --- | --- | --- |
 | `panels.create` | 🟨 | works; `width`/`icon` cosmetic bits unverified |
 | `Panel.onShown/onHidden`, `setWidth` | ❌ | needs frontend events → dispatch channel |
-| `themeName` / `themeChanged` | ✅ | the frontend's real theme (`"default"` light / `"dark"`), live; see [Theme](#theme-themename--themechanged) for the one remaining divergence |
+| `themeName` / `setThemeChangeHandler` | ✅ | the frontend's real theme (`"default"` light / `"dark"`), live; see [Theme](#theme-themename--setthemechangehandler) for the one remaining divergence |
 | `elements.createSidebarPane` | ❌ | needs [inspected window](INSPECTED-WINDOW.md) (`Runtime.evaluate`) + RN element-tree selection; Redux-family devtools depend on it |
 | `elements.onCreateContextMenu`, `inspectedObject`, `openResource` | ❌ | context-menu events ride the dispatch channel |
 | `sources.openInFrontend` | ❌ | jump-to-source; RN DevTools has a Sources-like surface |
@@ -112,5 +115,5 @@ ID") — `panelIdFor` sanitizes path separators/underscores accordingly.
 
 ## Definition of done (Tier 1 slice)
 
-`create` + `onShown/onHidden` + `themeName/themeChanged` (theme done) behave like Chrome for
+`create` + `onShown/onHidden` + `themeName/setThemeChangeHandler` (theme done) behave like Chrome for
 UI-only extensions (Redux-style panels, Altair client tab).

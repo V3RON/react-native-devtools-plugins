@@ -31,7 +31,7 @@
   const inspectorView = legacy.InspectorView.InspectorView.instance();
 
   // Theme -> host -> every extension context (chrome.devtools.panels.themeName /
-  // themeChanged). ThemeSupport is the frontend's own authority: it resolves the
+  // setThemeChangeHandler). ThemeSupport is the frontend's own authority: it resolves the
   // `ui-theme` setting ("default" | "dark" | "systemPreferred") against the
   // system's prefers-color-scheme and dispatches `themechange` after applying it.
   // Reported BEFORE the extension frames are created, and also carried on each frame's

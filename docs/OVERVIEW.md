@@ -36,7 +36,7 @@ Altair, Lighthouse, Wiztree…) actually rely on, in rough order of importance:
    `window.__*` hooks.
 4. `chrome.runtime.sendMessage`/`connect` + `storage` — panel ⇄ background ⇄ outside world.
 5. `devtools.panels.elements.createSidebarPane` — object inspector sidebars.
-6. `devtools.panels.themeName` / `themeChanged`.
+6. `devtools.panels.themeName` / `setThemeChangeHandler`.
 7. `chrome.i18n.getMessage`.
 8. Niche: `inspectedWindow.getResources`, `network.getHAR`, `devtools.performance`,
    `devtools.recorder`, `panels.sources`, `tabs`, `notifications`.

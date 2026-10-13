@@ -1,4 +1,4 @@
-// chrome.devtools.panels.themeName / themeChanged across the real process boundary
+// chrome.devtools.panels.themeName / setThemeChangeHandler across the real process boundary
 // (docs/features/DEVTOOLS-PANELS.md#theme-themename--themechanged): the frontend's
 // THEME_REPORT -> main -> RUNTIME_DELIVER -> page world chain, and the synchronous boot
 // hint on the frame URL. The unit suites (tests/theme.test.js) prove the rules; this
@@ -45,7 +45,7 @@ log({
   panelKeys: Object.getOwnPropertyNames(panels),
   hostBridge: typeof window.__SHELL_HOST__,
 });
-panels.themeChanged.addListener((name) => log({ phase: "changed", arg: name, theme: panels.themeName }));
+panels.setThemeChangeHandler((name) => log({ phase: "changed", arg: name, theme: panels.themeName }));
 setTimeout(() => log({ phase: "later", theme: panels.themeName }), 2500);
 // MessageSender.url must be the address the extension asked for, hint or no hint.
 chrome.runtime.onMessage.addListener((message, sender) => {
@@ -144,7 +144,8 @@ suite("theme: host broadcast, boot hint and page-world surface in a real Electro
 
   // (b) internal helpers are not on the page-visible surface
   for (const sync of [aSync, cSync, gSync]) {
-    assert.ok(sync.panelKeys.includes("themeName") && sync.panelKeys.includes("themeChanged"));
+    assert.ok(sync.panelKeys.includes("themeName") && sync.panelKeys.includes("setThemeChangeHandler"));
+    assert.ok(!sync.panelKeys.includes("themeChanged"), "Chrome has no themeChanged event");
     assert.ok(!sync.panelKeys.includes("_getThemeName"), "no internal helper on panels");
     assert.equal(sync.hostBridge, "undefined", "the frontend-only bridge is not in extension frames");
   }

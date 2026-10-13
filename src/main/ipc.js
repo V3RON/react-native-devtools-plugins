@@ -113,7 +113,7 @@ const networkService = createNetworkService({
 });
 
 // The frontend's theme, pushed to every registered extension context on change
-// (chrome.devtools.panels.themeChanged; docs/features/DEVTOOLS-PANELS.md).
+// (chrome.devtools.panels.setThemeChangeHandler; docs/features/DEVTOOLS-PANELS.md).
 const themeHost = createThemeHost({
   broadcast: (delivery) => getContextRegistry().broadcast(delivery),
 });

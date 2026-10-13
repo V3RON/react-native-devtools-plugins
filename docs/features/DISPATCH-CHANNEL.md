@@ -68,9 +68,9 @@ app. First consumer: [inspected-window](INSPECTED-WINDOW.md).
 Still missing:
 
 - No producer yet for `showPanel`/`colorThemeChanged`/etc.; they only become meaningful as
-  extension APIs grow. (`chrome.devtools.panels.themeChanged` does not need
+  extension APIs grow. (`chrome.devtools.panels.setThemeChangeHandler` does not need
   `colorThemeChanged`: it rides its own frontend-to-host report channel, see
-  [DEVTOOLS-PANELS.md](DEVTOOLS-PANELS.md#theme-themename--themechanged).)
+  [DEVTOOLS-PANELS.md](DEVTOOLS-PANELS.md#theme-themename--setthemechangehandler).)
 
 ## Plan
 

@@ -221,7 +221,7 @@ Pure modules; `index.js` assembles the namespace from injected deps:
 - `devtools.js` — `chrome.devtools.*`: real `panels.create` (host-driven tabs), real
   `inspectedWindow.eval` against an injected `evalInPage` host dependency
   ([features/INSPECTED-WINDOW.md](features/INSPECTED-WINDOW.md)), `panels.network.getHAR`
-  on the shared network bridge, a live `panels.themeName`/`themeChanged` fed by the host's
+  on the shared network bridge, a live `panels.themeName`/`setThemeChangeHandler` fed by the host's
   theme state (`src/main/theme-host.js`), and otherwise inert panel events
   ([features/DEVTOOLS-PANELS.md](features/DEVTOOLS-PANELS.md)). `tabs.js` answers with the
   ONE tab this shell has — the inspected RN target, under the id
