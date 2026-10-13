@@ -9,7 +9,10 @@ Chrome/Chromium (`chrome://extensions` > Load unpacked) and in the RN DevTools s
 > profile. Its scope is deliberately narrow: host permissions, the content script and the
 > `webRequest` observers are limited to `http://127.0.0.1/*` and `http://localhost/*` (the
 > local test page). It observes requests on localhost only, counts them in memory and never
-> writes a browsed URL to storage.
+> writes a browsed URL to storage. Chrome will still list "Read and change all your data on all
+> websites": that warning comes from the `devtools_page`, not from host scope, because any
+> extension with a devtools page can evaluate code in whatever page you inspect. That is
+> another reason for a throwaway profile.
 
 Every capability is one card in the **Showcase** panel with a live status:
 

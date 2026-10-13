@@ -242,12 +242,13 @@ const timeOrigin = async () => {
   return exc && (exc.isError || exc.isException) ? null : v;
 };
 let navigations = 0;
+let navListening = false;
 const runReload = () =>
   probe("reload", async () => {
     if (!iw || !isFn(iw, "reload")) throw unsupported("inspectedWindow.reload is not available");
-    if (navigations === 0 && isFn(C, "devtools", "network", "onNavigated", "addListener")) {
+    if (!navListening && isFn(C, "devtools", "network", "onNavigated", "addListener")) {
       C.devtools.network.onNavigated.addListener(() => (navigations += 1));
-      navigations = -1; // listener armed
+      navListening = true; // registered once, however often Reload is pressed
     }
     const before = isFn(iw, "eval") ? await timeOrigin() : null;
     const navBefore = navigations;
@@ -260,7 +261,7 @@ const runReload = () =>
       if (before !== null && now !== null && now !== before) {
         return `reloaded: the page's performance.timeOrigin changed (${before} to ${now})`;
       }
-      if (navigations > navBefore && navBefore >= -1 && navigations > 0) return "reloaded: network.onNavigated fired";
+      if (navigations > navBefore) return "reloaded: network.onNavigated fired";
     }
     return {
       state: "warn",
@@ -415,11 +416,20 @@ const runWebRequest = () =>
     await refreshWebRequest();
   });
 let wrLocal = 0;
+let wrReportLost = false;
 const refreshWebRequest = async () => {
   const local = wrLocal;
   if (!has(C, "webRequest", "onCompleted")) return;
   // Counters live in the worker's memory (nothing about browsed URLs is persisted).
-  const bg = (await sendTo("background", "webreq-report", undefined, { idempotent: true }).catch(() => null)) || {};
+  let bg = {};
+  if (!wrReportLost) {
+    try {
+      bg = await sendTo("background", "webreq-report", undefined, { idempotent: true });
+    } catch (e) {
+      // Stop polling a peer whose reply keeps getting lost; the card keeps the panel-side count.
+      if (e instanceof LostReply) wrReportLost = true;
+    }
+  }
   const n = (bg.completed || 0) + local;
   setResult(
     "webrequest",

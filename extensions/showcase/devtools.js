@@ -89,19 +89,21 @@ if (chrome.storage && chrome.storage.onChanged) {
   });
 }
 
-if (chrome.runtime && chrome.runtime.onMessage) chrome.runtime.onMessage.addListener((m, sender, sendResponse) => {
-  if (!m || m.to !== "devtools") return undefined;
-  if (m.type === "xframe-report") {
-    sendResponse({ ...xf });
-  } else if (m.type === "ping") {
-    sendResponse({
-      type: "pong",
-      from: "devtools-page",
-      tabId: chrome.devtools.inspectedWindow && chrome.devtools.inspectedWindow.tabId,
-      themeName: panelsApi && panelsApi.themeName,
-    });
-  }
-  return undefined;
-});
+if (chrome.runtime && chrome.runtime.onMessage) {
+  chrome.runtime.onMessage.addListener((m, sender, sendResponse) => {
+    if (!m || m.to !== "devtools") return undefined;
+    if (m.type === "xframe-report") {
+      sendResponse({ ...xf });
+    } else if (m.type === "ping") {
+      sendResponse({
+        type: "pong",
+        from: "devtools-page",
+        tabId: chrome.devtools.inspectedWindow && chrome.devtools.inspectedWindow.tabId,
+        themeName: panelsApi && panelsApi.themeName,
+      });
+    }
+    return undefined;
+  });
+}
 
 toBackground("log", { text: "devtools page loaded" });

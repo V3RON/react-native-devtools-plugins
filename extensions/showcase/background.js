@@ -11,7 +11,7 @@ const api = typeof chrome !== "undefined" ? chrome : {};
 const KEY = {
   lifecycle: "showcase:lifecycle", // { installReason, installedAt, startups }
   alarms: "showcase:alarms", // { fired, last }
-    notif: "showcase:notif", // { created, clicked, closed, lastId }
+  notif: "showcase:notif", // { created, clicked, closed, lastId }
   download: "showcase:download", // { id, state, filename }
 };
 
