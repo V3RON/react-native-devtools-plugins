@@ -4,7 +4,7 @@
 | --- | --- |
 | **Status** | 🟨 partial — channel live; **frontend→backend messaging is structurally unused** (the CDP bridge owns the socket instead) |
 | **Tier** | 1 (infrastructure; unblocks most of Tier 1/2) |
-| **Blocks** | panels events/theme, save flow, eye-dropper, device discovery |
+| **Blocks** | panel theme, save flow, eye-dropper, device discovery |
 
 ## What Chrome does
 

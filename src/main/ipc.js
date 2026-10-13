@@ -46,6 +46,8 @@ const {
   RUNTIME_PORT_CLOSE,
   RUNTIME_DELIVER,
   EXT_PANEL_CREATE,
+  EXT_PANEL_VISIBILITY,
+  EXT_PANEL_EVENT,
   DEVTOOLS_EVAL,
   DEVTOOLS_RELOAD,
   NETWORK_SUBSCRIBE,
@@ -380,7 +382,23 @@ const registerIpcHandlers = () => {
     ) {
       return { ok: false };
     }
-    return { ok: panelHost.addPanel({ extensionId, title, pagePath }) };
+    // The creating frame owns the Panel object, so it is the one that hears
+    // onShown/onHidden (Chrome gives them to no other context).
+    const key = resolveFrameKey(event);
+    const owner = {
+      send: makeFrameSender(key, event.sender, event.senderFrame, EXT_PANEL_EVENT),
+    };
+    return { ok: panelHost.addPanel({ extensionId, title, pagePath, owner }) };
+  });
+
+  // The frontend reports its tab selection for extension panels. Only the frontend's
+  // own main frame may say so: an extension frame cannot make another extension's
+  // panel look shown, and panelId only selects among panels main already hosts.
+  ipcMain.handle(EXT_PANEL_VISIBILITY, (event, { panelId, shown } = {}) => {
+    if (!panelHost.isFrontendFrame(event)) {
+      return { ok: false };
+    }
+    return { ok: panelHost.setPanelVisible(panelId, shown === true) };
   });
 
   // ── inspected window (docs/features/INSPECTED-WINDOW.md) ──────────────────

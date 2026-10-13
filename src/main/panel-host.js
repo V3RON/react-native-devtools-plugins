@@ -12,25 +12,26 @@
 const fs = require("fs");
 const path = require("path");
 const { scanExtensions } = require("./extensions");
-const { buildExtensionURL } = require("../shared/protocol");
+const { buildExtensionURL, panelIdFor } = require("../shared/protocol");
 
 const BRIDGE_SOURCE = fs.readFileSync(
   path.join(__dirname, "..", "frontend", "panel-bridge.js"),
   "utf8"
 );
 
-// devtools' View rejects ids outside [A-Za-z0-9.-] ("Invalid view ID"), so
-// path separators in pagePath are folded away; collisions within one
-// extension would need paths differing only in punctuation — not a concern.
-const panelIdFor = (extensionId, pagePath) =>
-  `ext.${extensionId}.${String(pagePath || "").replace(/^\/+/, "") || "index"}`.replace(
-    /[^A-Za-z0-9.-]+/g,
-    "-"
-  );
 
 let contents = null;
 let ready = Promise.resolve(); // resolves when the live bridge is up
 const panels = new Map(); // panelId -> { panelId, title, pageURL }
+
+// panelId -> { pagePath, send } of the devtools-page frame that created the panel
+// most recently. Kept apart from `panels` because that map is serialized into the
+// frontend. Chrome hands the Panel object (and so its onShown/onHidden) to the
+// devtools page that called panels.create and to no one else, so visibility events
+// go to exactly this frame; a reloaded devtools page re-creates its panels (dedupe
+// keeps the tab) and takes the seat over, which is what retires a stale sender.
+const owners = new Map();
+const shown = new Set(); // panelIds the frontend last reported as selected
 
 const attach = (webContents) => {
   contents = webContents;
@@ -48,15 +49,59 @@ const attach = (webContents) => {
         console.error("[extensions] panel bridge failed:", error);
       });
   };
+  // A fresh frontend document starts with no panel selected.
+  webContents.on("did-start-navigation", (details) => {
+    if (details.isMainFrame && !details.isSameDocument) {
+      shown.clear();
+    }
+  });
   webContents.on("did-finish-load", boot);
 };
 
-const addPanel = ({ extensionId, title, pagePath }) => {
+/** Whether `event` came from the frontend's own main frame (the only legitimate
+ *  reporter of tab selection). */
+const isFrontendFrame = (event) =>
+  Boolean(
+    contents &&
+      !contents.isDestroyed() &&
+      event.sender === contents &&
+      event.senderFrame === contents.mainFrame
+  );
+
+/**
+ * The frontend reports a panel tab becoming (in)visible. Idempotent: only a real
+ * transition is forwarded, and only to the creating devtools-page frame.
+ * @returns {boolean} whether an event was delivered
+ */
+const setPanelVisible = (panelId, visible) => {
+  if (typeof panelId !== "string" || !panels.has(panelId) || shown.has(panelId) === visible) {
+    return false;
+  }
+  if (visible) {
+    shown.add(panelId);
+  } else {
+    shown.delete(panelId);
+  }
+  const owner = owners.get(panelId);
+  if (!owner) {
+    return false;
+  }
+  owner.send({
+    kind: "panel",
+    payload: { pagePath: owner.pagePath, event: visible ? "shown" : "hidden" },
+  });
+  return true;
+};
+
+const addPanel = ({ extensionId, title, pagePath, owner }) => {
   const panel = {
     panelId: panelIdFor(extensionId, pagePath),
     title: String(title || "Extension"),
     pageURL: buildExtensionURL(extensionId, pagePath || ""),
   };
+  if (owner) {
+    owners.set(panel.panelId, { pagePath, send: owner.send });
+  }
   if (panels.has(panel.panelId)) {
     return true; // re-registration (reload replay race) — already hosted
   }
@@ -75,4 +120,4 @@ const addPanel = ({ extensionId, title, pagePath }) => {
   return true;
 };
 
-module.exports = { attach, addPanel };
+module.exports = { attach, addPanel, panelIdFor, isFrontendFrame, setPanelVisible };

@@ -31,4 +31,19 @@ const parseExtensionURL = (url) => {
 const buildExtensionURL = (extensionId, innerPath = "") =>
   `${EXTENSION_SCHEME}://${extensionId}/${innerPath.replace(/^\//, "")}`;
 
-module.exports = { EXTENSION_SCHEME, parseExtensionURL, buildExtensionURL };
+/**
+ * The frontend View id (and iframe `name`) of the panel an extension creates at
+ * `pagePath`. devtools' View rejects ids outside [A-Za-z0-9.-] ("Invalid view ID"), so
+ * path separators in pagePath are folded away; collisions within one extension would
+ * need paths differing only in punctuation — not a concern. Shared because the host,
+ * the frontend bridge and the devtools-page shim must all derive the SAME id from the
+ * same (extensionId, pagePath): that is what makes replay, dedupe and the
+ * onShown(window) lookup agree.
+ */
+const panelIdFor = (extensionId, pagePath) =>
+  `ext.${extensionId}.${String(pagePath || "").replace(/^\/+/, "") || "index"}`.replace(
+    /[^A-Za-z0-9.-]+/g,
+    "-"
+  );
+
+module.exports = { EXTENSION_SCHEME, parseExtensionURL, buildExtensionURL, panelIdFor };

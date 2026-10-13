@@ -81,6 +81,9 @@ test("every _fire call site in chrome-shim is attributed to a real producer", ()
     "messaging.js:_fire": 8,
     // CDP Network.* events the inspected app really reported.
     "network-bridge.js:_fire": 2,
+    // The frontend's own tab widget reported the panel shown / hidden (wasShown /
+    // willHide), and main routed it to the devtools page that created the panel.
+    "devtools.js:_fire": 1,
   };
 
   const counts = {};

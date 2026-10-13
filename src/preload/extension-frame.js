@@ -38,6 +38,7 @@ const {
   RUNTIME_PORT_CLOSE,
   RUNTIME_DELIVER,
   EXT_PANEL_CREATE,
+  EXT_PANEL_EVENT,
   DEVTOOLS_EVAL,
   DEVTOOLS_RELOAD,
   NETWORK_SUBSCRIBE,
@@ -384,6 +385,13 @@ ipcRenderer.on(NETWORK_DELIVER, (_event, delivery) =>
   networkBridge.handleDelivery(delivery && delivery.payload ? delivery.payload : delivery)
 );
 
+// Panel.onShown / onHidden from the host (the frame that created the panel is the only
+// one sent them). The shim fires the Panel's events; the window argument onShown
+// carries is attached in the main world below.
+ipcRenderer.on(EXT_PANEL_EVENT, (_event, delivery) =>
+  chrome.handlePanelEvent(delivery && delivery.payload)
+);
+
 // chrome.* namespace. The merge runs in the main world: deep-merge runtime and
 // devtools onto anything already present and re-establish `lastError` as a LIVE
 // getter — contextBridge cloning evaluates getters only once
@@ -399,6 +407,114 @@ contextBridge.executeInMainWorld({
       get: () => bridge.runtime._getLastLastError(),
     });
     delete merged.runtime._getLastLastError; // internal helper stays shim-side
+
+    // Panel.onShown(window): Chrome passes the panel page's window, and a Window cannot
+    // cross the contextBridge, so the main world resolves it. The panel iframe lives in
+    // a shadow tree of the frontend (so it is not among window.parent.frames) but is
+    // NAMED after its panel id: `window.open("", name)` resolves an existing named frame
+    // without navigating it and returns its WindowProxy, which is fully scriptable from
+    // here once the panel has loaded, because both pages are `rozenite://<id>`. A
+    // lookup that finds no such frame would open a popup instead, which is detected
+    // (a popup is a top-level window, a panel frame is not) and closed. The
+    // listeners of one panel are serialized, so onHidden can never overtake an
+    // onShown that is still waiting for the panel to load.
+    const panels = merged.devtools && merged.devtools.panels;
+    if (panels && typeof panels.create === "function") {
+      const hrefOf = (win) => {
+        try {
+          return String(win.location.href);
+        } catch {
+          return null; // cross-origin: still the frontend's initial about:blank
+        }
+      };
+      const lookup = (panelId) => {
+        let found = null;
+        try {
+          found = window.open("", panelId);
+        } catch {
+          return null;
+        }
+        // A frame's `top` is the frontend window; a popup is its own top. Only a
+        // top-level about:blank window can be the popup we just caused, so a real panel
+        // frame is never closed by mistake (closing a frame closes the whole app).
+        if (found && found.top === found && hrefOf(found) === "about:blank") {
+          found.close(); // no frame by that name: this is the popup we just caused
+          return null;
+        }
+        return found;
+      };
+      const awaitPanelWindow = async (panelId) => {
+        // Looked up fresh on every show: DevTools detaches a hidden tab's content, which
+        // discards the panel iframe's browsing context, so a window kept from an earlier
+        // show would be a dead one.
+        const win = lookup(panelId);
+        // Wait (bounded) for the panel's navigation to commit, so the window is usable
+        // the moment the listener gets it.
+        for (let attempt = 0; win && attempt < 120; attempt++) {
+          const href = hrefOf(win);
+          if (href && href.startsWith("rozenite://")) {
+            break;
+          }
+          await new Promise((resolve) => setTimeout(resolve, 25));
+        }
+        return win; // null = divergence: Chrome always has a window to hand over
+      };
+      const decorate = (panel) => {
+        if (!panel || !panel.onShown || !panel.onHidden) {
+          return panel;
+        }
+        let queue = Promise.resolve();
+        const wrapEvent = (event, withWindow) => {
+          const listeners = [];
+          event.addListener(() => {
+            queue = queue.then(async () => {
+              const win = withWindow ? await awaitPanelWindow(panel._panelId) : undefined;
+              for (const listener of [...listeners]) {
+                try {
+                  listener(...(withWindow ? [win] : []));
+                } catch (error) {
+                  console.error(error);
+                }
+              }
+            });
+          });
+          return {
+            addListener(fn) {
+              if (typeof fn !== "function") {
+                throw new TypeError("Listener must be a function");
+              }
+              if (!listeners.includes(fn)) {
+                listeners.push(fn);
+              }
+            },
+            removeListener(fn) {
+              const index = listeners.indexOf(fn);
+              if (index !== -1) {
+                listeners.splice(index, 1);
+              }
+            },
+            hasListener: (fn) => (fn === undefined ? listeners.length > 0 : listeners.includes(fn)),
+            hasListeners: () => listeners.length > 0,
+          };
+        };
+        return {
+          ...panel,
+          onShown: wrapEvent(panel.onShown, true),
+          onHidden: wrapEvent(panel.onHidden, false),
+        };
+      };
+      const create = panels.create;
+      merged.devtools.panels = {
+        ...panels,
+        create(title, iconPath, pagePath, cb) {
+          if (typeof cb === "function") {
+            return create(title, iconPath, pagePath, (panel) => cb(decorate(panel)));
+          }
+          return create(title, iconPath, pagePath).then(decorate);
+        },
+      };
+    }
+
     window.chrome = merged;
   },
 });

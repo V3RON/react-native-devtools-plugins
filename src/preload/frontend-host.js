@@ -31,6 +31,7 @@ const {
   WINDOW_BRING_TO_FRONT,
   WINDOW_CLOSE,
   HOST_SAVE,
+  EXT_PANEL_VISIBILITY,
 } = require("../shared/ipc");
 
 // ── dispatch channel receiver ───────────────────────────────────────────────
@@ -247,6 +248,16 @@ const InspectorFrontendHost = {
       y,
       items: JSON.parse(JSON.stringify(items || [])),
     });
+  },
+  // [REAL, shell-only] not part of Chrome's InspectorFrontendHost: the panel bridge
+  // (src/frontend/panel-bridge.js) reports an extension panel's tab being selected /
+  // deselected, which main turns into Panel.onShown / onHidden for the devtools page
+  // that created it (docs/features/DEVTOOLS-PANELS.md). Main accepts it from this
+  // frame only; extension frames cannot reach this object.
+  setExtensionPanelVisible(panelId, shown) {
+    ipcRenderer
+      .invoke(EXT_PANEL_VISIBILITY, { panelId: String(panelId), shown: shown === true })
+      .catch(() => {});
   },
   setOpenNewWindowForPopups(value) {},
   setAddExtensionCallback(callback) {},
