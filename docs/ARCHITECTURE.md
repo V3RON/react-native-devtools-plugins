@@ -179,9 +179,11 @@ a hidden window of its own:
 
 Pure modules; `index.js` assembles the namespace from injected deps:
 
-- `storage.js` — real `chrome.storage.local/sync` ([REAL]), `StorageArea` contract with
-  `onChanged`, quotas, promise + callback styles, against an injected backend
-  (electron-store adapter wired by the preload: one JSON file per extension per area).
+- `storage.js` — real `chrome.storage.local/sync/session` ([REAL]): the API shape (promise +
+  callback, `lastError`, per-area and global `onChanged`) as a thin client of the HOST's store
+  (`src/main/storage-service.js`: one store per extension for all its contexts, electron-store
+  for local/sync, memory for session, change events fanned out to every context of that
+  extension over `STORAGE_DELIVER`). The semantics live in `src/shared/storage-core.js`.
 - `network-bridge.js` — `chrome.devtools.network` **and** `chrome.webRequest`, both fed by
   the host's one CDP network model: the frame subscribes on its first listener, the host
   pushes one delivery per lifecycle step, and this module decides which Chrome event each

@@ -25,6 +25,7 @@ const notificationHost = require("./notification-host");
 const { getContextRegistry } = require("./context-registry");
 const { getRequestQueue } = require("./context-request");
 const saveService = require("./save-service");
+const { createStorageService, electronStorePersistence } = require("./storage-service");
 const optionsHost = require("./options-host");
 const config = require("./config");
 const {
@@ -45,6 +46,8 @@ const {
   RUNTIME_PORT_POST,
   RUNTIME_PORT_CLOSE,
   RUNTIME_DELIVER,
+  STORAGE_CALL,
+  STORAGE_DELIVER,
   EXT_PANEL_CREATE,
   DEVTOOLS_EVAL,
   DEVTOOLS_RELOAD,
@@ -93,6 +96,19 @@ const startContentBridge = () => {
   }
   return contentBridgeInstance;
 };
+
+// ── chrome.storage, owned by the host (docs/features/STORAGE-AND-I18N.md) ────
+// One store per extension for every one of its contexts, with the change events
+// fanned out to all of them. The persistence is built lazily on the first
+// local/sync access, so requiring this module (tests) never opens a file.
+let storagePersistence;
+const storageService = createStorageService({
+  openPersistence: (extensionId, area) => {
+    storagePersistence = storagePersistence || electronStorePersistence();
+    return storagePersistence(extensionId, area);
+  },
+  log: (message) => console.warn(`[storage] ${message}`),
+});
 
 // ── the CDP network model, shared by devtools.network and webRequest ────────
 // (docs/features/DEVTOOLS-NETWORK.md). One model for every frame; a frame asks
@@ -272,6 +288,7 @@ const registerIpcHandlers = () => {
     // notification click would be pushed into a detached frame (the registry's own
     // send throws for that, but the id would stay owned forever).
     getContextRegistry().unregister(key);
+    storageService.detach(key);
     // The same for a host->context REQUEST that is still open: a download waiting on
     // a filename suggestion from a frame that has died would otherwise sit until its
     // timeout. Settling it now lets the save proceed with the name it derived, and
@@ -318,6 +335,18 @@ const registerIpcHandlers = () => {
       url: frame.url,
       send: makeFrameSender(key, event.sender, frame),
     });
+    // chrome.storage change events: every registered context of the extension hears
+    // every change to its storage. `allowed` is read at delivery time from the host's
+    // own grants, so an extension without `storage` is neither served nor told.
+    // Every frame this host registers is an extension page (a trusted context); the
+    // untrusted kind Chrome has is a content script, which has no chrome.storage here.
+    const sendStorage = makeFrameSender(key, event.sender, frame, STORAGE_DELIVER);
+    storageService.attach({
+      frameKey: key,
+      extensionId,
+      send: (change) => sendStorage({ kind: "storage-changed", payload: change }),
+      allowed: () => Boolean(grants.get(key) && grants.get(key).storage),
+    });
     notifyFrameObservers({
       key,
       extensionId,
@@ -343,6 +372,12 @@ const registerIpcHandlers = () => {
       }
       return handler(fromKey, payload);
     });
+
+  // chrome.storage: the frame names an area and an operation; whose storage it is comes
+  // from the registered frame, and the permission is enforced here as well as in the shim.
+  registeredHandle(STORAGE_CALL, (fromKey, { area, op, arg } = {}) =>
+    storageService.call({ frameKey: fromKey, area, op, arg })
+  );
 
   registeredHandle(RUNTIME_SEND_MESSAGE, (fromKey, { message }) =>
     router.sendMessage({ fromKey, message })

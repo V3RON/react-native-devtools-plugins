@@ -1,0 +1,11 @@
+{
+  "heardA": "[background worker] session.onChanged (per-area): counter, by\n[background worker] session.counter: (absent) -> 1; session.by: (absent) -> \"panel\"\n[devtools page] session.onChanged (per-area): counter, by\n[devtools page] session.counter: (absent) -> 1; session.by: (absent) -> \"panel\"\n[background worker] session.onChanged (per-area): counter\n[background worker] session.counter: 1 -> 2\n[devtools page] session.onChanged (per-area): counter\n[devtools page] session.counter: 1 -> 2\n[options page] session.onChanged (per-area): counter\n[options page] session.counter: 1 -> 2",
+  "optionsHeard": "session.counter: 1 -> 2",
+  "heardB": "[background worker] session.onChanged (per-area): counter, by\n[background worker] session.counter: (absent) -> 1; session.by: (absent) -> \"panel\"\n[devtools page] session.onChanged (per-area): counter, by\n[devtools page] session.counter: (absent) -> 1; session.by: (absent) -> \"panel\"",
+  "snapshotA": {
+    "counter": 2,
+    "by": "panel"
+  },
+  "optionsFinal": "session.counter: 1 -> 2\nsession.counter: 2 -> 3",
+  "failures": []
+}

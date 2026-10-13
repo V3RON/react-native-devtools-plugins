@@ -4,7 +4,7 @@
 //   extensionId    — id == rozenite URL hostname (load-bearing contract)
 //   getManifest    — () => manifest object ({} until loaded)
 //   platform       — {os, arch} in Chrome's vocabulary
-//   storage        — from ./storage createExtensionStorage({ createBackend })
+//   storage        — from ./storage createExtensionStorage({ call | createBackend })
 //   networkBridge  — from ./network-bridge createNetworkBridge({ ... }): feeds
 //                    BOTH chrome.webRequest and chrome.devtools.network (one CDP
 //                    capture in main, two Chrome APIs — docs/features/
@@ -182,11 +182,11 @@ const createChromeNamespace = ({
     handleDelivery = messaging.handleDelivery;
   }
 
-  const onChanged = createEvent();
-  for (const area of ["local", "sync", "session"]) {
-    storage[area].onChanged.addListener((changes, areaName) =>
-      onChanged._fire(changes, areaName)
-    );
+  // chrome.storage.onChanged is the storage object's own event (it fires for the
+  // three areas with the area name); storage failures travel as Chrome's lastError.
+  const onChanged = storage.onChanged;
+  if (typeof storage.bindLastError === "function") {
+    storage.bindLastError(lastErrorScope);
   }
 
   const chrome = {
@@ -262,9 +262,9 @@ const createChromeNamespace = ({
       onDenied: (method, error) => reportDenied(`${method}: ${error.message}`, "tabs"),
     }),
 
-    // [REAL] persistent per-extension storage (session area: per-frame
-    // in-memory, see storage.js deviation note)
-    // (docs/features/STORAGE-AND-I18N.md). Gated on the declared `storage`
+    // [REAL] chrome.storage: one store per extension shared by all its contexts, with
+    // onChanged delivered to every one of them (session area: in memory, cleared when
+    // the shell restarts) (docs/features/STORAGE-AND-I18N.md). Gated on the declared `storage`
     // permission, like Chrome's. The methods live one level down (per area), so
     // each area is gated and `onChanged` — an Event, not an API — is left alone.
     storage: {
