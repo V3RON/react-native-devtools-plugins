@@ -28,6 +28,10 @@ const { stripThemeHintFromUrl } = require("../shared/theme");
 const { getRequestQueue } = require("./context-request");
 const saveService = require("./save-service");
 const optionsHost = require("./options-host");
+const { getHostFiles } = require("./host-files");
+const { getExternalOpener } = require("./external-open");
+const { buildHostConfig } = require("./host-config");
+const { isFrontendFrame } = require("./frontend-frame");
 const config = require("./config");
 const {
   SHOW_CONTEXT_MENU,
@@ -64,6 +68,10 @@ const {
   NOTIFICATION_CLEAR,
   NOTIFICATION_PERMISSION,
   HOST_SAVE,
+  HOST_APPEND,
+  HOST_CLOSE_FILE,
+  HOST_OPEN_EXTERNAL,
+  HOST_CONFIG,
   OPTIONS_OPEN,
   DOWNLOAD_START,
   DOWNLOAD_CANCEL,
@@ -406,7 +414,7 @@ const registerIpcHandlers = () => {
   // names inside the theme host before any extension hears it.
   ipcMain.handle(
     THEME_REPORT,
-    createThemeReportHandler({ themeHost, isFrontendFrame: panelHost.isFrontendFrame })
+    createThemeReportHandler({ themeHost, isFrontendFrame })
   );
 
   // ── inspected window (docs/features/INSPECTED-WINDOW.md) ──────────────────
@@ -725,27 +733,36 @@ const registerIpcHandlers = () => {
     return optionsHost.getOptionsHost().openOptionsPage(extensionId);
   });
 
-  // `InspectorFrontendHost.save` — the DevTools frontend's own save. Before this it
-  // built a Blob, hung an `<a download>` off the DevTools document and clicked it,
-  // which works only if the renderer may navigate to a `blob:` URL and tells nobody
-  // whether anything was written. Same service as chrome.downloads, no extension
-  // gating (the frontend is not an extension), and no filename suggestion because
-  // there is no extension to ask.
-  //
-  // Chrome's first argument is a NAME, not a location to fetch (the old hack used it
-  // as `a.download`), and the content arrives with the call — so it goes in as
-  // `filename` + `content` and nothing is fetched.
-  ipcMain.handle(HOST_SAVE, (_event, { url, content, forceSaveAs, isBase64 } = {}) =>
-    saveService
-      .getSaveService()
-      .start({
-        frameKey: null,
-        filename: String(url || "untitled.txt"),
-        content,
-        isBase64: isBase64 === true,
-        saveAs: forceSaveAs === true,
-      })
-      .catch((error) => ({ ok: false, error: (error && error.message) || "the save failed" }))
+  // `InspectorFrontendHost.save/append/close/openInNewTab/getHostConfig` — channels for
+  // the DevTools frontend's own main frame only (src/main/frontend-frame.js: its
+  // WebContents, its main frame, still on the frontend origin). An extension page, a
+  // background window, a popup or a navigated-away frontend that reached these names is
+  // refused: identity is the sender, never anything in the payload.
+  const REFUSED = { ok: false, error: "not the DevTools frontend" };
+  const failed = (error) => ({ ok: false, error: (error && error.message) || "the call failed" });
+
+  // The frontend's file key (`url`) is echoed back verbatim on savedURL /
+  // canceledSaveURL / appendedToURL: its FileManager matches the reply to the pending
+  // promise by that exact string (src/main/host-files.js). The save dialog and the write
+  // are the same service chrome.downloads uses — no extension gating (the frontend is
+  // not an extension) and no filename suggestion (no extension to ask).
+  ipcMain.handle(HOST_SAVE, (event, payload) =>
+    isFrontendFrame(event) ? getHostFiles().save(payload).catch(failed) : REFUSED
+  );
+  ipcMain.handle(HOST_APPEND, (event, payload) =>
+    isFrontendFrame(event) ? getHostFiles().append(payload).catch(failed) : REFUSED
+  );
+  ipcMain.handle(HOST_CLOSE_FILE, (event, payload) =>
+    isFrontendFrame(event) ? getHostFiles().close(payload).catch(failed) : REFUSED
+  );
+
+  // `openInNewTab`: http(s) only (src/main/external-open.js).
+  ipcMain.handle(HOST_OPEN_EXTERNAL, (event, payload) =>
+    isFrontendFrame(event) ? getExternalOpener().open(payload && payload.url) : REFUSED
+  );
+
+  ipcMain.handle(HOST_CONFIG, (event) =>
+    isFrontendFrame(event) ? buildHostConfig(config.hostConfigOverride) : {}
   );
 };
 

@@ -42,7 +42,7 @@ needed. Legend and tiers: [../README.md](../README.md). Last reviewed: 2026-10-0
 
 | Surface | Status | Doc |
 | --- | --- | --- |
-| `InspectorFrontendHost.*` (frontend ⇄ embedder) | 🟨 ~60 methods stubbed, semantics missing for most | [../api/INSPECTOR-FRONTEND-HOST.md](../api/INSPECTOR-FRONTEND-HOST.md) |
+| `InspectorFrontendHost.*` (frontend ⇄ embedder) | 🟨 ~60 methods stubbed, semantics missing for most; `openInNewTab`, `save`/`append`/`close` (+ `savedURL`/`canceledSaveURL`/`appendedToURL`) and `getHostConfig` are real | [../api/INSPECTOR-FRONTEND-HOST.md](../api/INSPECTOR-FRONTEND-HOST.md) |
 | `chrome.*` (extension API) | 🟡 mostly stub; storage + `devtools.inspectedWindow.eval` are the exceptions | [../api/CHROME-EXTENSION-APIS.md](../api/CHROME-EXTENSION-APIS.md) |
 
 ## Dependency sketch

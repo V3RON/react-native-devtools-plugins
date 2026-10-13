@@ -32,6 +32,10 @@ const {
   WINDOW_CLOSE,
   HOST_SAVE,
   THEME_REPORT,
+  HOST_APPEND,
+  HOST_CLOSE_FILE,
+  HOST_OPEN_EXTERNAL,
+  HOST_CONFIG,
 } = require("../shared/ipc");
 
 // ── dispatch channel receiver ───────────────────────────────────────────────
@@ -39,6 +43,10 @@ const {
 // InspectorFrontendAPI is defined by the frontend itself and only exists
 // after module init; events fired earlier are dropped (same as Chrome —
 // the host only raises events once the frontend is up).
+//
+// The option is `args` (Electron's ExecutionScript). It was spelled `arguments`, which
+// Electron ignores: the function ran with NO arguments, so every dispatched event hit
+// the "not ready" branch below as `InspectorFrontendAPI.undefined`.
 ipcRenderer.on(HOST_EVENT, (_event, { name, args }) => {
   contextBridge.executeInMainWorld({
     func: (eventName, eventArgs) => {
@@ -50,7 +58,7 @@ ipcRenderer.on(HOST_EVENT, (_event, { name, args }) => {
       }
       method.apply(api, eventArgs);
     },
-    arguments: [name, args || []],
+    args: [name, args || []],
   });
 });
 
@@ -116,42 +124,46 @@ const InspectorFrontendHost = {
     if (navigator.clipboard) navigator.clipboard.writeText(text || "");
   },
   openInNewTab(url) {
-    // [FAKE] window.open inside the DevTools window; shell.openExternal is better
-    window.open(url, "_blank");
-  },
-  save(url, content, forceSaveAs, isBase64) {
-    // [REAL] the shell's one save path (src/main/save-service.js) — the same one
-    // `chrome.downloads.download` uses. This used to build a Blob, hang an
-    // `<a download>` off the DevTools document and click it: that only works if the
-    // renderer is allowed to navigate to a `blob:` URL, and nobody — not the user,
-    // not the shell — was told whether a file was written or where it went. Here the
-    // host picks a path (a real save dialog when `forceSaveAs`), writes the bytes,
-    // and reports the state; the reply is awaited for nothing because Chrome's
-    // `InspectorFrontendHost.save` has no callback, but a failed save is logged
-    // rather than swallowed.
-    const name = String(url || "untitled.txt").split(/[\\/]/).pop() || "untitled.txt";
+    // [REAL] the OS browser through main's http(s)-only allowlist
+    // (src/main/external-open.js). This used to be `window.open`, which made a new
+    // window of THIS shell with the DevTools preload attached.
     ipcRenderer
-      .invoke(HOST_SAVE, { url: name, content, forceSaveAs, isBase64 })
+      .invoke(HOST_OPEN_EXTERNAL, { url: String(url) })
       .then((reply) => {
         if (reply && reply.ok === false) {
+          console.warn(`InspectorFrontendHost.openInNewTab: ${reply.error}`);
+        }
+      })
+      .catch((error) => console.warn(`InspectorFrontendHost.openInNewTab: ${error && error.message}`));
+  },
+  // save / append / close are one family (src/main/host-files.js). `url` is the
+  // frontend's own key for the file, sent verbatim: main derives the dialog's default
+  // name from it, remembers the chosen path per url, and answers on the dispatch
+  // channel with savedURL(url, path) / canceledSaveURL(url) / appendedToURL(url) — the
+  // events the frontend's FileManager waits for. Chrome's methods return nothing, so
+  // a failure is logged here rather than thrown at a caller that cannot catch it.
+  save(url, content, forceSaveAs, isBase64) {
+    // [REAL] dialog on the first save of a url (or `forceSaveAs`), then the same path.
+    ipcRenderer
+      .invoke(HOST_SAVE, { url, content, forceSaveAs, isBase64 })
+      .then((reply) => {
+        if (reply && reply.ok === false && reply.canceled !== true) {
           console.warn(`InspectorFrontendHost.save: ${reply.error}`);
         }
       })
       .catch((error) => console.warn(`InspectorFrontendHost.save: ${error && error.message}`));
   },
-  // Chrome appends to a file it opened with `save` first. This shell's save owns a
-  // path only for the duration of one write, so there is nothing to append to; say
-  // so, because an inert no-op reads as a file that grew.
   append(url, content) {
-    void url;
-    void content;
-    console.warn(
-      "InspectorFrontendHost.append does nothing: this host writes a file in one save and keeps no handle open."
-    );
+    // [REAL] appends to the file a prior save of `url` chose; ignored for any other url.
+    ipcRenderer
+      .invoke(HOST_APPEND, { url, content })
+      .catch((error) => console.warn(`InspectorFrontendHost.append: ${error && error.message}`));
   },
-  // Chrome's `close` releases a file opened by `save`. Nothing is open here.
   close(url) {
-    void url;
+    // [REAL] forgets the path `save` remembered for `url`.
+    ipcRenderer
+      .invoke(HOST_CLOSE_FILE, { url })
+      .catch((error) => console.warn(`InspectorFrontendHost.close: ${error && error.message}`));
   },
   // [STUB] no OS file-revealer is wired for a path the frontend names. It stays inert
   // rather than doing something adjacent-looking (bringing this window forward would
@@ -193,8 +205,14 @@ const InspectorFrontendHost = {
       callback({ isSyncActive: false, arePreferencesSynced: false });
   },
   getHostConfig(callback) {
-    // [STUB] could feed experiments, disableAutosave, etc.
-    if (callback) callback({});
+    // [REAL] the frontend's feature gates for this embedder (src/main/host-config.js).
+    // `{}` on failure is the frontend's own "nothing configured" answer.
+    ipcRenderer
+      .invoke(HOST_CONFIG)
+      .catch(() => ({}))
+      .then((config) => {
+        if (callback) callback(config || {});
+      });
   },
 
   // ── [STUB] workspace / filesystem APIs ───────────────────────────────────

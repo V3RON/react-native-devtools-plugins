@@ -317,7 +317,10 @@ app
       webPreferences: frontendPreferences({ preloadPath: config.preloadPath }),
     });
     if (frontendIsHost) {
-      require("../src/main/panel-host").setFrontendContents(win.webContents);
+      // The shared rule also checks the main frame is still on the frontend ORIGIN
+      // (src/main/frontend-frame.js), so the configured frontend URL is this loopback page's.
+      config.frontendURL = `http://127.0.0.1:${port}/`;
+      require("../src/main/frontend-frame").setFrontendContents(win.webContents);
     }
 
     const note = (entry) => write(entry);

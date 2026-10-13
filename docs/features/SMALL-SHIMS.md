@@ -91,7 +91,10 @@ opens a marketing URL and Altair opens one from `notifications.onClicked`. Launc
 user's real browser because a devtools session started — or because a notification they
 never clicked was created — is a side effect no extension asked this host for, and the
 user cannot take it back. Whichever policy is set, the Tab descriptor says what really
-happened, so nothing is claimed that did not occur.
+happened, so nothing is claimed that did not occur. Under `external` only `http(s)` URLs are
+handed to the OS (`src/main/external-open.js`, the allowlist `InspectorFrontendHost.openInNewTab`
+shares); anything else opens nothing: `create` still resolves with `openedVia: null` (Chrome has
+no refusal to model) and the calling frame logs `[chrome.tabs] tabs.create opened nothing: <reason>`.
 
 **`tabs.sendMessage` goes to the app, and only to a script that was opted in.** Its receiver
 is this extension's own content script inside the inspected target
@@ -203,7 +206,9 @@ clicked it — which works only if the renderer may navigate to a `blob:` URL, a
 nobody (not the user, not the shell, not the extension) whether a file was written or
 where. `src/main/save-service.js` is now the one implementation, and both
 `chrome.downloads.download` and `InspectorFrontendHost.save` are calls into it
-([../api/INSPECTOR-FRONTEND-HOST.md](../api/INSPECTOR-FRONTEND-HOST.md)).
+([../api/INSPECTOR-FRONTEND-HOST.md](../api/INSPECTOR-FRONTEND-HOST.md)). The frontend's
+`save`/`append`/`close` family sits one layer above it in `src/main/host-files.js`, which
+keeps the per-url file memory and raises `savedURL` / `canceledSaveURL` / `appendedToURL`.
 
 **What makes a state honest** (the rules `src/main/save-service.js` exists to hold):
 
