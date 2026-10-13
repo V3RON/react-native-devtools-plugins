@@ -25,8 +25,9 @@ const MANIFEST = JSON.stringify({
   content_security_policy: { extension_pages: "script-src 'self'; object-src 'self'" },
 });
 
-// A CLASSIC script in <head>, no defer: it runs while the document is still being
-// parsed, i.e. before any async IPC reply could have landed.
+// A CLASSIC script in <head>, no defer. The harness holds every RUNTIME_REGISTER reply back
+// (--register-delay-ms), so whatever this reads at script time provably did not come from
+// the host's reply: it is the URL hint, or the shim's own "default".
 const PROBE_HTML = `<!DOCTYPE html>
 <html><head><script src="/probe.js"></script></head><body>probe</body></html>
 `;
@@ -45,7 +46,14 @@ log({
   hostBridge: typeof window.__SHELL_HOST__,
 });
 panels.themeChanged.addListener((name) => log({ phase: "changed", arg: name, theme: panels.themeName }));
-setTimeout(() => log({ phase: "later", theme: panels.themeName }), 1200);
+setTimeout(() => log({ phase: "later", theme: panels.themeName }), 2500);
+// MessageSender.url must be the address the extension asked for, hint or no hint.
+chrome.runtime.onMessage.addListener((message, sender) => {
+  log({ phase: "msg", from: sender.url });
+});
+if (id === "A") {
+  setTimeout(() => chrome.runtime.sendMessage({ hi: 1 }).catch(() => {}), 3000);
+}
 `;
 
 const hostPage = `<!DOCTYPE html>
@@ -54,29 +62,28 @@ const hostPage = `<!DOCTYPE html>
   const say = (m) => console.log("[theme-test] " + m);
   const report = (name) =>
     window.__SHELL_HOST__.reportTheme(name).then((r) => say("report " + name + " -> " + JSON.stringify(r)));
+  const frame = (src, delay) =>
+    setTimeout(() => {
+      const f = document.createElement("iframe");
+      f.src = src;
+      document.body.appendChild(f);
+    }, delay);
   // Like the real bridge: the theme is reported BEFORE any extension frame exists.
   report("light") // not a Chrome name: refused
     .then(() => report("dark"))
     .then(() => {
       // A: the bridge's own hint, plus the extension's own query (encoded, repeated) and hash.
+      frame("rozenite://${ID}/probe.html?id=A&q=a%20b+c&q=2&__rozenite_theme=dark#frag", 0);
       // C: a forged hint, which is not one of Chrome's two names.
-      for (const src of [
-        "rozenite://${ID}/probe.html?id=A&q=a%20b+c&q=2&__rozenite_theme=dark#frag",
-        "rozenite://${ID}/probe.html?id=C&__rozenite_theme=evil",
-      ]) {
-        const f = document.createElement("iframe");
-        f.src = src;
-        document.body.appendChild(f);
-      }
+      frame("rozenite://${ID}/probe.html?id=C&__rozenite_theme=evil", 0);
+      // B: no hint at all (a frame the bridge did not create): learns it from the reply.
+      frame("rozenite://${ID}/probe.html?id=B", 1000);
     });
-  setTimeout(() => {
-    // B: no hint at all (a frame the bridge did not create): learns it from the register reply
-    const f = document.createElement("iframe");
-    f.src = "rozenite://${ID}/probe.html?id=B";
-    document.body.appendChild(f);
-  }, 1500);
   setTimeout(() => report("default"), 4000);
-  setTimeout(() => say("done"), 5200);
+  // G: the hint says dark while the HOST is "default" — only the hint can explain a "dark"
+  // read before the (held-back) reply, and the reply must then win.
+  frame("rozenite://${ID}/probe.html?id=G&__rozenite_theme=dark", 4500);
+  setTimeout(() => say("done"), 8300);
 </script>
 </body></html>
 `;
@@ -101,9 +108,9 @@ suite("theme: host broadcast, boot hint and page-world surface in a real Electro
     hostPage,
     extensionId: ID,
     waitFor: "[theme-test] done",
-    timeoutMs: 60000,
     settleMs: 400,
-    extraArgs: ["--frontend-host=on"],
+    extraArgs: ["--frontend-host=on", "--register-delay-ms=1200"],
+    timeoutMs: 90000,
   });
   const probes = run.observed.filter((l) => l.kind === "probe" && l.data && l.data.probe);
   const of = (id, phase) => probes.filter((l) => l.data.probe === id && l.data.phase === phase).map((l) => l.data);
@@ -116,22 +123,27 @@ suite("theme: host broadcast, boot hint and page-world surface in a real Electro
   // while the extension's own query and hash survive byte for byte.
   const [aSync] = of("A", "sync");
   assert.ok(aSync, "frame A's head script ran");
-  // NOTE what this does and does not prove: the host is already dark, so the hint and the
-  // RUNTIME_REGISTER reply agree, and the external probe.js costs a fetch during which the
-  // reply usually lands first. That the hint ALONE decides the value before any IPC is the
-  // preload's ordering (it runs before page scripts, tests/theme.test.js covers the parse);
-  // CSP forbids the inline script that would observe it here (src/shared/csp.js).
-  assert.equal(aSync.theme, "dark", "a classic head script reads the right theme at script time");
+  assert.equal(aSync.theme, "dark", "hinted theme at script time, before any reply");
   assert.equal(aSync.search, "?id=A&q=a%20b+c&q=2", "extension query untouched, hint stripped");
   assert.equal(aSync.hash, "#frag");
 
-  // a forged hint is refused (and still stripped)
+  // G isolates the hint: host is "default", reply held back, hint "dark" -> the head script
+  // reads "dark" (nothing else could say so); the reply then overrides it with the host's truth.
+  const [gSync] = of("G", "sync");
+  assert.ok(gSync, "frame G ran");
+  assert.equal(gSync.theme, "dark", "only the hint can explain this");
+  assert.equal(gSync.search, "?id=G");
+  assert.deepEqual(of("G", "changed").map((d) => d.arg), ["default"], "reply overrides hint");
+  assert.equal(of("G", "later")[0].theme, "default");
+
+  // a forged hint is refused (and still stripped); nothing was known yet, so "default"
   const [cSync] = of("C", "sync");
   assert.equal(cSync.search, "?id=C");
+  assert.equal(cSync.theme, "default");
   assert.ok(probes.every((l) => l.data.theme !== "evil"), "a forged hint never reaches themeName");
 
   // (b) internal helpers are not on the page-visible surface
-  for (const sync of [aSync, cSync]) {
+  for (const sync of [aSync, cSync, gSync]) {
     assert.ok(sync.panelKeys.includes("themeName") && sync.panelKeys.includes("themeChanged"));
     assert.ok(!sync.panelKeys.includes("_getThemeName"), "no internal helper on panels");
     assert.equal(sync.hostBridge, "undefined", "the frontend-only bridge is not in extension frames");
@@ -141,20 +153,25 @@ suite("theme: host broadcast, boot hint and page-world surface in a real Electro
   assert.ok(said.includes('[theme-test] report light -> {"ok":true,"changed":false}'), said.join("|"));
   assert.ok(said.includes('[theme-test] report dark -> {"ok":true,"changed":true}'), said.join("|"));
 
-  // (a) after the broadcast: A was already dark (no event), C learns dark, B boots into it
-  assert.deepEqual(
-    of("A", "changed").map((d) => d.arg),
-    ["default"],
-    "A: nothing for the dark it already showed, then the real change"
-  );
-  const cChanged = of("C", "changed");
-  assert.deepEqual(cChanged[cChanged.length - 1], { probe: "C", phase: "changed", arg: "default", theme: "default" });
+  // (a) after the broadcast: A already showed dark (no event); C and B learn dark from the
+  // reply, then everyone gets the real change
+  assert.deepEqual(of("A", "changed").map((d) => d.arg), ["default"]);
+  assert.deepEqual(of("C", "changed").map((d) => d.arg), ["dark", "default"]);
   const [bSync] = of("B", "sync");
   assert.ok(bSync, "frame B ran");
   assert.equal(bSync.search, "?id=B", "no hint, nothing rewritten");
-  const [bLater] = of("B", "later");
-  assert.equal(bLater.theme, "dark", "a frame without a hint learns the theme from the register reply");
-  assert.deepEqual(of("B", "changed").map((d) => [d.arg, d.theme]), [["default", "default"]]);
-  // the page-world property is LIVE, not an expose-time snapshot
-  assert.equal(of("A", "changed")[0].theme, "default");
+  assert.equal(bSync.theme, "default");
+  assert.equal(of("B", "later")[0].theme, "dark", "a frame without a hint learns the theme from the register reply");
+  assert.deepEqual(of("B", "changed").map((d) => [d.arg, d.theme]), [
+    ["dark", "dark"],
+    ["default", "default"],
+  ]);
+
+  // the hint never reaches another frame as MessageSender.url
+  const received = probes.filter((l) => l.data.phase === "msg").map((l) => l.data.from);
+  assert.ok(received.length >= 1, "A's message reached a sibling frame");
+  for (const from of received) {
+    assert.ok(!from.includes("__rozenite_theme"), `sender.url carries no hint: ${from}`);
+    assert.ok(from.startsWith(`rozenite://${ID}/probe.html?id=A&q=a%20b+c&q=2`), from);
+  }
 });

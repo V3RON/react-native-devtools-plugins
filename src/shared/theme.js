@@ -13,9 +13,10 @@ const THEME_NAMES = new Set(["default", "dark"]);
 const THEME_PARAM = "__rozenite_theme";
 
 /**
- * Split the theme hint out of a URL's query string WITHOUT re-serializing the
- * other parameters: whatever the extension's own query looked like (encoding,
- * order, repeated keys, `+` vs `%20`) is returned byte for byte.
+ * Split the theme hint out of a URL's query string, byte for byte: only the hint
+ * parameter and the ONE separator that belonged to it are removed, so whatever the
+ * extension's own query looked like (encoding, order, repeated keys, `+` vs `%20`,
+ * empty segments such as `a=1&&b=2`) comes back unchanged.
  *
  * @param {string} search `location.search` ("" or "?a=b&c")
  * @returns {{theme: string|null, search: string|null}} `theme` is the validated
@@ -33,19 +34,38 @@ const takeThemeHint = (search) => {
     const eq = part.indexOf("=");
     const name = eq === -1 ? part : part.slice(0, eq);
     if (name === THEME_PARAM) {
+      if (!found) {
+        hint = eq === -1 ? "" : part.slice(eq + 1);
+      }
       found = true;
-      hint = eq === -1 ? "" : part.slice(eq + 1);
-    } else if (part !== "") {
+    } else {
       kept.push(part);
     }
   }
   if (!found) {
     return { theme: null, search: null };
   }
-  return {
-    theme: THEME_NAMES.has(hint) ? hint : null,
-    search: kept.length ? `?${kept.join("&")}` : "",
-  };
+  const rest = kept.join("&");
+  return { theme: THEME_NAMES.has(hint) ? hint : null, search: rest === "" ? "" : `?${rest}` };
 };
 
-module.exports = { THEME_NAMES, THEME_PARAM, takeThemeHint };
+/**
+ * `url` without the theme hint (the same bytes otherwise). The host stores and hands
+ * out frame URLs (MessageSender.url, tab messages), and the hint is the shell's own
+ * detail: an extension comparing `sender.url` with `runtime.getURL(...)` must see the
+ * address it asked for, whatever the preload has or has not stripped yet.
+ */
+const stripThemeHintFromUrl = (url) => {
+  const text = String(url || "");
+  const hashAt = text.indexOf("#");
+  const beforeHash = hashAt === -1 ? text : text.slice(0, hashAt);
+  const hash = hashAt === -1 ? "" : text.slice(hashAt);
+  const queryAt = beforeHash.indexOf("?");
+  if (queryAt === -1) {
+    return text;
+  }
+  const { search } = takeThemeHint(beforeHash.slice(queryAt));
+  return search === null ? text : beforeHash.slice(0, queryAt) + search + hash;
+};
+
+module.exports = { THEME_NAMES, THEME_PARAM, takeThemeHint, stripThemeHintFromUrl };

@@ -24,6 +24,7 @@ const tabHost = require("./tab-host");
 const notificationHost = require("./notification-host");
 const { getContextRegistry } = require("./context-registry");
 const { createThemeHost, createThemeReportHandler } = require("./theme-host");
+const { stripThemeHintFromUrl } = require("../shared/theme");
 const { getRequestQueue } = require("./context-request");
 const saveService = require("./save-service");
 const optionsHost = require("./options-host");
@@ -320,16 +321,20 @@ const registerIpcHandlers = () => {
     // gets no data (docs/features/EXTENSION-MANAGEMENT.md).
     const granted = grantedPermissions(event);
     grants.set(key, granted);
+    // The frame's address as the EXTENSION knows it: the panel bridge's theme hint
+    // (src/shared/theme.js) is the shell's detail and must not reach MessageSender.url.
+    // Done here, not by relying on the preload having stripped it first (a race).
+    const frameUrl = stripThemeHintFromUrl(frame.url);
     router.registerFrame({
       key,
       extensionId,
-      url: frame.url,
+      url: frameUrl,
       send: makeFrameSender(key, event.sender, frame),
     });
     notifyFrameObservers({
       key,
       extensionId,
-      url: frame.url,
+      url: frameUrl,
       send: makeFrameSender(key, event.sender, frame),
     });
     event.sender.once("destroyed", () => unregisterRouterFrame(key));
@@ -562,7 +567,7 @@ const registerIpcHandlers = () => {
       // than from anything the frame says about itself.
       granted: tabsCaller(event),
       fromKey: resolveFrameKey(event),
-      frameUrl: event.senderFrame ? event.senderFrame.url : "",
+      frameUrl: event.senderFrame ? stripThemeHintFromUrl(event.senderFrame.url) : "",
       // The production shell started it in src/main/index.js; a harness that never ran
       // that file gets it built here, against the same router, so the answer is always
       // "what this shell really did" rather than "the bridge was never started".

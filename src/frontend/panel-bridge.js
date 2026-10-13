@@ -40,6 +40,7 @@
   // Best effort, never on the critical path: a moved module or a stuck IPC costs the
   // extensions their theme (they stay on "default"), not their panels.
   let currentTheme = "default";
+  let themeKnown = false; // read from ThemeSupport at least once
   try {
     const themeModule = await import("/rozenite/ui/legacy/theme_support/theme_support.js");
     const themeSupport = themeModule.ThemeSupport.instance();
@@ -56,6 +57,7 @@
       });
     }
     currentTheme = themeSupport.themeName() === "dark" ? "dark" : "default";
+    themeKnown = true;
     await Promise.race([
       Promise.resolve(reportTheme()),
       new Promise((resolve) => setTimeout(resolve, 2000)),
@@ -65,7 +67,12 @@
   }
 
   // The frame URL's theme hint; same literal as THEME_PARAM in src/shared/theme.js.
+  // Never stamped when the theme could not be read: a guessed "default" would boot a dark
+  // frontend's frames wrong and flip them once the register reply arrived.
   const withTheme = (url) => {
+    if (!themeKnown) {
+      return url;
+    }
     const hash = url.indexOf("#");
     const base = hash === -1 ? url : url.slice(0, hash);
     const tail = hash === -1 ? "" : url.slice(hash);

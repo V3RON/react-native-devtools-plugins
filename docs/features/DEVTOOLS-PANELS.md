@@ -69,7 +69,9 @@ bridge asks *it*, not the OS:
    synchronously and removes it from the address with `history.replaceState` — the
    extension's own query string (encoding, order, repeats) and hash are kept byte for byte
    (`src/shared/theme.js`). Frames without a hint (background contexts, options pages) and
-   all frames, as a fallback, take the theme from their `RUNTIME_REGISTER` reply.
+   all frames, as a fallback, take the theme from their `RUNTIME_REGISTER` reply, which wins
+   over the hint if they disagree. The bridge omits the hint when it could not read the theme
+   (a guessed "default" would boot a dark frontend's frames wrong).
 5. `themeName` is a live getter in the page world (`contextBridge` would otherwise freeze
    it at expose time).
 
@@ -79,17 +81,18 @@ Divergences, stated plainly:
   until the register reply lands, then `themeChanged` fires if the theme is `"dark"`.
   Chrome exposes `chrome.devtools` only in DevTools frames, so that second case has no Chrome
   counterpart; the shim installs the API everywhere.
-- The hint is in the frame's URL until the preload strips it (before any extension script
-  runs), so it is visible only to the shell itself — e.g. the file server's request log — and
-  carries nothing but the theme name.
+- The hint is in the frame's URL only until the preload strips it, before any extension
+  script runs. Main normalises it away too (`stripThemeHintFromUrl`) before it records the
+  frame's address for the message router, the frame observers and tab messages, so
+  `MessageSender.url` is never hinted — asserted by the Electron test.
 - `window.chromeElectron` (the shell's raw bridge handle) keeps an expose-time `themeName`
   snapshot; `chrome.devtools.panels.themeName` is the live one.
-- Test coverage: `tests/theme.test.js` (rules, frame check, hint parsing) and
-  `tests/theme-electron.test.js` (real broadcast, page-world surface, stripping). The
-  Electron run cannot make a script observe the hint *before* the register reply — the
-  extension CSP forbids inline scripts and an external one lets the reply land first — so
-  "hint wins before any IPC" rests on the preload running before page scripts, not on a
-  measurement. Live evidence: `docs/evidence/panels-theme/`.
+- Test coverage: `tests/theme.test.js` (rules, frame check, hint parsing, byte-preserving
+  strip) and `tests/theme-electron.test.js` (real broadcast, page-world surface, stripping,
+  `sender.url`). The Electron run holds every register reply back (`--register-delay-ms`), so
+  the hint is measured in isolation: with the host at "default" and a `dark` hint, the head
+  script reads "dark" and the reply then overrides it with `themeChanged("default")` (the
+  host's state wins over the hint). Live evidence: `docs/evidence/panels-theme/`.
 
 Note: the frontend's `View` ids reject anything outside `[A-Za-z0-9.-]` ("Invalid view
 ID") — `panelIdFor` sanitizes path separators/underscores accordingly.

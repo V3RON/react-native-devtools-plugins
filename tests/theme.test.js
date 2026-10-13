@@ -19,7 +19,7 @@ const {
   isMainFrameOf,
 } = require("../src/main/theme-host");
 const { createContextRegistry } = require("../src/main/context-registry");
-const { takeThemeHint, THEME_PARAM } = require("../src/shared/theme");
+const { takeThemeHint, stripThemeHintFromUrl, THEME_PARAM } = require("../src/shared/theme");
 
 const makeShim = () => createDevtools({ extensionId: "my-ext" });
 
@@ -162,4 +162,23 @@ test("takeThemeHint validates the hint and leaves the extension's own query byte
   assert.deepStrictEqual(takeThemeHint("?__rozenite_theme"), { theme: null, search: "" });
   // a look-alike key is the extension's own
   assert.deepStrictEqual(takeThemeHint("?__rozenite_theme_x=dark"), { theme: null, search: null });
+});
+
+test("takeThemeHint is byte-preserving: only the hint and its own separator go", () => {
+  assert.strictEqual(takeThemeHint("?a=1&&b=2&__rozenite_theme=dark&").search, "?a=1&&b=2&");
+  assert.strictEqual(takeThemeHint("?&a&__rozenite_theme=dark").search, "?&a");
+  assert.strictEqual(takeThemeHint("?__rozenite_theme=dark&&a=1").search, "?&a=1");
+  assert.strictEqual(takeThemeHint("?a=1&__rozenite_theme=dark&b=%zz&c=+").search, "?a=1&b=%zz&c=+");
+  assert.strictEqual(takeThemeHint("?__rozenite_theme=dark&__rozenite_theme=default").theme, "dark");
+});
+
+test("stripThemeHintFromUrl leaves everything else of an address alone", () => {
+  assert.strictEqual(
+    stripThemeHintFromUrl("rozenite://x/probe.html?id=A&__rozenite_theme=dark#frag"),
+    "rozenite://x/probe.html?id=A#frag"
+  );
+  assert.strictEqual(stripThemeHintFromUrl("rozenite://x/p.html?__rozenite_theme=dark"), "rozenite://x/p.html");
+  assert.strictEqual(stripThemeHintFromUrl("rozenite://x/p.html?a=1#h?__rozenite_theme=dark"), "rozenite://x/p.html?a=1#h?__rozenite_theme=dark");
+  assert.strictEqual(stripThemeHintFromUrl("rozenite://x/p.html"), "rozenite://x/p.html");
+  assert.strictEqual(stripThemeHintFromUrl(""), "");
 });
