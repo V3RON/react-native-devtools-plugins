@@ -78,8 +78,36 @@ const alarmClockScale = () => {
 const contentScriptAllowlist = () =>
   (process.env.DEVTOOLS_CONTENT_SCRIPTS || "").trim() || null;
 
+// Test seams for the Electron primitives a headless run cannot answer. Both are OFF
+// unless the variable is set, and neither changes what a user-facing run does.
+//
+//   DEVTOOLS_TEST_OPEN_LOG=<file>      InspectorFrontendHost.openInNewTab appends the URL
+//                                      it WOULD have handed to shell.openExternal to this
+//                                      file instead of launching a browser. The scheme
+//                                      allowlist runs first, so only allowed URLs land.
+//   DEVTOOLS_TEST_SAVE_DIALOG=<dir>    the save dialog auto-answers with <dir>/<default
+//                                      name>; the literal `cancel` answers "cancelled".
+const testOpenLog = (process.env.DEVTOOLS_TEST_OPEN_LOG || "").trim() || null;
+const testSaveDialog = (process.env.DEVTOOLS_TEST_SAVE_DIALOG || "").trim() || null;
+
+// JSON object merged over the frontend's host config (src/main/host-config.js), so a
+// deployment can turn a feature the shell disables back on (and a test can prove the
+// config reaches the UI). Anything that is not a JSON object is ignored.
+const hostConfigOverride = () => {
+  try {
+    const parsed = JSON.parse(process.env.DEVTOOLS_HOST_CONFIG || "null");
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+};
+
 module.exports = {
   repoRoot,
+
+  testOpenLog,
+  testSaveDialog,
+  hostConfigOverride: hostConfigOverride(),
 
   // The RN DevTools frontend, served by the patched fork's Metro dev server.
   // See docs/ARCHITECTURE.md — this coupling is a known limitation.
