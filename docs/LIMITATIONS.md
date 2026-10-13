@@ -132,6 +132,10 @@
   and `InspectorFrontendHost.sendMessageToBackend` is never called — that Chrome escape
   hatch is structurally unavailable here, and the host reaches the backend on the socket
   instead ([features/DISPATCH-CHANNEL.md](features/DISPATCH-CHANNEL.md)).
+- `InspectorFrontendHost.initialTargetId()` reports the bridge's attached Metro target id, but
+  the default `rn_fusebox` window never asks for it (only `?browserConnection=true`
+  entrypoints do), and with `DEVTOOLS_CDP_BRIDGE=off` (external relay / fake-cdp) the shell
+  does not own the session, so it answers `null` rather than guess.
 
 **Security & robustness**
 

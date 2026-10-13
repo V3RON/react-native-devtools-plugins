@@ -31,6 +31,7 @@ const {
   WINDOW_BRING_TO_FRONT,
   WINDOW_CLOSE,
   HOST_SAVE,
+  HOST_INITIAL_TARGET_ID,
 } = require("../shared/ipc");
 
 // ── dispatch channel receiver ───────────────────────────────────────────────
@@ -90,8 +91,18 @@ const InspectorFrontendHost = {
   readyForTest() {},
   connectionReady() {},
   async initialTargetId() {
-    // [STUB] could return the active RN target id
-    return null;
+    // [REAL] Promise<string|null>: the id of the target the shell's CDP bridge is
+    // attached to (Metro /json/list `id`), asked of main at call time so a re-attach
+    // yields the new target. null = nothing attached (after a short wait) or the
+    // bridge is off (DEVTOOLS_CDP_BRIDGE=off) — never a made-up id. The frontend's
+    // only caller is TargetManager.maybeAttachInitialTarget, which runs only with
+    // `?browserConnection=true` and feeds the id to Target.autoAttachRelated.
+    try {
+      const id = await ipcRenderer.invoke(HOST_INITIAL_TARGET_ID);
+      return typeof id === "string" && id ? id : null;
+    } catch {
+      return null;
+    }
   },
 
   // ── [STUB] injected-script channel (deliberately inert) ──────────────────

@@ -100,6 +100,8 @@ const createCdpBridge = (options = {}) => {
   let attachLoopRunning = false;
   let hostIdSeq = 0;
   let target = null;
+  /** Callers of targetId() parked until the bridge attaches. */
+  const attachWaiters = new Set();
   /** Messages from the frontend that could not go out yet (bounded). */
   const pendingSends = [];
 
@@ -302,6 +304,9 @@ const createCdpBridge = (options = {}) => {
         for (const message of queued) {
           socket.send(message);
         }
+        for (const wake of [...attachWaiters]) {
+          wake();
+        }
         log("info", "CDP bridge attached");
       }
       await sleep(pollIntervalMs);
@@ -369,6 +374,33 @@ const createCdpBridge = (options = {}) => {
   };
 
   /**
+   * The id of the target this bridge is attached to — Metro's /json/list `id`,
+   * which is the id the frontend's own session is talking to. Read at call time,
+   * so after a re-attach it is the NEW target's id. When not attached, waits up
+   * to `waitMs` for the attach and then resolves null (never an invented id);
+   * null immediately when the bridge is disabled or stopped.
+   * @returns {Promise<string|null>}
+   */
+  const targetId = ({ waitMs = 0 } = {}) => {
+    const current = () =>
+      enabled && !stopped && isOpen(upstream) && target && target.id != null
+        ? String(target.id)
+        : null;
+    if (!enabled || stopped || current() || waitMs <= 0) {
+      return Promise.resolve(current());
+    }
+    return new Promise((resolve) => {
+      const done = () => {
+        clearTimeout(timer);
+        attachWaiters.delete(done);
+        resolve(current());
+      };
+      const timer = setTimeout(done, waitMs);
+      attachWaiters.add(done);
+    });
+  };
+
+  /**
    * Subscribe to CDP notifications on this session. `method` is exact
    * ("Network.requestWillBeSent") or "*" for every notification.
    * @returns {Function} unsubscribe
@@ -425,6 +457,9 @@ const createCdpBridge = (options = {}) => {
 
   const stop = () => {
     stopped = true;
+    for (const wake of [...attachWaiters]) {
+      wake();
+    }
     for (const client of clients) {
       client.close();
     }
@@ -453,6 +488,7 @@ const createCdpBridge = (options = {}) => {
     stop,
     sendCommand,
     onEvent,
+    targetId,
     isAttached: () => isOpen(upstream),
     /** @returns {{attached: boolean, target: object|null, clients: number}} */
     status: () => ({ attached: isOpen(upstream), target, clients: clients.size }),
@@ -481,6 +517,7 @@ module.exports = {
   stop: bridge.stop,
   sendCommand: bridge.sendCommand,
   onEvent: bridge.onEvent,
+  targetId: bridge.targetId,
   isAttached: bridge.isAttached,
   status: bridge.status,
 };

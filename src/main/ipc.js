@@ -18,7 +18,12 @@ const { evalInPage, reloadInPage } = require("./inspected-window");
 const { createNetworkService } = require("./network-service");
 const { getContentBridge, attachContentBridge } = require("./content-bridge");
 const { deliverTabMessage } = require("./tab-send");
-const { sendCommand, onEvent, status: bridgeStatus } = require("./cdp-bridge");
+const {
+  sendCommand,
+  onEvent,
+  status: bridgeStatus,
+  targetId: bridgeTargetId,
+} = require("./cdp-bridge");
 const { createPermissionGate, API_PERMISSIONS } = require("../shared/permissions");
 const tabHost = require("./tab-host");
 const notificationHost = require("./notification-host");
@@ -61,6 +66,7 @@ const {
   NOTIFICATION_CLEAR,
   NOTIFICATION_PERMISSION,
   HOST_SAVE,
+  HOST_INITIAL_TARGET_ID,
   OPTIONS_OPEN,
   DOWNLOAD_START,
   DOWNLOAD_CANCEL,
@@ -93,6 +99,10 @@ const startContentBridge = () => {
   }
   return contentBridgeInstance;
 };
+
+// How long `initialTargetId` waits for the bridge to attach before answering null.
+// The frontend asks once, at startup, and the app may still be connecting.
+const INITIAL_TARGET_WAIT_MS = 3000;
 
 // ── the CDP network model, shared by devtools.network and webRequest ────────
 // (docs/features/DEVTOOLS-NETWORK.md). One model for every frame; a frame asks
@@ -721,6 +731,18 @@ const registerIpcHandlers = () => {
       })
       .catch((error) => ({ ok: false, error: (error && error.message) || "the save failed" }))
   );
+
+  // `InspectorFrontendHost.initialTargetId` — the id of the target the bridge is
+  // attached to, read from the bridge (never from the payload). Only the DevTools
+  // main frame asks: an extension iframe has no business with the debuggee's id
+  // here. Resolves null honestly when nothing is attached (src/main/cdp-bridge.js
+  // waits briefly first); it never invents an id.
+  ipcMain.handle(HOST_INITIAL_TARGET_ID, (event) => {
+    if (!event.senderFrame || event.senderFrame.parent) {
+      return null;
+    }
+    return bridgeTargetId({ waitMs: INITIAL_TARGET_WAIT_MS });
+  });
 };
 
 module.exports = { registerIpcHandlers, subscribeRouterFrames, startContentBridge };

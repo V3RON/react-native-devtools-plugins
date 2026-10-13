@@ -33,7 +33,7 @@ stub — see "Generate, don't hand-write" in [../ROADMAP.md](../ROADMAP.md).
 | `showItemInFolder(path)` | 🟨 inert + one warning | deliberately not wired to `shell.showItemInFolder`: the frontend names a path this host never wrote, so revealing *something* would show the user a file that is not the one they asked about. `chrome.downloads.show` has the same rule |
 | `showCertificateViewer(chain)` | 🟡 | low value; stub |
 | `reattach(cb)`, `readyForTest()`, `connectionReady()` | ✅ | fine |
-| `initialTargetId()` | ✅ `null` | 🔧 return the active RN target id — enables multi-target UX |
+| `initialTargetId()` | ✅ `Promise<string\|null>`: the id the CDP bridge is attached to (Metro `/json/list` `id`), asked of main over `HOST_INITIAL_TARGET_ID` (main frame only) at call time, so a re-attach yields the new id. Waits up to 3 s for the attach, then `null`; `null` at once with `DEVTOOLS_CDP_BRIDGE=off` (the shell does not know the target then). Never invents an id | The only caller is `TargetManager.maybeAttachInitialTarget` → `Target.autoAttachRelated({targetId})`, reached only by entrypoints that set `?browserConnection=true` (the shipped `worker_app`); `rn_fusebox` (`InspectorMain`) never calls it, so today's default window is unchanged. Evidence: [evidence/initial-target-id](../evidence/initial-target-id/README.md) |
 | `isHostedMode()` | ✅ `true` | correct and load-bearing |
 
 ## Persistence: preferences, files, workspace

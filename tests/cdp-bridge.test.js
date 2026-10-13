@@ -19,6 +19,7 @@ function createFakeMetro({ targetAvailable = true } = {}) {
   const commands = [];
   let accepted = 0;
   let hasTarget = targetAvailable;
+  let pageId = "1";
   /** how the fake app answers a CDP command */
   let onCommand = (message, socket) =>
     socket.send(JSON.stringify({ id: message.id, result: { echo: message.method } }));
@@ -35,7 +36,7 @@ function createFakeMetro({ targetAvailable = true } = {}) {
         hasTarget
           ? [
               {
-                id: "1",
+                id: pageId,
                 type: "node",
                 title: "devtools-poc (iPhone 17 Pro)",
                 description: "devtools-poc [C++ connection]",
@@ -79,6 +80,9 @@ function createFakeMetro({ targetAvailable = true } = {}) {
     accepted: () => accepted,
     /** every command the app received, in arrival order */
     commands: () => [...commands],
+    setPageId: (value) => {
+      pageId = value;
+    },
     setTargetAvailable: (value) => {
       hasTarget = value;
     },
@@ -542,4 +546,38 @@ test("external relay mode binds nothing and refuses host commands", async (t) =>
       }),
     /ECONNREFUSED|socket hang up|closed/i
   );
+});
+
+// ── targetId (InspectorFrontendHost.initialTargetId) ─────────────────────────
+test("targetId is Metro's /json/list id once attached, and null while detached", async (t) => {
+  const world = await makeWorld(t, { metro: { targetAvailable: false } });
+  assert.strictEqual(await world.bridge.targetId(), null, "nothing attached: null, no wait");
+  const started = Date.now();
+  assert.strictEqual(await world.bridge.targetId({ waitMs: 60 }), null);
+  assert.ok(Date.now() - started >= 50, "waited for an attach before giving up");
+
+  world.metro.setTargetAvailable(true);
+  assert.strictEqual(await world.bridge.targetId({ waitMs: 2000 }), "1", "wakes on attach");
+  assert.strictEqual(await world.bridge.targetId(), "1");
+});
+
+test("targetId follows a re-attach to a different target", async (t) => {
+  const { metro, bridge } = await makeAttachedWorld(t);
+  assert.strictEqual(await bridge.targetId(), "1");
+
+  metro.setPageId("2");
+  metro.lastSocket().terminate();
+  await waitFor(() => !bridge.isAttached());
+  assert.strictEqual(await bridge.targetId(), null, "detached again: no stale id");
+  assert.strictEqual(await bridge.targetId({ waitMs: 2000 }), "2", "the new target's id");
+});
+
+test("targetId is null for a disabled or stopped bridge, and a stop releases waiters", async (t) => {
+  const off = createCdpBridge({ enabled: false });
+  assert.strictEqual(await off.targetId({ waitMs: 1000 }), null);
+
+  const world = await makeWorld(t, { metro: { targetAvailable: false } });
+  const waiting = world.bridge.targetId({ waitMs: 5000 });
+  await world.bridge.stop();
+  assert.strictEqual(await waiting, null);
 });

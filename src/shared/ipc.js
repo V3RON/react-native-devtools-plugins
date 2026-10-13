@@ -32,6 +32,9 @@ module.exports = {
    *  click a synthetic `<a download>` at a `blob:` URL, which told nobody whether
    *  anything was written; now it is the same service `chrome.downloads` uses. */
   HOST_SAVE: "host-save",
+  /** () -> `InspectorFrontendHost.initialTargetId`: the id of the target the CDP
+   *  bridge is attached to (Metro's /json/list `id`), or null. Main frame only. */
+  HOST_INITIAL_TARGET_ID: "host-initial-target-id",
 
   // ── chrome.runtime (docs/features/RUNTIME-MESSAGING.md) ──────────────────
   /** () -> manifest of the calling frame's extension (id from frame URL). */
