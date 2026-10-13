@@ -5,7 +5,7 @@
 //
 // Used through ref-batch.js; the cases are in cases.js and their recorded answers in
 // results.txt. The unit tests in tests/i18n.test.js pin this shell to those answers.
-//   spec: {lang, locales:{en:{...},pt:{...}}, default_locale, calls:[[name, subs?...]], extra:{}}
+//   spec: {css:{file:text}, manifest:{...}, lang, locales:{en:{...},pt:{...}}, default_locale, calls:[[name, subs?...]], extra:{}}
 // Loads a throwaway extension into REAL Chromium and prints getMessage results (or the load error).
 const { spawn } = require("child_process");
 const crypto = require("crypto");
@@ -26,13 +26,16 @@ for (const [loc, msgs] of Object.entries(spec.locales)) {
   fs.writeFileSync(path.join(ext, "_locales", loc, "messages.json"), JSON.stringify(msgs));
 }
 fs.writeFileSync(path.join(ext, "t.html"), '<script src="t.js"></script>');
+for (const [name, text] of Object.entries(spec.css || {})) {
+  fs.writeFileSync(path.join(ext, name), text);
+}
 fs.writeFileSync(path.join(ext, "t.js"), `
 window.onerror=(m)=>{document.title="ERR"+m};const calls=${JSON.stringify(spec.calls)};
 const out={};
 calls.forEach((c,i)=>{try{out[i+":"+JSON.stringify(c)]=chrome.i18n.getMessage(...c)}catch(e){out[i+":"+JSON.stringify(c)]="THROW "+e.message}});
 out.manifest=chrome.runtime.getManifest();out.uiLang=chrome.i18n.getUILanguage(); out.ui_locale=chrome.i18n.getMessage("@@ui_locale");
 out.bidi=["@@bidi_dir","@@bidi_reversed_dir","@@bidi_start_edge","@@bidi_end_edge"].map(n=>chrome.i18n.getMessage(n));
-Promise.all([chrome.i18n.getAcceptLanguages(), ...(${JSON.stringify(spec.detect || [])}).map(t=>chrome.i18n.detectLanguage(t))]).then(r=>{out.accept=r[0];out.detect=r.slice(1);window.__out=JSON.stringify(out);document.title="DONE"}).catch(e=>{document.title="ERR"+e.message});
+Promise.all([chrome.i18n.getAcceptLanguages(), ...(${JSON.stringify(spec.detect || [])}).map(t=>chrome.i18n.detectLanguage(t)), ...(${JSON.stringify(Object.keys(spec.css || {}))}).map(n=>fetch(n).then(r=>r.text()))]).then(r=>{out.accept=r[0];const nd=${JSON.stringify((spec.detect || []).length)};out.detect=r.slice(1,1+nd);if(r.length>1+nd){out.css=r.slice(1+nd);}window.__out=JSON.stringify(out);document.title="DONE"}).catch(e=>{document.title="ERR"+e.message});
 `);
 const id = [...crypto.createHash("sha256").update(ext).digest("hex").slice(0, 32)]
   .map((c) => String.fromCharCode(97 + parseInt(c, 16))).join("");

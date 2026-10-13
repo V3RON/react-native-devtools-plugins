@@ -30,7 +30,7 @@
 // placeholder name may use ("[a-zA-Z0-9_]" for authors; "@" only for the predefined).
 const NAME_RE = /^[A-Za-z0-9_]+$/;
 const VARIABLE_RE = /\$([A-Za-z0-9_@]+)\$/g;
-const MANIFEST_MESSAGE_RE = /__MSG_([A-Za-z0-9_@]+)__/g;
+const MARKER_PREFIX = "__MSG_";
 // A locale directory name: `ll`, `ll_RR`, `es_419`, `zh_Hant_TW`.
 const LOCALE_NAME_RE = /^[A-Za-z]{2,3}(_[A-Za-z0-9]{2,8}){0,2}$/;
 
@@ -283,40 +283,93 @@ const getMessage = (bundle, args) => {
 };
 
 /**
- * `__MSG_name__` in every string VALUE of a manifest (keys are left alone), as Chrome
- * does: the prefix is case-sensitive, the name is not, an unknown name is left as
- * written (Chrome refuses the extension instead). Substituted text is stage-1 text,
- * i.e. `$1` stays `$1`.
+ * Chromium's `__MSG_name__` scan, which is NOT a greedy regex: after the prefix a name
+ * ends at the FIRST `__`, so `__MSG_a____MSG_b__` is two markers and `__MSG_a__b__` is
+ * the marker `a` followed by the text `b__`. A marker with an unknown (or empty) name is
+ * left as written. `stopAtUnknown` is Chromium's CSS behaviour
+ * (MessageBundle::ReplaceVariables): it gives up at the first unknown name, leaving that
+ * marker AND every later one in the file literal. The manifest keeps going, because there
+ * Chromium refuses the extension instead and this shell is lenient (see the parity cases).
  */
-const localizeStrings = (value, bundle) => {
-  if (typeof value === "string") {
-    return value.replace(MANIFEST_MESSAGE_RE, (whole, name) => {
-      const key = name.toLowerCase();
-      return own(bundle.messages, key) ? bundle.messages[key] : whole;
-    });
-  }
-  if (Array.isArray(value)) {
-    return value.map((item) => localizeStrings(item, bundle));
-  }
-  if (value && typeof value === "object") {
-    const out = {};
-    for (const [key, item] of Object.entries(value)) {
-      out[key] = localizeStrings(item, bundle);
+const replaceMarkers = (text, lookup, { stopAtUnknown = false } = {}) => {
+  let out = "";
+  let position = 0;
+  for (;;) {
+    const start = text.indexOf(MARKER_PREFIX, position);
+    if (start === -1) {
+      return out + text.slice(position);
     }
-    return out;
+    out += text.slice(position, start);
+    const end = text.indexOf("__", start + MARKER_PREFIX.length);
+    if (end === -1) {
+      return out + text.slice(start);
+    }
+    const value = lookup(text.slice(start + MARKER_PREFIX.length, end).toLowerCase());
+    if (value === undefined) {
+      if (stopAtUnknown) {
+        return out + text.slice(start);
+      }
+      out += text.slice(start, end + 2);
+    } else {
+      out += value;
+    }
+    position = end + 2;
   }
-  return value;
 };
 
-/** CSS files get `__MSG_name__` including the predefined `@@` names (`__MSG_@@bidi_dir__`). */
-const localizeCss = (text, bundle) =>
-  text.replace(MANIFEST_MESSAGE_RE, (whole, name) => {
-    const key = name.toLowerCase();
-    if (own(bundle.predefined, key)) {
-      return bundle.predefined[key];
+const messageLookup = (bundle) => (key) => (own(bundle.messages, key) ? bundle.messages[key] : undefined);
+
+// The only manifest fields Chromium localizes (extension_l10n_util::LocalizeManifest).
+// Measured in Chromium 141 (cases-localization.js): name, short_name, description,
+// action.default_title, commands.*.description and omnibox.keyword ARE localized;
+// permissions, host_permissions, content_security_policy, web_accessible_resources,
+// background, options_ui, devtools_page, homepage_url, author and version_name are NOT.
+// `browser_action` / `page_action` default_title are in the same Chromium function (MV2
+// aliases of `action`); they are included from the source, not from a run, since an MV3
+// Chromium does not load those keys.
+const localizeField = (value, bundle) =>
+  typeof value === "string" ? replaceMarkers(value, messageLookup(bundle)) : value;
+
+/**
+ * A copy of `manifest` with `__MSG_name__` replaced in exactly Chromium's field list. Every
+ * other string stays literal on purpose: a marker in `host_permissions`, the CSP or a script
+ * path must not make a manifest's CAPABILITIES depend on the UI language.
+ */
+const localizeManifestFields = (manifest, bundle) => {
+  const out = { ...manifest };
+  for (const key of ["name", "short_name", "description"]) {
+    if (key in out) {
+      out[key] = localizeField(out[key], bundle);
     }
-    return own(bundle.messages, key) ? bundle.messages[key] : whole;
-  });
+  }
+  for (const action of ["action", "browser_action", "page_action"]) {
+    if (out[action] && typeof out[action] === "object" && "default_title" in out[action]) {
+      out[action] = { ...out[action], default_title: localizeField(out[action].default_title, bundle) };
+    }
+  }
+  if (out.omnibox && typeof out.omnibox === "object" && "keyword" in out.omnibox) {
+    out.omnibox = { ...out.omnibox, keyword: localizeField(out.omnibox.keyword, bundle) };
+  }
+  if (out.commands && typeof out.commands === "object" && !Array.isArray(out.commands)) {
+    out.commands = Object.fromEntries(
+      Object.entries(out.commands).map(([name, command]) => [
+        name,
+        command && typeof command === "object" && "description" in command
+          ? { ...command, description: localizeField(command.description, bundle) }
+          : command,
+      ])
+    );
+  }
+  return out;
+};
+
+/** CSS files also get the predefined `@@` names (`__MSG_@@bidi_dir__`); first unknown name stops the file. */
+const localizeCss = (text, bundle) =>
+  replaceMarkers(
+    text,
+    (key) => (own(bundle.predefined, key) ? bundle.predefined[key] : messageLookup(bundle)(key)),
+    { stopAtUnknown: true }
+  );
 
 module.exports = {
   LOCALE_NAME_RE,
@@ -329,6 +382,6 @@ module.exports = {
   buildBundle,
   applySubstitutions,
   getMessage,
-  localizeStrings,
+  localizeManifestFields,
   localizeCss,
 };

@@ -77,8 +77,7 @@ const localeDirectories = (root) => {
  * @param {string} [input.uiLocaleOverride]
  * @param {object} [input.log]
  */
-const loadBundle = ({ root, extensionId, uiLocaleOverride = "", log = console }) => {
-  const { uiLocale, preferredLanguages } = systemLocale(uiLocaleOverride);
+const buildFromDisk = ({ root, extensionId, uiLocale, preferredLanguages, log }) => {
   let defaultLocale = "";
   try {
     const manifest = readJson(path.join(root, "manifest.json"));
@@ -110,6 +109,40 @@ const loadBundle = ({ root, extensionId, uiLocaleOverride = "", log = console })
   return i18n.buildBundle({ extensionId, uiLocale, defaultLocale, catalogs, preferredLanguages, warn });
 };
 
+// A bundle is rebuilt only when something it was built from changed. The host asks for
+// one per frame load AND on every manifest read (the permission gate alone reads the
+// manifest several times per frame registration), so re-parsing every catalog each time
+// would be the common case; stat()ing the inputs is the cheap way to know it is still
+// valid, and it keeps "edit messages.json, reload the frame" working without a restart.
+const bundleCache = new Map(); // root -> { signature, bundle }
+const statStamp = (file) => {
+  try {
+    const stat = fs.statSync(file);
+    return `${stat.mtimeMs}:${stat.size}`;
+  } catch {
+    return "-";
+  }
+};
+
+const loadBundle = ({ root, extensionId, uiLocaleOverride = "", log = console }) => {
+  const { uiLocale, preferredLanguages } = systemLocale(uiLocaleOverride);
+  const directories = localeDirectories(root);
+  const signature = [
+    extensionId,
+    uiLocale,
+    preferredLanguages.join(","),
+    statStamp(path.join(root, "manifest.json")),
+    ...Object.values(directories).map((dir) => `${dir}=${statStamp(path.join(root, LOCALES_DIR, dir, "messages.json"))}`),
+  ].join("|");
+  const cached = bundleCache.get(root);
+  if (cached && cached.signature === signature) {
+    return cached.bundle;
+  }
+  const bundle = buildFromDisk({ root, extensionId, uiLocale, preferredLanguages, log });
+  bundleCache.set(root, { signature, bundle });
+  return bundle;
+};
+
 /**
  * `__MSG_name__` substitution for a manifest the host reads (extension name in the panel
  * list, CSP, permissions, chrome.runtime.getManifest). Cheap when there is nothing to
@@ -123,11 +156,31 @@ const localizeManifest = ({ manifest, rawText, root, extensionId, uiLocaleOverri
     return manifest;
   }
   const bundle = loadBundle({ root, extensionId, uiLocaleOverride, log });
-  const localized = wantsMessages ? i18n.localizeStrings(manifest, bundle) : { ...manifest };
+  const localized = wantsMessages ? i18n.localizeManifestFields(manifest, bundle) : { ...manifest };
   if (typeof manifest.default_locale === "string") {
     localized.current_locale = bundle.uiLocale;
   }
   return localized;
+};
+
+// Whether a CSS file contains a marker at all, remembered per (path, mtime, size): the
+// protocol handler asks for every stylesheet, and almost none of them use i18n, so the
+// common case must not cost a second full read before net.fetch serves the file.
+const MAX_LOCALIZED_CSS_BYTES = 2 * 1024 * 1024;
+const cssMarkerCache = new Map();
+const cssUsesMessages = (file) => {
+  const stat = fs.statSync(file);
+  if (stat.size > MAX_LOCALIZED_CSS_BYTES) {
+    return false;
+  }
+  const stamp = `${stat.mtimeMs}:${stat.size}`;
+  const cached = cssMarkerCache.get(file);
+  if (cached && cached.stamp === stamp) {
+    return cached.uses;
+  }
+  const uses = fs.readFileSync(file, "utf8").includes("__MSG_");
+  cssMarkerCache.set(file, { stamp, uses });
+  return uses;
 };
 
 /** A `.css` file served from an extension with `_locales`: `__MSG_x__` and `__MSG_@@bidi_dir__`. */
@@ -142,4 +195,5 @@ module.exports = {
   loadBundle,
   localizeManifest,
   localizeCssFile,
+  cssUsesMessages,
 };

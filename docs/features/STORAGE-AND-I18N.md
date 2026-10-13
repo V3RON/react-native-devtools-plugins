@@ -2,7 +2,7 @@
 
 | | |
 | --- | --- |
-| **Status** | 🟨 storage real for local/sync/session (session: per-frame in-memory); **i18n real** (`getMessage` with Chrome's semantics, synchronous; `detectLanguage` is an honest stub) |
+| **Status** | 🟨 storage: see the storage section below; **i18n real** (`getMessage` with Chrome's semantics, synchronous; `detectLanguage` is an honest stub) |
 | **Tier** | 1 |
 | **Blocked by** | — |
 
@@ -73,8 +73,8 @@ half in `src/chrome-shim/i18n.js`.
 | `getAcceptLanguages([cb])` | 🟨 | promise **and** callback. List = UI locale, its bare language, the OS's preferred languages (same expansion), then `en-US, en` if English is not already there. Chrome derives its list from profile language prefs, so e.g. `en-GB` gives `["en-GB","en"]` here vs Chrome's `["en-GB","en-US","en"]` |
 | `detectLanguage(text, [cb])` | ❌ honest stub | resolves `{isReliable: false, languages: []}`, a shape Chrome itself returns for text it cannot classify. Chrome ships the CLD3 model; this shell does not, and inventing an answer from a word list would be worse than saying "undetermined" |
 | `@@extension_id`, `@@ui_locale`, `@@bidi_dir`, `@@bidi_reversed_dir`, `@@bidi_start_edge`, `@@bidi_end_edge` | ✅ | names case-insensitive; `@@ui_locale` is `pt_BR`-style (not the BCP 47 `pt-BR`); RTL languages: ar, ckb, dv, fa, he, iw, ku, ps, sd, ug, ur, yi |
-| `__MSG_name__` in `manifest.json` | ✅ | every string *value* (not keys), prefix case-sensitive, name not; the panel list's extension name, `chrome.runtime.getManifest()`, CSP and permission reads all see the localized manifest; `current_locale` is added like Chrome does |
-| `__MSG_name__` / `__MSG_@@bidi_dir__` in served `.css` files | ✅ | substituted when the file is served (`src/main/extension-server.js`), as Chrome does |
+| `__MSG_name__` in `manifest.json` | ✅ | **only** the fields Chrome localizes: `name`, `short_name`, `description`, `action.default_title` (and MV2 `browser_action`/`page_action`, from Chromium's source, not a run), `commands.*.description`, `omnibox.keyword`. Everything else stays literal — verified in Chromium 141: `permissions`, `host_permissions`, the CSP (Chrome then rejects the marker), `web_accessible_resources`, `background`, `options_ui`, `devtools_page`, `homepage_url`, `author`, `version_name`. That is also a security property: a marker in `host_permissions` must not become `<all_urls>` for one UI language. The panel list's name, `chrome.runtime.getManifest()`, CSP and permission reads all see the localized manifest; `current_locale` is added like Chrome does |
+| `__MSG_name__` / `__MSG_@@bidi_dir__` in served `.css` files | ✅ | substituted when the file is served (`src/main/extension-server.js`), as Chrome does; like Chrome, the **first unknown name stops the substitution**, leaving it and every later marker in that file literal |
 | `__MSG_…__` in HTML/JS | n/a | Chrome does not substitute there either |
 
 ### Message semantics (each rule measured against real Chromium)
@@ -154,8 +154,12 @@ locale. Without Electron (unit tests) it is `en-US`.
 - JSON with comments: Chrome's extension JSON parser tolerates `//` comments; this one is
   strict `JSON.parse` (a BOM is accepted). `_locales/<dir>` names are matched
   case-insensitively as a convenience Chrome does not offer.
-- Catalogs over 8 MB are refused (not a message catalog).
+- Catalogs over 8 MB are refused (not a message catalog); CSS over 2 MB is served unlocalized.
+- `default_locale` set but no `_locales` folder: Chrome refuses the extension; this shell warns
+  and carries on (the bundle then only answers the predefined `@@` messages).
+- Marker scan: a name ends at the first `__` (`__MSG_a____MSG_b__` is two markers,
+  `__MSG_a__b__` is `a` plus the text `b__`), mirrored from Chromium and pinned by parity cases.
 
 ## Definition of done
 
-Altair runs with its real persisted state (session + local) and localized strings. (Localized strings: done — see above and `docs/evidence/i18n/`. Persisted `session` state across contexts: still open.)
+Altair runs with its real persisted state (session + local) and localized strings. The localized-strings half is covered by the i18n section above and `docs/evidence/i18n/`; the persisted-state half is the storage section's concern.

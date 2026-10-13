@@ -51,6 +51,10 @@ const LOAD_REFUSALS = {
   badPlaceholderContent: /Invalid "content" element/,
   noDefaultLocale: /default_locale wasn't specified/,
   atVar: /Variable \$@@bidi_dir\$ used but not defined/,
+  // Chromium does not localize these fields, and then rejects the literal marker.
+  manifestCsp: /CSP directive 'script-src' must be specified/,
+  manifestBg: /Could not load background script/,
+  manifestOptions: /Could not load options page '__MSG_nm__'/,
 };
 
 for (const [name, spec] of Object.entries(cases)) {
@@ -67,6 +71,10 @@ for (const [name, spec] of Object.entries(cases)) {
         warn: (w) => warnings.push(w),
       });
       assert.ok(bundle, "a bundle is still produced");
+      if (spec.manifest) {
+        // The refusals above exist BECAUSE Chromium left the marker literal; so does this shell.
+        assert.deepStrictEqual(i18n.localizeManifestFields(spec.manifest, bundle), spec.manifest, name);
+      }
       for (const [callName, ...rest] of spec.calls) {
         assert.doesNotThrow(() => i18n.getMessage(bundle, [callName, ...rest]));
       }
@@ -107,16 +115,28 @@ for (const [name, spec] of Object.entries(cases)) {
       `${name} bidi`
     );
     if (spec.manifest) {
-      const localized = i18n.localizeStrings(
-        { ...spec.manifest, default_locale: "en" },
+      // The WHOLE manifest Chromium hands back, including the fields it leaves literal.
+      const expected = i18n.localizeManifestFields(
+        {
+          manifest_version: 3,
+          name: "case",
+          version: "1",
+          default_locale: "en",
+          background: { service_worker: "sw.js" },
+          ...spec.manifest,
+        },
         bundle
       );
-      for (const field of ["name", "description", "short_name"]) {
-        assert.strictEqual(localized[field], answer.manifest[field], `${name} manifest.${field}`);
-      }
-      assert.strictEqual(localized.action.default_title, answer.manifest.action.default_title);
-      assert.strictEqual(localized.commands.c.description, answer.manifest.commands.c.description);
-      assert.strictEqual(localized.__MSG_nm__, answer.manifest.__MSG_nm__, "keys are not substituted");
+      expected.current_locale = bundle.uiLocale;
+      assert.deepStrictEqual(expected, answer.manifest, `${name} manifest`);
+    }
+    if (spec.css) {
+      // The files as Chromium served them; its random extension id stands in as "x" (our bundle's id).
+      assert.deepStrictEqual(
+        Object.values(spec.css).map((text) => i18n.localizeCss(text, bundle)),
+        answer.css.map((text) => text.replace(/\b[a-p]{32}\b/g, "x")),
+        `${name} css`
+      );
     }
     if (name.startsWith("lang:")) {
       // The same locale files answer, in the same order, for every UI language Chromium was given.

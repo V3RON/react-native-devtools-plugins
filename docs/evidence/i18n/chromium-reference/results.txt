@@ -95,3 +95,25 @@ LOAD ERROR: Localization used, but default_locale wasn't specified in the manife
 {"0:[\"ovr\"]":"ovr fr_CA","1:[\"only_en\"]":"only en","2:[\"only_en_GB\"]":"","3:[\"only_pt\"]":"","4:[\"only_pt_BR\"]":"","5:[\"only_de\"]":"","6:[\"only_zh_TW\"]":"","7:[\"only_es_419\"]":"","8:[\"only_he\"]":"","9:[\"only_fr_CA\"]":"only fr_CA","uiLang":"fr","ui_locale":"fr","bidi":["ltr","rtl","left","right"],"accept":["fr-FR","fr","en-US","en"],"detect":[{"isReliable":false,"languages":[{"language":"de","percentage":100}]}]}
 == lang:ja
 {"0:[\"ovr\"]":"ovr en","1:[\"only_en\"]":"only en","2:[\"only_en_GB\"]":"","3:[\"only_pt\"]":"","4:[\"only_pt_BR\"]":"","5:[\"only_de\"]":"","6:[\"only_zh_TW\"]":"","7:[\"only_es_419\"]":"","8:[\"only_he\"]":"","9:[\"only_fr_CA\"]":"","uiLang":"ja","ui_locale":"ja","bidi":["ltr","rtl","left","right"],"accept":["ja","en-US","en"],"detect":[{"isReliable":false,"languages":[{"language":"de","percentage":100}]}]}
+== manifestFieldsA
+{"manifest":{"action":{"default_title":"Name EN"},"author":"__MSG_nm__","background":{"service_worker":"sw.js"},"commands":{"c":{"description":"Desc"}},"current_locale":"en_US","default_locale":"en","description":"Desc","homepage_url":"https://x/__MSG_nm__","manifest_version":3,"name":"Name EN","omnibox":{"keyword":"kwd"},"short_name":"Name EN","version":"1","version_name":"__MSG_nm__"},"uiLang":"en-US","ui_locale":"en_US","bidi":["ltr","rtl","left","right"],"accept":["en-US","en"],"detect":[]}
+== manifestHostPerms
+{"manifest":{"background":{"service_worker":"sw.js"},"current_locale":"en_US","default_locale":"en","host_permissions":["__MSG_hp__"],"manifest_version":3,"name":"n","version":"1"},"uiLang":"en-US","ui_locale":"en_US","bidi":["ltr","rtl","left","right"],"accept":["en-US","en"],"detect":[]}
+== manifestPerms
+{"manifest":{"background":{"service_worker":"sw.js"},"current_locale":"en_US","default_locale":"en","manifest_version":3,"name":"n","permissions":["__MSG_hp__"],"version":"1"},"uiLang":"en-US","ui_locale":"en_US","bidi":["ltr","rtl","left","right"],"accept":["en-US","en"],"detect":[]}
+== manifestCsp
+LOAD ERROR: 'content_security_policy.extension_pages': CSP directive 'script-src' must be specified (either explicitly, or implicitly via 'default-src') and must allowlist only secure resources.
+== manifestWar
+{"manifest":{"background":{"service_worker":"sw.js"},"current_locale":"en_US","default_locale":"en","manifest_version":3,"name":"n","version":"1","web_accessible_resources":[{"matches":["<all_urls>"],"resources":["__MSG_nm__"]}]},"uiLang":"en-US","ui_locale":"en_US","bidi":["ltr","rtl","left","right"],"accept":["en-US","en"],"detect":[]}
+== manifestBg
+LOAD ERROR: Could not load background script ''.
+== manifestOptions
+LOAD ERROR: Could not load options page '__MSG_nm__'.
+== manifestScan
+{"manifest":{"background":{"service_worker":"sw.js"},"current_locale":"en_US","default_locale":"en","manifest_version":3,"name":"AB|Ab__","version":"1"},"uiLang":"en-US","ui_locale":"en_US","bidi":["ltr","rtl","left","right"],"accept":["en-US","en"],"detect":[]}
+== manifestScan2
+{"manifest":{"background":{"service_worker":"sw.js"},"current_locale":"en_US","default_locale":"en","manifest_version":3,"name":"Ab__AA","version":"1"},"uiLang":"en-US","ui_locale":"en_US","bidi":["ltr","rtl","left","right"],"accept":["en-US","en"],"detect":[]}
+== manifestEmptyName
+{"manifest":{"background":{"service_worker":"sw.js"},"current_locale":"en_US","default_locale":"en","manifest_version":3,"name":"x__MSG____y","version":"1"},"uiLang":"en-US","ui_locale":"en_US","bidi":["ltr","rtl","left","right"],"accept":["en-US","en"],"detect":[]}
+== cssStops
+{"manifest":{"background":{"service_worker":"sw.js"},"current_locale":"en_US","default_locale":"en","manifest_version":3,"name":"case","version":"1"},"uiLang":"en-US","ui_locale":"en_US","bidi":["ltr","rtl","left","right"],"accept":["en-US","en"],"detect":[],"css":["a{b:Hi} c{d:__MSG_nope__} e{f:__MSG_hello__}","a{b:Hi} c{d:ltr} e{f:cldaaoicddcokmmedfpdbdddnahahklo}","AB|Ab__","x{y:__msg_hello__ Hi}"]}

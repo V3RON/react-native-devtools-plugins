@@ -256,34 +256,65 @@ test("a catalog that is not an object is ignored with a warning", () => {
   assert.strictEqual(warnings.length, 4);
 });
 
-test("Chromium 141: __MSG_name__ in manifest values: prefix case-sensitive, name not, keys untouched", () => {
-  const bundle = bundleOf({ en: { nm: msg("Name EN"), d: msg("Desc $1"), Mixed: msg("mixed") } });
+test("Chromium 141: only Chromium's own manifest fields are localized; prefix case-sensitive, name not, keys untouched", () => {
+  const bundle = bundleOf({ en: { nm: msg("Name EN"), d: msg("Desc $1"), Mixed: msg("mixed"), kw: msg("kwd") } });
   const manifest = {
     name: "__MSG_nm__",
     description: "pre __MSG_NM__ post __MSG_Mixed__",
     short_name: "__msg_nm__",
-    action: { default_title: "__MSG_nm__" },
-    commands: { c: { description: "__MSG_d__" } },
-    list: ["__MSG_nm__", 3, null],
+    action: { default_title: "__MSG_nm__", default_popup: "__MSG_nm__" },
+    commands: { c: { description: "__MSG_d__", suggested_key: "__MSG_nm__" } },
+    omnibox: { keyword: "__MSG_kw__" },
     __MSG_nm__: "key",
   };
-  assert.deepStrictEqual(i18n.localizeStrings(manifest, bundle), {
+  assert.deepStrictEqual(i18n.localizeManifestFields(manifest, bundle), {
     name: "Name EN",
     description: "pre Name EN post mixed",
     short_name: "__msg_nm__",
-    action: { default_title: "Name EN" },
-    commands: { c: { description: "Desc $1" } },
-    list: ["Name EN", 3, null],
+    action: { default_title: "Name EN", default_popup: "__MSG_nm__" },
+    commands: { c: { description: "Desc $1", suggested_key: "__MSG_nm__" } },
+    omnibox: { keyword: "kwd" },
     __MSG_nm__: "key",
   });
-  assert.strictEqual(i18n.localizeStrings("__MSG_unknown__", bundle), "__MSG_unknown__", "unknown names are left as written");
 });
 
-test("CSS: __MSG_x__ and __MSG_@@bidi_dir__ are substituted", () => {
+test("Chromium 141: capabilities never depend on the UI language (host_permissions, CSP, scripts, paths stay literal)", () => {
+  const bundle = bundleOf({ en: { hp: msg("<all_urls>"), p: msg("tabs"), csp: msg("script-src *"), f: msg("evil.js") } });
+  const manifest = {
+    name: "n",
+    permissions: ["__MSG_p__"],
+    host_permissions: ["__MSG_hp__"],
+    content_security_policy: { extension_pages: "__MSG_csp__" },
+    content_scripts: [{ matches: ["__MSG_hp__"], js: ["__MSG_f__"] }],
+    background: { service_worker: "__MSG_f__" },
+    web_accessible_resources: [{ resources: ["__MSG_f__"], matches: ["__MSG_hp__"] }],
+    options_ui: { page: "__MSG_f__" },
+    devtools_page: "__MSG_f__",
+    homepage_url: "https://x/__MSG_f__",
+    version_name: "__MSG_f__",
+  };
+  assert.deepStrictEqual(i18n.localizeManifestFields(manifest, bundle), manifest);
+});
+
+test("Chromium 141: a name ends at the FIRST `__`, not the last (not a greedy match)", () => {
+  const bundle = bundleOf({ en: { a: msg("A"), b: msg("B"), a__b: msg("AB2") } });
+  const name = (text) => i18n.localizeManifestFields({ name: text }, bundle).name;
+  assert.strictEqual(name("__MSG_a____MSG_b__|__MSG_a__b__"), "AB|Ab__");
+  assert.strictEqual(name("__MSG_a__b____MSG_a____MSG_A__"), "Ab__AA");
+  assert.strictEqual(name("x__MSG____y"), "x__MSG____y", "an empty name is no marker");
+  assert.strictEqual(name("__MSG_a"), "__MSG_a", "an unterminated marker is literal");
+  assert.strictEqual(name("__MSG_unknown__ __MSG_a__"), "__MSG_unknown__ A", "manifest: unknown stays, scan continues");
+});
+
+test("CSS: __MSG_x__ and __MSG_@@bidi_dir__ are substituted; the first unknown name stops the file (Chromium 141)", () => {
   const rtl = bundleOf({ en: { c: msg("red") } }, { ui: "ar" });
   assert.strictEqual(
-    i18n.localizeCss("body{direction:__MSG_@@bidi_dir__;color:__MSG_C__;float:__MSG_@@bidi_start_edge__;x:__MSG_nope__}", rtl),
-    "body{direction:rtl;color:red;float:right;x:__MSG_nope__}"
+    i18n.localizeCss("body{direction:__MSG_@@bidi_dir__;color:__MSG_C__;float:__MSG_@@bidi_start_edge__}", rtl),
+    "body{direction:rtl;color:red;float:right}"
+  );
+  assert.strictEqual(
+    i18n.localizeCss("a{b:__MSG_c__} x{y:__MSG_nope__} z{w:__MSG_c__ __MSG_@@bidi_dir__}", rtl),
+    "a{b:red} x{y:__MSG_nope__} z{w:__MSG_c__ __MSG_@@bidi_dir__}"
   );
 });
 

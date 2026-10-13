@@ -10,6 +10,7 @@ const locales = { en: { ...L("en"), shared: { message: "shared en" } }, en_GB: L
 const calls = [["ovr"], ["only_en"], ["only_en_GB"], ["only_pt"], ["only_pt_BR"], ["only_de"], ["only_zh_TW"], ["only_es_419"], ["only_he"], ["only_fr_CA"]];
 const chain = (lang) => ({ lang, locales, calls, detect: ["Dies ist ein deutscher Satz und ich bin sicher."] });
 module.exports = {
+  ...require("./cases-localization.js"),
   // $ handling
   dollar5: one("cost $$5"),
   dollar4: one("a $$$$ b"),

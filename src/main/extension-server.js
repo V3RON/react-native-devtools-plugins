@@ -116,9 +116,12 @@ const registerExtensionSchemePrivileges = () => {
 // getManifest and for the CSP above). Anything unreadable/invalid degrades to
 // {} — same net effect as the pre-runtime-shim behavior.
 //
-// `__MSG_name__` values are replaced from the extension's `_locales` here, once, so
-// every reader (name in the panel list, CSP, permissions, getManifest) sees what
-// Chrome's loader would have produced (docs/features/STORAGE-AND-I18N.md).
+// `__MSG_name__` is replaced here, from the extension's `_locales`, but ONLY in the
+// fields Chrome localizes (name, short_name, description, action.default_title,
+// commands.*.description, omnibox.keyword — src/shared/i18n.js). Everything else stays
+// literal on purpose: a marker in host_permissions, the CSP or a script path must not
+// make what an extension may DO depend on the UI language
+// (docs/features/STORAGE-AND-I18N.md).
 const loadManifest = (extensionId) => {
   const filePath = resolveExtensionFile(extensionId, "manifest.json");
   if (!filePath) {
@@ -252,13 +255,12 @@ const registerExtensionProtocol = ({ log = console } = {}) => {
 
   // CSS gets `__MSG_name__` (and `__MSG_@@bidi_dir__`) substituted, as in Chrome.
   const serveLocalizedCss = (extensionId, filePath) => {
-    const text = fs.readFileSync(filePath, "utf8");
-    if (!text.includes("__MSG_")) {
-      return null;
+    if (!i18nHost.cssUsesMessages(filePath)) {
+      return null; // the common case: no marker, no extra read — net.fetch serves it
     }
     return new Response(
       i18nHost.localizeCssFile({
-        text,
+        text: fs.readFileSync(filePath, "utf8"),
         root: resolveInsideExtension(extensionId, ""),
         extensionId,
         uiLocaleOverride: config.uiLocale,

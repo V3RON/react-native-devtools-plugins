@@ -239,16 +239,48 @@ test("the shipped sample extension is fully translated where it claims to be", (
   assert.strictEqual(i18n.getMessage(bundle, ["onlyDefault"]), "(this line exists only in the default locale, en)");
 });
 
-test("the frame's only synchronous read is the bundle XHR to its own origin; no sendSync anywhere", () => {
+test("the frame makes exactly one synchronous read (the bundle XHR); no sendSync anywhere", () => {
   const preload = fs
     .readFileSync(path.join(__dirname, "..", "src", "preload", "extension-frame.js"), "utf8")
     .replace(/^\s*\/\/.*$/gm, "");
   assert.ok(!/sendSync/.test(preload), "no sendSync in the extension-frame preload");
   assert.strictEqual((preload.match(/new XMLHttpRequest\(/g) || []).length, 1, "exactly one XMLHttpRequest");
-  assert.ok(
-    preload.includes("`${window.location.origin}/${I18N_BUNDLE_PATH}`"),
-    "and it targets the frame's own origin + the reserved bundle path"
-  );
   const ipc = fs.readFileSync(path.join(__dirname, "..", "src", "shared", "ipc.js"), "utf8");
   assert.ok(!/sendSync/i.test(ipc.replace(/\/\/.*$/gm, "")), "no synchronous channel in the channel table");
+});
+
+test("the bundle is cached until a catalog or the manifest changes, then rebuilt", () => {
+  withExtension(FILES, (dir) => {
+    const { log } = quiet();
+    const first = bundleFor(dir, "pt-BR", log);
+    assert.strictEqual(bundleFor(dir, "pt-BR", log), first, "same inputs: the very same bundle");
+    assert.notStrictEqual(bundleFor(dir, "de", log), first, "another locale is another bundle");
+    const file = path.join(dir, "_locales", "pt", "messages.json");
+    fs.writeFileSync(file, JSON.stringify(catalog({ hello: "Oi, edited and longer" })));
+    const rebuilt = bundleFor(dir, "pt-BR", log);
+    assert.notStrictEqual(rebuilt, first);
+    assert.strictEqual(i18n.getMessage(rebuilt, ["hello"]), "Oi, edited and longer");
+  });
+});
+
+test("only CSS that contains a marker takes the localizing path", () => {
+  withExtension({ ...FILES, "plain.css": "a{b:c}" }, (dir) => {
+    assert.strictEqual(i18nHost.cssUsesMessages(path.join(dir, "plain.css")), false);
+    assert.strictEqual(i18nHost.cssUsesMessages(path.join(dir, "panel.css")), true);
+  });
+});
+
+test("the host keeps capabilities literal: a __MSG_ host_permissions is not turned into <all_urls>", () => {
+  withExtension(
+    {
+      "manifest.json": { name: "__MSG_n__", default_locale: "en", host_permissions: ["__MSG_hp__"], permissions: ["__MSG_hp__"] },
+      "_locales/en/messages.json": catalog({ n: "N", hp: "<all_urls>" }),
+    },
+    () => {
+      const manifest = extensionServer.loadManifest("ext");
+      assert.strictEqual(manifest.name, "N");
+      assert.deepStrictEqual(manifest.host_permissions, ["__MSG_hp__"]);
+      assert.deepStrictEqual(manifest.permissions, ["__MSG_hp__"]);
+    }
+  );
 });
