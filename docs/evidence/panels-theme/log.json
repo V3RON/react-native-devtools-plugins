@@ -1,0 +1,56 @@
+[
+  {
+    "label": "boot dark",
+    "frontendDark": true,
+    "panel": [
+      {
+        "v": "{\"themeName\":\"dark\",\"line\":\"themeName = dark (at load)\"}",
+        "theme": [
+          "[theme] themeName=dark (at load)"
+        ]
+      }
+    ]
+  },
+  {
+    "label": "after switch to light",
+    "frontendDark": false,
+    "panel": [
+      {
+        "v": "{\"themeName\":\"default\",\"line\":\"themeName = default (themeChanged)\"}",
+        "theme": [
+          "[theme] themeName=dark (at load)",
+          "[theme] themeChanged -> default",
+          "[theme] themeName=default (themeChanged)"
+        ]
+      }
+    ]
+  },
+  {
+    "label": "after switch to dark",
+    "frontendDark": true,
+    "panel": [
+      {
+        "v": "{\"themeName\":\"dark\",\"line\":\"themeName = dark (themeChanged)\"}",
+        "theme": [
+          "[theme] themeName=dark (at load)",
+          "[theme] themeChanged -> default",
+          "[theme] themeName=default (themeChanged)",
+          "[theme] themeChanged -> dark",
+          "[theme] themeName=dark (themeChanged)"
+        ]
+      }
+    ]
+  },
+  {
+    "label": "boot light",
+    "frontendDark": false,
+    "panel": [
+      {
+        "v": "{\"themeName\":\"default\",\"line\":\"themeName = default (at load)\"}",
+        "theme": [
+          "[theme] themeName=default (at load)"
+        ]
+      }
+    ]
+  }
+]

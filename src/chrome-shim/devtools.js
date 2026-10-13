@@ -90,9 +90,6 @@ const createDevtools = ({
       setWidth: () => {},
       _title: title,
       _pagePath: pagePath,
-      // Names the panel's iframe in the frontend; the preload's main-world half uses
-      // it to find the panel's window (src/preload/extension-frame.js).
-      _panelId: panelIdFor(extensionId, pagePath),
     };
     createdPanels.push(panel);
     return panel;
@@ -120,9 +117,30 @@ const createDevtools = ({
     }
   };
 
+  // Chrome's values: "default" (light) or "dark". Starts at the frontend's own
+  // pre-detection default; the host's answer arrives via setThemeName()
+  // (RUNTIME_REGISTER reply, then "theme" deliveries) — docs/features/DEVTOOLS-PANELS.md.
+  let themeName = "default";
+  const themeChanged = createEvent();
+  const setThemeName = (next) => {
+    if ((next !== "default" && next !== "dark") || next === themeName) {
+      return false;
+    }
+    themeName = next;
+    themeChanged._fire(next);
+    return true;
+  };
+
   const panels = {
-    themeName: "dark", // deviation: static; frontend theme not wired yet
-    themeChanged: createEvent(),
+    themeChanged,
+    // contextBridge clones a getter ONCE, so the preload re-establishes
+    // `themeName` as a live getter in the page world over this helper (same
+    // trick as runtime.lastError) and deletes it from the exposed object.
+    _getThemeName: () => themeName,
+    // The id of the iframe the host names after a panel (shared with the host, so both
+    // sides agree). The preload's main-world half uses it to find the panel's window and
+    // deletes it from the page-visible object, like _getThemeName.
+    _panelIdFor: (pagePath) => panelIdFor(extensionId, pagePath),
     create(title, iconPath, pagePath, cb) {
       const panel = createPanel(title, pagePath);
       onPanelCreated({ title, pagePath });
@@ -175,6 +193,9 @@ const createDevtools = ({
     // [STUB] jump-to-source; rides the future Sources integration.
     openResource: (resource, lineNumber, cb) => callAsync(cb),
   };
+
+  // A live property, as in Chrome (the pure shim; see _getThemeName above).
+  Object.defineProperty(panels, "themeName", { get: () => themeName, enumerable: true });
 
   const inspectedWindow = {
     tabId: tabIdFor(extensionId),
@@ -283,6 +304,7 @@ const createDevtools = ({
 
   return {
     handlePanelEvent,
+    setThemeName,
     namespace: {
       inspectedWindow,
       panels,

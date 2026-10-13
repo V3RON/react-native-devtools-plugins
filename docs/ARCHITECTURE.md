@@ -41,6 +41,7 @@ into the frontend's main world, never `require`d at runtime.
   `config.js` — frontend URL (`http://127.0.0.1:8081/rozenite/rn_fusebox.html?ws=localhost:9223`),
   extensions dir, CDP-bridge knobs; all env-overridable: `DEVTOOLS_FRONTEND_URL`,
   `DEVTOOLS_EXTENSIONS_DIR`, `DEVTOOLS_CDP_BRIDGE` (`off` = external relay),
+  `DEVTOOLS_SHOW_PANEL` (`<extensionId>[/<pagePath>]`: open on that extension's panel),
   `DEVTOOLS_METRO_HOST` / `DEVTOOLS_METRO_PORT`, `DEVTOOLS_CDP_HOST` / `DEVTOOLS_CDP_PORT`,
   `DEVTOOLS_APP_FILTER` / `DEVTOOLS_DEVICE_FILTER`, `DEVTOOLS_CDP_REQUEST_TIMEOUT_MS`.
   The frontend is a patched RN
@@ -221,7 +222,8 @@ Pure modules; `index.js` assembles the namespace from injected deps:
 - `devtools.js` — `chrome.devtools.*`: real `panels.create` (host-driven tabs), real
   `inspectedWindow.eval` against an injected `evalInPage` host dependency
   ([features/INSPECTED-WINDOW.md](features/INSPECTED-WINDOW.md)), `panels.network.getHAR`
-  on the shared network bridge, and inert panel events
+  on the shared network bridge, a live `panels.themeName`/`themeChanged` fed by the host's
+  theme state (`src/main/theme-host.js`), and otherwise inert panel events
   ([features/DEVTOOLS-PANELS.md](features/DEVTOOLS-PANELS.md)). `tabs.js` answers with the
   ONE tab this shell has — the inspected RN target, under the id
   `devtools.inspectedWindow.tabId` reports — with url/title read from the host's CDP target

@@ -28,6 +28,7 @@ const {
   createNetworkBridge,
 } = require("../chrome-shim");
 const { createGrantGate } = require("../shared/permissions");
+const { takeThemeHint } = require("../shared/theme");
 const {
   RUNTIME_GET_MANIFEST,
   RUNTIME_REGISTER,
@@ -157,6 +158,9 @@ const registered = ipcRenderer
     const scale = Number(reply.alarmClockScale);
     alarmClockScale = Number.isFinite(scale) && scale > 0 ? scale : 1;
     permissions.manifestLoaded();
+    // The frontend's current theme (chrome.devtools.panels.themeName); later
+    // changes arrive as "theme" deliveries on RUNTIME_DELIVER.
+    chrome._setThemeName(reply.themeName);
     return reply;
   })
   .catch((error) => registrationFailed((error && error.message) || "registration failed"));
@@ -320,6 +324,32 @@ const chrome = createChromeNamespace({
     ipcRenderer.invoke(DEVTOOLS_RELOAD, { options }).then((reply) => reply || { ok: false }),
 });
 
+// chrome.devtools.panels.themeName, synchronously. The panel bridge appends the theme it
+// is showing to the frame URL (`?__rozenite_theme=dark`) before it creates the iframe, and
+// this preload runs before any page script, so a classic <head> script already reads the
+// right value — no async IPC can promise that. The hint is validated against Chrome's two
+// names, then REMOVED from the address (the extension's own query and hash are kept byte
+// for byte) so `location` is what the extension expects. Frames the bridge did not create
+// (background contexts, options pages) have no hint and learn the theme from the
+// RUNTIME_REGISTER reply instead.
+{
+  const hint = takeThemeHint(window.location.search);
+  if (hint.search !== null) {
+    if (hint.theme) {
+      chrome._setThemeName(hint.theme);
+    }
+    try {
+      window.history.replaceState(
+        window.history.state,
+        "",
+        window.location.pathname + hint.search + window.location.hash
+      );
+    } catch {
+      // A document that refuses replaceState keeps the hint in its URL; harmless.
+    }
+  }
+}
+
 // Router -> frame deliveries (messages, ports, lifecycle events).
 //
 // Deliveries that arrive during startup are queued and flushed once the page's own
@@ -403,6 +433,16 @@ contextBridge.executeInMainWorld({
     const merged = { ...window.chrome, ...bridge };
     merged.runtime = { ...(window.chrome && window.chrome.runtime), ...bridge.runtime };
     merged.devtools = { ...(window.chrome && window.chrome.devtools), ...bridge.devtools };
+    // themeName must stay live (a cloned getter would freeze at expose time).
+    // Known leftover: `window.chromeElectron` is the raw bridge object and still carries
+    // the expose-time snapshot of `themeName` plus `_getThemeName`; it is the shell's own
+    // handle (like `chromeElectron.runtime`), not part of `chrome.*`.
+    merged.devtools.panels = { ...merged.devtools.panels };
+    Object.defineProperty(merged.devtools.panels, "themeName", {
+      get: () => bridge.devtools.panels._getThemeName(),
+      enumerable: true,
+    });
+    delete merged.devtools.panels._getThemeName; // internal helper stays shim-side
     Object.defineProperty(merged.runtime, "lastError", {
       get: () => bridge.runtime._getLastLastError(),
     });
@@ -413,13 +453,14 @@ contextBridge.executeInMainWorld({
     // a shadow tree of the frontend (so it is not among window.parent.frames) but is
     // NAMED after its panel id: `window.open("", name)` resolves an existing named frame
     // without navigating it and returns its WindowProxy, which is fully scriptable from
-    // here once the panel has loaded, because both pages are `rozenite://<id>`. A
-    // lookup that finds no such frame would open a popup instead, which is detected
-    // (a popup is a top-level window, a panel frame is not) and closed. The
-    // listeners of one panel are serialized, so onHidden can never overtake an
-    // onShown that is still waiting for the panel to load.
-    const panels = merged.devtools && merged.devtools.panels;
-    if (panels && typeof panels.create === "function") {
+    // here once the panel has loaded, because both pages are `rozenite://<id>`. The
+    // shell denies every window.open (src/main/window.js), so a name that matches no
+    // frame gives null instead of a popup. The listeners of one panel are serialized, so
+    // onHidden can never overtake an onShown that is still waiting for the panel to load.
+    const panels = merged.devtools.panels;
+    const panelIdFor = bridge.devtools.panels._panelIdFor; // internal helper
+    delete panels._panelIdFor;
+    if (typeof panels.create === "function" && typeof panelIdFor === "function") {
       const hrefOf = (win) => {
         try {
           return String(win.location.href);
@@ -427,29 +468,15 @@ contextBridge.executeInMainWorld({
           return null; // cross-origin: still the frontend's initial about:blank
         }
       };
-      const lookup = (panelId) => {
-        let found = null;
-        try {
-          found = window.open("", panelId);
-        } catch {
-          return null;
-        }
-        // A frame's `top` is the frontend window; a popup is its own top. Only a
-        // top-level about:blank window can be the popup we just caused, so a real panel
-        // frame is never closed by mistake (closing a frame closes the whole app).
-        if (found && found.top === found && hrefOf(found) === "about:blank") {
-          found.close(); // no frame by that name: this is the popup we just caused
-          return null;
-        }
-        return found;
-      };
       const awaitPanelWindow = async (panelId) => {
-        // Looked up fresh on every show: DevTools detaches a hidden tab's content, which
-        // discards the panel iframe's browsing context, so a window kept from an earlier
-        // show would be a dead one.
-        const win = lookup(panelId);
-        // Wait (bounded) for the panel's navigation to commit, so the window is usable
-        // the moment the listener gets it.
+        let win = null;
+        try {
+          win = window.open("", panelId);
+        } catch {
+          // denied or unreachable: no window to hand over
+        }
+        // Wait (bounded, ~3 s) for the panel's first navigation to commit, so the window
+        // is usable the moment the listener gets it.
         for (let attempt = 0; win && attempt < 120; attempt++) {
           const href = hrefOf(win);
           if (href && href.startsWith("rozenite://")) {
@@ -459,7 +486,7 @@ contextBridge.executeInMainWorld({
         }
         return win; // null = divergence: Chrome always has a window to hand over
       };
-      const decorate = (panel) => {
+      const decorate = (panel, panelId) => {
         if (!panel || !panel.onShown || !panel.onHidden) {
           return panel;
         }
@@ -468,7 +495,7 @@ contextBridge.executeInMainWorld({
           const listeners = [];
           event.addListener(() => {
             queue = queue.then(async () => {
-              const win = withWindow ? await awaitPanelWindow(panel._panelId) : undefined;
+              const win = withWindow ? await awaitPanelWindow(panelId) : undefined;
               for (const listener of [...listeners]) {
                 try {
                   listener(...(withWindow ? [win] : []));
@@ -503,15 +530,15 @@ contextBridge.executeInMainWorld({
           onHidden: wrapEvent(panel.onHidden, false),
         };
       };
+      // Assigned onto the existing object, NOT a spread copy: `themeName` above is a
+      // live getter and a copy would freeze it.
       const create = panels.create;
-      merged.devtools.panels = {
-        ...panels,
-        create(title, iconPath, pagePath, cb) {
-          if (typeof cb === "function") {
-            return create(title, iconPath, pagePath, (panel) => cb(decorate(panel)));
-          }
-          return create(title, iconPath, pagePath).then(decorate);
-        },
+      panels.create = (title, iconPath, pagePath, cb) => {
+        const panelId = panelIdFor(pagePath);
+        if (typeof cb === "function") {
+          return create(title, iconPath, pagePath, (panel) => cb(decorate(panel, panelId)));
+        }
+        return create(title, iconPath, pagePath).then((panel) => decorate(panel, panelId));
       };
     }
 

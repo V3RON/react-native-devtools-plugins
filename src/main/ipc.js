@@ -7,6 +7,7 @@
 // frontend-supplied script to `new Function`. `chrome.devtools.*` is implemented
 // shell-side now (docs/features/DEVTOOLS-PANELS.md), so there is nothing to
 // deliver synchronously and no arbitrary-code-evaluation channel left.
+const fs = require("fs");
 const { ipcMain } = require("electron");
 const preferences = require("./preferences");
 const windowOps = require("./window");
@@ -23,6 +24,8 @@ const { createPermissionGate, API_PERMISSIONS } = require("../shared/permissions
 const tabHost = require("./tab-host");
 const notificationHost = require("./notification-host");
 const { getContextRegistry } = require("./context-registry");
+const { createThemeHost, createThemeReportHandler } = require("./theme-host");
+const { stripThemeHintFromUrl } = require("../shared/theme");
 const { getRequestQueue } = require("./context-request");
 const saveService = require("./save-service");
 const optionsHost = require("./options-host");
@@ -48,6 +51,7 @@ const {
   EXT_PANEL_CREATE,
   EXT_PANEL_VISIBILITY,
   EXT_PANEL_EVENT,
+  THEME_REPORT,
   DEVTOOLS_EVAL,
   DEVTOOLS_RELOAD,
   NETWORK_SUBSCRIBE,
@@ -109,6 +113,12 @@ const networkService = createNetworkService({
     else if (level === "warn") console.warn(line);
     else console.log(line);
   },
+});
+
+// The frontend's theme, pushed to every registered extension context on change
+// (chrome.devtools.panels.themeChanged; docs/features/DEVTOOLS-PANELS.md).
+const themeHost = createThemeHost({
+  broadcast: (delivery) => getContextRegistry().broadcast(delivery),
 });
 
 // frameKey -> WebFrameMain that registered it: every later call claiming a
@@ -193,6 +203,17 @@ const extensionIdOfFrame = (event) => {
     return new URL(event.senderFrame.url).hostname;
   } catch {
     return null;
+  }
+};
+
+/** Whether `pagePath` (query/hash ignored) names an existing file inside the extension. */
+const panelPageExists = (extensionId, pagePath) => {
+  const file = pagePath.split(/[?#]/)[0].replace(/^\/+/, "");
+  const resolved = file && extensionServer.resolveExtensionFile(extensionId, file);
+  try {
+    return Boolean(resolved) && fs.statSync(resolved).isFile();
+  } catch {
+    return false;
   }
 };
 
@@ -314,16 +335,20 @@ const registerIpcHandlers = () => {
     // gets no data (docs/features/EXTENSION-MANAGEMENT.md).
     const granted = grantedPermissions(event);
     grants.set(key, granted);
+    // The frame's address as the EXTENSION knows it: the panel bridge's theme hint
+    // (src/shared/theme.js) is the shell's detail and must not reach MessageSender.url.
+    // Done here, not by relying on the preload having stripped it first (a race).
+    const frameUrl = stripThemeHintFromUrl(frame.url);
     router.registerFrame({
       key,
       extensionId,
-      url: frame.url,
+      url: frameUrl,
       send: makeFrameSender(key, event.sender, frame),
     });
     notifyFrameObservers({
       key,
       extensionId,
-      url: frame.url,
+      url: frameUrl,
       send: makeFrameSender(key, event.sender, frame),
     });
     event.sender.once("destroyed", () => unregisterRouterFrame(key));
@@ -334,7 +359,12 @@ const registerIpcHandlers = () => {
     // which DROPS a function-valued property rather than transferring it — so a
     // function here reached the frame as `undefined` and every context ran unscaled,
     // silently. tests/tier2-worker-electron.test.js is what measured that.)
-    return { ok: true, granted, alarmClockScale: config.alarmClockScale };
+    return {
+      ok: true,
+      granted,
+      alarmClockScale: config.alarmClockScale,
+      themeName: themeHost.get(),
+    };
   });
 
   const registeredHandle = (channel, handler) =>
@@ -375,10 +405,13 @@ const registerIpcHandlers = () => {
     } catch {
       return { ok: false };
     }
+    // The page must be a real file of THIS extension: an empty or missing path would
+    // host a tab that can only show a 404, and the old check (does the extension
+    // folder exist) passed for any path.
     if (
       typeof title !== "string" ||
       typeof pagePath !== "string" ||
-      !extensionServer.resolveExtensionFile(extensionId, "")
+      !panelPageExists(extensionId, pagePath)
     ) {
       return { ok: false };
     }
@@ -400,6 +433,14 @@ const registerIpcHandlers = () => {
     }
     return { ok: panelHost.setPanelVisible(panelId, shown === true) };
   });
+
+  // The frontend reporting its theme. Identity is the frame (the frontend's own
+  // main frame), never the payload; the value is validated against Chrome's two
+  // names inside the theme host before any extension hears it.
+  ipcMain.handle(
+    THEME_REPORT,
+    createThemeReportHandler({ themeHost, isFrontendFrame: panelHost.isFrontendFrame })
+  );
 
   // ── inspected window (docs/features/INSPECTED-WINDOW.md) ──────────────────
   // chrome.devtools.inspectedWindow.eval -> CDP Runtime.evaluate over the
@@ -559,7 +600,7 @@ const registerIpcHandlers = () => {
       // than from anything the frame says about itself.
       granted: tabsCaller(event),
       fromKey: resolveFrameKey(event),
-      frameUrl: event.senderFrame ? event.senderFrame.url : "",
+      frameUrl: event.senderFrame ? stripThemeHintFromUrl(event.senderFrame.url) : "",
       // The production shell started it in src/main/index.js; a harness that never ran
       // that file gets it built here, against the same router, so the answer is always
       // "what this shell really did" rather than "the bridge was never started".

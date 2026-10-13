@@ -10,6 +10,7 @@ const config = require("./config");
 const { frontendPreferences } = require("./frame-security");
 const { setFrontendWebContents } = require("./dispatch");
 const panelHost = require("./panel-host");
+const { windowOpenHandler } = require("./window-open-policy");
 
 let currentWindow = null;
 
@@ -19,6 +20,8 @@ const createWindow = () => {
     height: 600,
     webPreferences: frontendPreferences({ preloadPath: config.preloadPath }),
   });
+
+  win.webContents.setWindowOpenHandler(windowOpenHandler); // see the policy file
 
   win.loadURL(config.frontendURL);
   currentWindow = win;

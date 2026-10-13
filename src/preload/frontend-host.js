@@ -31,6 +31,7 @@ const {
   WINDOW_BRING_TO_FRONT,
   WINDOW_CLOSE,
   HOST_SAVE,
+  THEME_REPORT,
   EXT_PANEL_VISIBILITY,
 } = require("../shared/ipc");
 
@@ -249,16 +250,6 @@ const InspectorFrontendHost = {
       items: JSON.parse(JSON.stringify(items || [])),
     });
   },
-  // [REAL, shell-only] not part of Chrome's InspectorFrontendHost: the panel bridge
-  // (src/frontend/panel-bridge.js) reports an extension panel's tab being selected /
-  // deselected, which main turns into Panel.onShown / onHidden for the devtools page
-  // that created it (docs/features/DEVTOOLS-PANELS.md). Main accepts it from this
-  // frame only; extension frames cannot reach this object.
-  setExtensionPanelVisible(panelId, shown) {
-    ipcRenderer
-      .invoke(EXT_PANEL_VISIBILITY, { panelId: String(panelId), shown: shown === true })
-      .catch(() => {});
-  },
   setOpenNewWindowForPopups(value) {},
   setAddExtensionCallback(callback) {},
 
@@ -311,6 +302,20 @@ const InspectorFrontendHost = {
     if (callback) callback({ canShowSurvey: false });
   },
 };
+
+// The panel bridge (src/frontend/panel-bridge.js) reports frontend state through these
+// one-purpose functions. They are not part of InspectorFrontendHost (a stock-frontend
+// surface); main accepts each only from this window's main frame.
+contextBridge.exposeInMainWorld("__SHELL_HOST__", {
+  reportTheme: (themeName) =>
+    ipcRenderer.invoke(THEME_REPORT, { themeName }).catch(() => {}),
+  // An extension panel's tab was selected / deselected: main turns it into
+  // Panel.onShown / onHidden for the devtools page that created the panel.
+  reportPanelVisible: (panelId, shown) =>
+    ipcRenderer
+      .invoke(EXT_PANEL_VISIBILITY, { panelId: String(panelId), shown: shown === true })
+      .catch(() => {}),
+});
 
 // context-bridge bridge: exposeInMainWorld proxies functions; the frontend
 // wants a plain window.InspectorFrontendHost object instead.

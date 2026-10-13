@@ -64,11 +64,22 @@ test("junk panel events are ignored and a throwing listener does not stop the ne
   assert.strictEqual(errors.length, 1, "the bad listener is reported");
 });
 
-test("a Panel names its iframe with the same id the host derives", async () => {
-  const { create } = makeShim("sample-extension");
+test("the shim names a panel's iframe with the id the host derives, off the Panel object", async () => {
+  const { shim, create } = makeShim("sample-extension");
   const panel = await create("/panel.html");
-  assert.strictEqual(panel._panelId, panelIdFor("sample-extension", "/panel.html"));
-  assert.strictEqual(panel._panelId, "ext.sample-extension.panel.html");
+  assert.strictEqual(shim.namespace.panels._panelIdFor("/panel.html"), panelIdFor("sample-extension", "/panel.html"));
+  assert.strictEqual(panel._panelId, undefined, "the id is not on the page-visible Panel");
+});
+
+test("panelIdFor is injective across extensions (the old join was not)", () => {
+  // both were "ext.exta.panel.html" before the extension id was length-prefixed
+  const one = panelIdFor("exta", "panel.html");
+  const two = panelIdFor("exta.panel", "html");
+  assert.notStrictEqual(one, two);
+  assert.match(one, /^[A-Za-z0-9.-]+$/);
+  assert.match(two, /^[A-Za-z0-9.-]+$/);
+  assert.strictEqual(panelIdFor("exta", "/panel.html"), one, "leading slash is not part of the identity");
+  assert.notStrictEqual(panelIdFor("a", "b.c"), panelIdFor("a.b", "c"));
 });
 
 // ── host half ────────────────────────────────────────────────────────────────
@@ -98,6 +109,20 @@ test("an unknown or non-string panelId is not an event", () => {
   assert.strictEqual(panelHost.setPanelVisible("ext.nobody.nothing", true), false);
   assert.strictEqual(panelHost.setPanelVisible(undefined, true), false);
   assert.strictEqual(panelHost.setPanelVisible({ toString: () => "x" }, true), false);
+});
+
+test("another extension cannot take over a panel's seat or hijack its events", () => {
+  const owner = [];
+  const thief = [];
+  assert.strictEqual(register("exta", "panel.html", (d) => owner.push(d)), true);
+  // the colliding pair: extension "exta.panel" asking for page "html"
+  assert.strictEqual(register("exta.panel", "html", (d) => thief.push(d)), true);
+  panelHost.setPanelVisible(panelIdFor("exta", "panel.html"), true);
+  assert.strictEqual(owner.length, 1);
+  assert.deepStrictEqual(thief, []);
+  // ids that only collide after sanitizing ("a b" and "a-b"): the second claimant is refused
+  assert.strictEqual(register("a b", "p.html", () => {}), true);
+  assert.strictEqual(register("a-b", "p.html", () => {}), false, "a different extension may not re-claim the id");
 });
 
 test("a re-created panel (reloaded devtools page) moves the seat; the old frame goes quiet", () => {

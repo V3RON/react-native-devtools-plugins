@@ -41,6 +41,14 @@ const waitFor = arg("wait-for");
 const SETTLE_MS = Number(arg("settle") || 900);
 // Start the production background host too (src/main/background-host.js). Off by
 // default so every pre-existing run of this harness is unchanged.
+// Name the loopback page as THE frontend window (src/main/panel-host.js), so its
+// main frame may send THEME_REPORT. Off by default: nothing else here has a frontend.
+const registerDelayMs = Number(arg("register-delay-ms") || "0");
+const frontendIsHost = ["on", "true", "1"].includes(arg("frontend-host"));
+// Run the PRODUCTION panel bridge (src/frontend/panel-bridge.js) in the loopback page, via
+// panelHost.attach — the page then plays the part of a frontend whose legacy.js is a fake
+// (tests/panel-events-electron.test.js). Implies --frontend-host.
+const panelBridge = ["on", "true", "1"].includes(arg("panel-bridge"));
 const withBackgroundHost = ["on", "true", "1"].includes(arg("background-host"));
 // Which extension id's CSP to report in the `harness` line.
 const reportedExtensionId = arg("extension-id") || "probe.local";
@@ -114,6 +122,18 @@ app
     // src/main/index.js does for electron-store's renderer adapter.
     Store.initRenderer();
     registerIpcHandlers();
+    if (registerDelayMs > 0) {
+      // Test-only: hold every RUNTIME_REGISTER reply back, so a page script that runs in
+      // that window provably cannot have learned anything from it (tests/theme-electron.test.js).
+      const { ipcMain } = require("electron");
+      const { RUNTIME_REGISTER } = require("../src/shared/ipc");
+      const original = ipcMain._invokeHandlers.get(RUNTIME_REGISTER);
+      ipcMain.removeHandler(RUNTIME_REGISTER);
+      ipcMain.handle(RUNTIME_REGISTER, async (event, ...rest) => {
+        await new Promise((resolve) => setTimeout(resolve, registerDelayMs));
+        return original(event, ...rest);
+      });
+    }
 
     // chrome.notifications: a RECORDING notifier, so this suite never raises a real
     // system notification (the rule the whole harness runs under). It behaves like
@@ -288,7 +308,9 @@ app
         response.end("nope");
         return;
       }
-      response.writeHead(200, { "content-type": "text/html" });
+      response.writeHead(200, {
+        "content-type": inner.endsWith(".js") ? "text/javascript" : "text/html",
+      });
       fs.createReadStream(target).pipe(response);
     });
     await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -300,6 +322,18 @@ app
       height: 700,
       webPreferences: frontendPreferences({ preloadPath: config.preloadPath }),
     });
+    if (panelBridge) {
+      const { windowOpenHandler } = require("../src/main/window-open-policy");
+      win.webContents.setWindowOpenHandler(windowOpenHandler);
+      require("../src/main/panel-host").attach(win.webContents);
+      app.on("browser-window-created", (_event, created) => {
+        if (created !== win) {
+          note({ kind: "window-created" });
+        }
+      });
+    } else if (frontendIsHost) {
+      require("../src/main/panel-host").setFrontendContents(win.webContents);
+    }
 
     const note = (entry) => write(entry);
 

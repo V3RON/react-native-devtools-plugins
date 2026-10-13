@@ -99,6 +99,11 @@ module.exports = {
   // (src/main/content-gate.js). `null` means nothing is allowed — the default.
   contentScripts: contentScriptAllowlist(),
 
+  // DEVTOOLS_SHOW_PANEL=<extensionId>[/<pagePath>]: select that extension's panel tab the
+  // first time it registers (the host-internal consumer of the `showPanel` dispatch
+  // event, src/main/panel-host.js). Unset = the frontend's own default tab.
+  showPanel: (process.env.DEVTOOLS_SHOW_PANEL || "").trim() || null,
+
   // chrome.alarms' clock multiplier (src/chrome-shim/alarms.js), resolved to a NUMBER
   // on purpose: this value travels to each extension context inside its
   // RUNTIME_REGISTER reply, which crosses IPC through the structured-clone serializer.
