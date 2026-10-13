@@ -1,8 +1,8 @@
-# Evidence: `chrome.devtools.panels.themeName` / `themeChanged`
+# Evidence: `chrome.devtools.panels.themeName` / `setThemeChangeHandler`
 
 The bundled sample extension's "Osudio" panel (`extensions/sample-extension/panel.js`)
 renders `chrome.devtools.panels.themeName` on the line under the heading, paints its own
-background from it, and logs every `themeChanged`. Screenshots are of the real Electron
+background from it, and logs every `setThemeChangeHandler`. Screenshots are of the real Electron
 window (Rozenite frontend from Metro, fake CDP backend), captured with
 `Page.captureScreenshot`; the theme was switched through the frontend's own `ui-theme`
 setting (the one Settings -> Preferences -> Theme edits).
@@ -10,11 +10,11 @@ setting (the one Settings -> Preferences -> Theme edits).
 | File | Shows |
 | --- | --- |
 | `1-boot-dark.png` | Frontend booted with `ui-theme = dark`: panel says `themeName = dark (at load)` |
-| `2-switched-to-light.png` | Setting switched to `default`: panel line reads `default (themeChanged)` |
+| `2-switched-to-light.png` | Setting switched to `default`: panel line reads `default (setThemeChangeHandler)` |
 | `3-switched-back-to-dark.png` | Switched back to `dark` |
 | `4-boot-light.png` | Frontend reloaded with `ui-theme = default`: `themeName = default (at load)`. Weak evidence on its own: "default" is also what an extension sees with no host input at all; the boot-dark shot is the one that distinguishes |
 | `5-system-dark.png` / `6-system-light.png` | `ui-theme = systemPreferred`, `prefers-color-scheme` emulated dark then light: the panel follows the system flip. The yellow caption (added by the driver, not product UI) prints the live `ui-theme` value and the emulated media |
-| `log.json` / `log-system.json` | Per step: frontend's `theme-with-dark-background` class, the panel's `themeName`, and the panel's console `[theme]` lines (including the `themeChanged -> <name>` events) |
+| `log.json` / `log-system.json` | Per step: frontend's `theme-with-dark-background` class, the panel's `themeName`, and the panel's console `[theme]` lines (including the `setThemeChangeHandler -> <name>` events) |
 
 ## Commands
 

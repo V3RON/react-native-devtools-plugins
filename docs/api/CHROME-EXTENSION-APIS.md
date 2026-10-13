@@ -8,7 +8,7 @@ Per-namespace plans live in [../features/README.md](../features/README.md).
 
 - **`devtools.panels`** — `create` 🟨 shell-driven (`chrome.devtools.*` is implemented in
   `src/chrome-shim/devtools.js`, not by a frontend-injected script); `themeName` /
-  `themeChanged` ✅ in devtools/panel frames (the frontend's real theme, `"default"` | `"dark"`,
+  `setThemeChangeHandler` ✅ in devtools/panel frames (the frontend's real theme, `"default"` | `"dark"`,
   correct from the first script; background contexts learn it async, see the Theme section
   of the panels doc); `Panel.onShown(window)`/`onHidden` ✅ real (host-routed to the creating
   devtools page; `setWidth` is not a Chrome API);

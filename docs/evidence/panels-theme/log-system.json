@@ -4,11 +4,11 @@
     "frontendDark": true,
     "panel": [
       {
-        "v": "{\"themeName\":\"dark\",\"line\":\"themeName = dark (themeChanged)\"}",
+        "v": "{\"themeName\":\"dark\",\"line\":\"themeName = dark (setThemeChangeHandler)\"}",
         "theme": [
           "[theme] themeName=default (at load)",
-          "[theme] themeChanged -> dark",
-          "[theme] themeName=dark (themeChanged)"
+          "[theme] setThemeChangeHandler -> dark",
+          "[theme] themeName=dark (setThemeChangeHandler)"
         ]
       }
     ]
@@ -18,13 +18,13 @@
     "frontendDark": false,
     "panel": [
       {
-        "v": "{\"themeName\":\"default\",\"line\":\"themeName = default (themeChanged)\"}",
+        "v": "{\"themeName\":\"default\",\"line\":\"themeName = default (setThemeChangeHandler)\"}",
         "theme": [
           "[theme] themeName=default (at load)",
-          "[theme] themeChanged -> dark",
-          "[theme] themeName=dark (themeChanged)",
-          "[theme] themeChanged -> default",
-          "[theme] themeName=default (themeChanged)"
+          "[theme] setThemeChangeHandler -> dark",
+          "[theme] themeName=dark (setThemeChangeHandler)",
+          "[theme] setThemeChangeHandler -> default",
+          "[theme] themeName=default (setThemeChangeHandler)"
         ]
       }
     ]

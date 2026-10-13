@@ -1,5 +1,5 @@
 // The frontend's DevTools theme, as the host knows it
-// (docs/features/DEVTOOLS-PANELS.md: chrome.devtools.panels.themeName / themeChanged).
+// (docs/features/DEVTOOLS-PANELS.md: chrome.devtools.panels.themeName / setThemeChangeHandler).
 //
 // The frontend decides the theme (the `ui-theme` setting, or the system's
 // `prefers-color-scheme` while it is "systemPreferred"); the bridge running in its

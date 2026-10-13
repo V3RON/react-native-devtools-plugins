@@ -1,4 +1,4 @@
-// chrome.devtools.panels.themeName / themeChanged (docs/features/DEVTOOLS-PANELS.md):
+// chrome.devtools.panels.themeName / setThemeChangeHandler (docs/features/DEVTOOLS-PANELS.md):
 // the shim's live property + event, the host's validated fan-out, the chrome
 // namespace's delivery routing, the THEME_REPORT frame check and the URL boot hint.
 // The cross-process chain is tests/theme-electron.test.js.
@@ -32,20 +32,49 @@ test("themeName is a live property that follows setThemeName", () => {
   assert.strictEqual(namespace.panels.themeName, "default");
 });
 
-test("themeChanged fires once per real change, with the new name", () => {
+test("setThemeChangeHandler is called once per real change, with the new name", () => {
   const { namespace, setThemeName } = makeShim();
   const seen = [];
-  namespace.panels.themeChanged.addListener((name) => seen.push(name));
+  namespace.panels.setThemeChangeHandler((name) => seen.push(name));
   setThemeName("dark");
   setThemeName("dark"); // no change, no event
   setThemeName("default");
   assert.deepStrictEqual(seen, ["dark", "default"]);
 });
 
+test("setThemeChangeHandler: one handler, replaced per call, cleared by a non-function; no themeChanged", () => {
+  const { namespace, setThemeName } = makeShim();
+  assert.strictEqual("themeChanged" in namespace.panels, false, "Chrome has no such event");
+  const first = [];
+  const second = [];
+  assert.strictEqual(namespace.panels.setThemeChangeHandler((n) => first.push(n)), undefined);
+  setThemeName("dark");
+  namespace.panels.setThemeChangeHandler((n) => second.push(n)); // replaces, not adds
+  setThemeName("default");
+  assert.deepStrictEqual(first, ["dark"]);
+  assert.deepStrictEqual(second, ["default"]);
+  namespace.panels.setThemeChangeHandler(null); // cleared
+  setThemeName("dark");
+  assert.deepStrictEqual(second, ["default"]);
+  assert.strictEqual(namespace.panels.themeName, "dark", "themeName still tracks without a handler");
+  // registering does not call it (only a change does), and a throwing handler cannot break the shim
+  const logged = [];
+  const shim = createDevtools({ extensionId: "x", logger: { error: (...a) => logged.push(a), warn() {} } });
+  let calls = 0;
+  shim.namespace.panels.setThemeChangeHandler(() => {
+    calls++;
+    throw new Error("boom");
+  });
+  assert.strictEqual(calls, 0);
+  assert.strictEqual(shim.setThemeName("dark"), true);
+  assert.strictEqual(shim.namespace.panels.themeName, "dark");
+  assert.strictEqual(logged.length, 1);
+});
+
 test("the shim refuses names that are not Chrome's two", () => {
   const { namespace, setThemeName } = makeShim();
   const seen = [];
-  namespace.panels.themeChanged.addListener((name) => seen.push(name));
+  namespace.panels.setThemeChangeHandler((name) => seen.push(name));
   for (const bad of ["light", "", undefined, null, 1, {}]) {
     assert.strictEqual(setThemeName(bad), false);
   }
@@ -60,7 +89,7 @@ test("the chrome namespace routes `theme` deliveries and the registration answer
     networkBridge: createNetworkBridge({ logger: { warn: () => {} } }),
   });
   const seen = [];
-  chrome.devtools.panels.themeChanged.addListener((name) => seen.push(name));
+  chrome.devtools.panels.setThemeChangeHandler((name) => seen.push(name));
   chrome._setThemeName("dark"); // RUNTIME_REGISTER reply
   assert.strictEqual(chrome.devtools.panels.themeName, "dark");
   chrome.handleDelivery({ kind: "theme", payload: { themeName: "default" } });

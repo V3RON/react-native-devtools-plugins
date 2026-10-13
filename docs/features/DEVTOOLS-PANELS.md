@@ -2,7 +2,7 @@
 
 | | |
 | --- | --- |
-| **Status** | 🟨 partial — `panels.create`, `themeName`/`themeChanged` and `Panel.onShown/onHidden` are real and **shell-driven** (no fork knowledge); the rest is inert stubs |
+| **Status** | 🟨 partial — `panels.create`, `themeName`/`setThemeChangeHandler` and `Panel.onShown/onHidden` are real and **shell-driven** (no fork knowledge); the rest is inert stubs |
 | **Tier** | 1 (create/theme) / 2 (elements, sources, performance) |
 | **Blocked by** | [DISPATCH-CHANNEL.md](DISPATCH-CHANNEL.md) (context menus) |
 
@@ -12,7 +12,8 @@
   - `Panel`: `onShown(window)`, `onHidden` (and `onSearch`/`createStatusBarButton`, not
     implemented). `setWidth` is **not** part of Chrome's `ExtensionPanel`; it stays an inert
     shape in this shim for extensions that probe for it.
-- `devtools.panels.themeName`, `themeChanged`
+- `devtools.panels.themeName`, `setThemeChangeHandler(callback)` (Chrome 99+; there is no
+  `themeChanged` event in any Chrome version — an earlier revision of this shim invented one)
 - `devtools.panels.elements` (`ElementsPanel`): `createSidebarPane(title) →
   ExtensionSidebarPane` (`setObject`/`setExpression`/`setTitle`/`onContextMenu`),
   `openResource`, `inspectedObject`, `onCreateContextMenu`
@@ -44,8 +45,58 @@ All three bundled extensions (`sample-extension` "Osudio", GraphQL Network Inspe
 Altair GraphQL) register and render this way. The old `setInjectedScriptForOrigin`
 channel (fork-provided devtools script) remains, unused by the stock frontend.
 
-@@PANELEVENTS@@
-### Theme (`themeName` / `themeChanged`)
+### Panel events (`Panel.onShown` / `onHidden`)
+
+1. **Detect.** The bridge hooks `wasShown`/`willHide` on the panel's `SimpleView` (the
+   widget lifecycle, so tab clicks, keyboard navigation, the overflow menu and `showPanel`
+   all count) and reports through `window.__SHELL_HOST__.reportPanelVisible(panelId, shown)`
+   (exposed by the frontend preload next to `reportTheme`) → `EXT_PANEL_VISIBILITY` IPC.
+   The view is `setHideOnDetach()`, as the frontend's own `ExtensionView` does, so the panel
+   page **stays alive** across hide/show like Chrome's (its document, scroll position and JS
+   state survive; asserted by the Electron test).
+2. **Route.** Main accepts that channel from the **frontend's main frame only**
+   (`panelHost.isFrontendFrame`, the same check theme reports use), de-duplicates to real
+   transitions, and pushes `EXT_PANEL_EVENT` to the **one devtools-page frame that created
+   the panel** (recorded at `EXT_PANEL_CREATE` from the calling frame's registered identity).
+   A reloaded devtools page re-creates its panels, dedupe keeps the tab, and the new frame
+   takes the seat over — but **only a frame of the same extension may**, and the panel id is
+   injective across extensions (`ext.<len>.<extensionId>.<path>`, `panelIdFor` in
+   `src/shared/protocol.js`), so one extension can neither take over nor collide with
+   another's panel. `panels.create` also refuses a `pagePath` that is not an existing file of
+   the calling extension. A frontend reload clears the "shown" set; replayed panels start
+   hidden.
+3. **Deliver.** The shim fires the matching `Panel` events. `onShown`'s argument is the
+   panel page's **real window**: the panel iframe is named after its panel id, and the devtools
+   page's preload (main-world half; a `Window` cannot cross the `contextBridge`) resolves it
+   with `window.open("", name)`, which returns an existing named frame without navigating it.
+   Devtools page and panel page are both `rozenite://<id>`, so the window is fully scriptable
+   (the sample extension writes into the panel's DOM through it). `window.parent.frames`
+   cannot be used: the panel frame sits in a shadow tree. The frontend window denies every
+   blank `window.open` (`src/main/window-open-policy.js`), so a name that matches no frame —
+   or another extension's panel, which is cross-origin — gives `null`/an opaque proxy instead
+   of spawning a window.
+   - The **first** show is reported once the panel iframe has **loaded** (or after a 1.5 s
+     grace period), because the window only exists usefully after that; `onShown` may thus lag
+     the click by the page's load time, bounded (grace 1.5 s plus up to ~3 s waiting for the
+     window to become readable, worst case). Later shows report immediately. A show -> hide
+     before the first load emits nothing. Listeners of one panel are serialized, so `onHidden`
+     can never overtake an `onShown` still waiting for the window.
+   - `onHidden` carries no arguments, as in Chrome. If no window can be found, `onShown`
+     receives `null` (Chrome always has one).
+
+### `showPanel` (host -> frontend)
+
+`panelHost.showPanel(panelId)` (`src/main/panel-host.js`) selects a hosted panel's tab over the
+dispatch channel: `dispatchToFrontend("showPanel", [panelId])` → `InspectorFrontendAPI.showPanel`
+→ the frontend's own `InspectorView` listener → `ViewManager.showView`. The id is checked
+against the live registry (the frontend is only asked to show views this shell created),
+the call waits for the bridge to have added the tab, and it is **host-internal**: Chrome has no
+extension API for revealing a panel and no extension frame can reach it. Selecting the tab
+fires the normal `wasShown` report, so `Panel.onShown` follows by the usual path. Consumer:
+`DEVTOOLS_SHOW_PANEL=<extensionId>[/<pagePath>]` opens the shell on that extension's panel the
+first time it registers (once).
+
+### Theme (`themeName` / `setThemeChangeHandler`)
 
 Chrome's values: `"default"` (light) and `"dark"`. The frontend is the authority, so the
 bridge asks *it*, not the OS:
@@ -64,7 +115,9 @@ bridge asks *it*, not the OS:
    anything but the two names.
 3. A real change is broadcast to **every** registered extension context (devtools pages,
    panel pages, background contexts) as a `RUNTIME_DELIVER` `{kind: "theme"}` push through
-   the context registry; the shim updates `themeName` and fires `themeChanged(name)`.
+   the context registry; the shim updates `themeName` and calls the registered `setThemeChangeHandler` callback with the name (one handler; each call
+   replaces it; a non-function clears it; it is never called at registration, only on a change —
+   the semantics of the frontend's own `models/extensions` implementation).
    Repeated reports of the same theme fire nothing.
 4. **Boot value.** The bridge also appends `?__rozenite_theme=<name>` to the URL of every
    frame it creates (devtools pages and panels). The extension-frame preload runs before
@@ -81,7 +134,7 @@ bridge asks *it*, not the OS:
 Divergences, stated plainly:
 - For frames the bridge creates, `themeName` is correct from the first script, with no
   IPC timing involved. For other frames (background workers/pages) it starts at `"default"`
-  until the register reply lands, then `themeChanged` fires if the theme is `"dark"`.
+  until the register reply lands, then the handler is called if the theme is `"dark"`.
   Chrome exposes `chrome.devtools` only in DevTools frames, so that second case has no Chrome
   counterpart; the shim installs the API everywhere.
 - The hint is in the frame's URL only until the preload strips it, before any extension
@@ -94,7 +147,7 @@ Divergences, stated plainly:
   strip) and `tests/theme-electron.test.js` (real broadcast, page-world surface, stripping,
   `sender.url`). The Electron run holds every register reply back (`--register-delay-ms`), so
   the hint is measured in isolation: with the host at "default" and a `dark` hint, the head
-  script reads "dark" and the reply then overrides it with `themeChanged("default")` (the
+  script reads "dark" and the reply then overrides it with `setThemeChangeHandler("default")` (the
   host's state wins over the hint). Live evidence: `docs/evidence/panels-theme/`.
 
 Note: the frontend's `View` ids reject anything outside `[A-Za-z0-9.-]` ("Invalid view
@@ -108,7 +161,8 @@ ID") — `panelIdFor` sanitizes path separators/underscores accordingly.
 | `Panel.onShown/onHidden` | ✅ | real, incl. the panel `window` argument and panel pages that stay alive across hide/show; see [Panel events](#panel-events-panelonshown--onhidden). Verified live: [../evidence/panel-events/](../evidence/panel-events/README.md) |
 | `Panel.setWidth` | n/a | not a Chrome API (`ExtensionPanel` has none); inert shape kept |
 | `Panel.onSearch`, `createStatusBarButton` | ❌ | not implemented (deprecated / search UI) |
-| `themeName` / `themeChanged` | ✅ | the frontend's real theme (`"default"` light / `"dark"`), live; see [Theme](#theme-themename--themechanged) for the one remaining divergence |
+| host `showPanel` producer | ✅ | host-internal, id-validated; see [showPanel](#showpanel-host---frontend) |
+| `themeName` / `setThemeChangeHandler` | ✅ | the frontend's real theme (`"default"` light / `"dark"`), live; see [Theme](#theme-themename--setthemechangehandler) for the one remaining divergence |
 | `elements.createSidebarPane` | ❌ | needs [inspected window](INSPECTED-WINDOW.md) (`Runtime.evaluate`) + RN element-tree selection; Redux-family devtools depend on it |
 | `elements.onCreateContextMenu`, `inspectedObject`, `openResource` | ❌ | context-menu events ride the dispatch channel |
 | `sources.openInFrontend` | ❌ | jump-to-source; RN DevTools has a Sources-like surface |
@@ -117,5 +171,5 @@ ID") — `panelIdFor` sanitizes path separators/underscores accordingly.
 
 ## Definition of done (Tier 1 slice)
 
-`create` + `onShown/onHidden` + `themeName/themeChanged` (all done) behave like Chrome for
+`create` + `onShown/onHidden` + `themeName/setThemeChangeHandler` (all done) behave like Chrome for
 UI-only extensions (Redux-style panels, Altair client tab).

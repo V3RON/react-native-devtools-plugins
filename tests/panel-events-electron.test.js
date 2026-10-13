@@ -46,7 +46,7 @@ log({
   rawHandlePanelEvent: typeof (window.chromeElectron && window.chromeElectron.handlePanelEvent),
   themeAtStart: panels.themeName,
 });
-panels.themeChanged.addListener((arg) => log({ ev: "theme", arg, live: panels.themeName }));
+panels.setThemeChangeHandler((arg) => log({ ev: "theme", arg, live: panels.themeName }));
 const make = (title, pagePath, tag) =>
   panels.create(title, "", pagePath, (panel) => {
     log({
@@ -246,7 +246,7 @@ suite("panel events: onShown(window)/onHidden through the production bridge in r
   assert.equal(created.themeDescriptorIsGetter, "function", "themeName is still a live getter after create is wrapped");
   const themeEvents = ofExt(A, "theme").filter((p) => p.boot === firstBoot(A));
   assert.ok(themeEvents.length >= 1 && themeEvents.every((p) => p.live === "dark" && p.arg === "dark"),
-    `themeName tracks themeChanged after create: ${JSON.stringify(themeEvents)}`);
+    `themeName tracks the theme handler after create: ${JSON.stringify(themeEvents)}`);
 
   // (a) onShown's argument is the panel page's real window
   const shownA1 = ofExt(A, "shown", "A1").filter((p) => p.boot === firstBoot(A));

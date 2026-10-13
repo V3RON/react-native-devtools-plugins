@@ -33,7 +33,7 @@ const assert = (cond, msg) => {
 };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// ── chrome.devtools.panels.themeName / themeChanged ───────────────────────
+// ── chrome.devtools.panels.themeName / setThemeChangeHandler ───────────────────────
 // Rendered live: switch Settings -> Preferences -> Theme in DevTools (or flip the
 // system theme while it is "System preference") and this line follows.
 const themeLine = document.getElementById("theme");
@@ -45,9 +45,9 @@ const showTheme = (via) => {
   console.log(`[theme] themeName=${name} (${via})`);
 };
 showTheme("at load");
-chrome.devtools.panels.themeChanged.addListener((name) => {
-  console.log(`[theme] themeChanged -> ${name}`);
-  showTheme("themeChanged");
+chrome.devtools.panels.setThemeChangeHandler((name) => {
+  console.log(`[theme] setThemeChangeHandler -> ${name}`);
+  showTheme("setThemeChangeHandler");
 });
 
 (async () => {

@@ -81,12 +81,10 @@ test("every _fire call site in chrome-shim is attributed to a real producer", ()
     "messaging.js:_fire": 8,
     // CDP Network.* events the inspected app really reported.
     "network-bridge.js:_fire": 2,
-    // Two producers. (1) The frontend's ThemeSupport reported a different theme (main
-    // fans it out; src/main/theme-host.js refuses repeats and unknown names).
-    // (2) The frontend's own tab widget reported a panel shown / hidden (wasShown /
-    // willHide) and main routed it to the devtools page that created the panel
+    // The frontend's own tab widget reported a panel shown / hidden (wasShown / willHide)
+    // and main routed it to the devtools page that created the panel
     // (src/main/panel-host.js setPanelVisible; one `_fire` serves both events).
-    "devtools.js:_fire": 2,
+    "devtools.js:_fire": 1,
   };
 
   const counts = {};

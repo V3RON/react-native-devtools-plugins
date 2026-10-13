@@ -395,7 +395,7 @@ const createChromeNamespace = ({
           return;
         }
       }
-      // `theme` pushes are chrome.devtools.panels' own (themeName / themeChanged).
+      // `theme` pushes are chrome.devtools.panels' own (themeName / setThemeChangeHandler).
       if (delivery && delivery.kind === "theme") {
         devtoolsShim.setThemeName(delivery.payload && delivery.payload.themeName);
         return;
@@ -413,7 +413,7 @@ const createChromeNamespace = ({
   });
 
   // The host's current DevTools theme, handed back at registration (non-enumerable
-  // like handleDelivery). Fires themeChanged only if it differs from what the
+  // like handleDelivery). Calls the theme change handler only if it differs from what the
   // frame was already showing.
   Object.defineProperty(chrome, "_setThemeName", {
     value: (themeName) => devtoolsShim.setThemeName(themeName),
