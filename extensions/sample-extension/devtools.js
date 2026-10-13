@@ -13,7 +13,7 @@ const record = (text, win) => {
 };
 
 let panelWindow = null;
-chrome.devtools.panels.create("Osudio", null, "/panel.html", (panel) => {
+chrome.devtools.panels.create(chrome.i18n.getMessage("panelTitle"), null, "/panel.html", (panel) => {
   panel.onShown.addListener((win) => {
     panelWindow = win;
     record(`onShown (window: ${win ? win.location.href : "none"})`, win);

@@ -1,0 +1,12 @@
+/* chrome.i18n also localizes CSS: __MSG_@@bidi_dir__ is "ltr" or "rtl" for the UI
+   locale, __MSG_@@bidi_start_edge__ "left" or "right". */
+body {
+  direction: __MSG_@@bidi_dir__;
+  font-family: sans-serif;
+}
+#i18n-demo {
+  border: 1px solid #888;
+  border-__MSG_@@bidi_start_edge__: 6px solid #2a7;
+  padding: 6px 10px;
+  margin-bottom: 10px;
+}

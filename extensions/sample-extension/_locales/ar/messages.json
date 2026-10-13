@@ -1,0 +1,14 @@
+{
+  "extName": { "message": "ملحقات تجريبية" },
+  "panelTitle": { "message": "لوحة Osudio" },
+  "heading": { "message": "لوحة أدوات المطور الأساسية" },
+  "greeting": {
+    "message": "مرحبا، $USER$! لديك $COUNT$ رسائل جديدة.",
+    "placeholders": {
+      "user": { "content": "$1" },
+      "count": { "content": "$2" }
+    }
+  },
+  "uiLanguageLabel": { "message": "لغة الواجهة" },
+  "directionLabel": { "message": "اتجاه النص" }
+}

@@ -123,6 +123,47 @@ chrome.devtools.panels.setThemeChangeHandler((name) => {
     assert(chrome.runtime.getManifest().name, "manifest loaded");
   });
 
+  // ── chrome.i18n (docs/features/STORAGE-AND-I18N.md) ──────────────────────
+  // getMessage is synchronous: the panel's title/heading are translated by the very
+  // first script that runs. The checks assert Chrome's semantics in whatever UI
+  // locale the shell resolved, so they hold for en, pt-BR, de and ar alike.
+  const t = (name, subs) => chrome.i18n.getMessage(name, subs);
+  const demo = document.getElementById("i18n-demo");
+  document.getElementById("heading").textContent = t("heading");
+  for (const [label, value] of [
+    [t("uiLanguageLabel"), chrome.i18n.getUILanguage() + " (" + t("@@ui_locale") + ")"],
+    [t("directionLabel"), t("@@bidi_dir")],
+    ["greeting", t("greeting", ["Ada", "3"])],
+    ["price", t("price")],
+    ["fallback", t("onlyDefault")],
+  ]) {
+    const row = document.createElement("div");
+    row.textContent = label + ": " + value;
+    demo.appendChild(row);
+  }
+
+  await check("chrome.i18n resolves messages synchronously with Chrome's semantics", async () => {
+    assert(t("@@extension_id") === chrome.runtime.id, "@@extension_id");
+    assert(t("@@ui_locale").replace("_", "-") === chrome.i18n.getUILanguage(), "ui locale vs language");
+    assert(t("HEADING") === t("heading") && t("heading") !== "", "names are case-insensitive");
+    assert(t("nope") === "", "unknown name -> empty string");
+    // $USER$ -> $1, $COUNT$ -> $2 (placeholders), in every locale's own sentence.
+    const greeting = t("greeting", ["Ada", "3"]);
+    assert(greeting.includes("Ada") && greeting.includes("3"), "substitutions: " + greeting);
+    assert(t("price").includes("$5") && !t("price").includes("$$"), "$$ escapes a dollar: " + t("price"));
+    // A message missing from the UI locale falls back to default_locale (en).
+    assert(t("onlyDefault").includes("default locale"), "per-message fallback to default_locale");
+    assert(chrome.runtime.getManifest().name === t("extName"), "manifest __MSG_extName__ localized");
+    assert(
+      getComputedStyle(document.body).direction === t("@@bidi_dir"),
+      "CSS __MSG_@@bidi_dir__ localized: " + getComputedStyle(document.body).direction
+    );
+    const accept = await chrome.i18n.getAcceptLanguages();
+    assert(Array.isArray(accept) && accept.length > 0, "getAcceptLanguages");
+    const detected = await chrome.i18n.detectLanguage("hello");
+    assert(detected && detected.isReliable === false && Array.isArray(detected.languages), "detectLanguage shape");
+  });
+
   await sleep(300); // let the peer frame register
 
   await check("sendMessage round-trip (promise)", async () => {

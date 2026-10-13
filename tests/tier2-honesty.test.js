@@ -274,6 +274,7 @@ test("the namespaces that exist are exactly the ones the docs claim", () => {
     "contextMenus",
     "devtools",
     "downloads",
+    "i18n",
     "notifications",
     "permissions",
     "runtime",

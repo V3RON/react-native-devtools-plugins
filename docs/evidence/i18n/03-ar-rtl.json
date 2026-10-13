@@ -1,0 +1,45 @@
+{
+  "name": "03-ar-rtl",
+  "lang": null,
+  "envLocale": "ar",
+  "tabs": [
+    "Rozenite 💎",
+    "Welcome",
+    "Console",
+    "Sources",
+    "Network",
+    "Performance",
+    "Memory",
+    "Components ⚛",
+    "Profiler ⚛",
+    "GraphQL Network",
+    "Altair GraphQL",
+    "لوحة Osudio",
+    "Console"
+  ],
+  "panelTabTitle": "لوحة Osudio",
+  "panelTarget": "rozenite://sample-extension/panel.html",
+  "panel": {
+    "heading": "لوحة أدوات المطور الأساسية",
+    "demo": [
+      "لغة الواجهة: ar (ar)",
+      "اتجاه النص: rtl",
+      "greeting: مرحبا، Ada! لديك 3 رسائل جديدة.",
+      "price: Costs $5 per month",
+      "fallback: (this line exists only in the default locale, en)"
+    ],
+    "direction": "rtl",
+    "getUILanguage": "ar",
+    "acceptLanguages": [
+      "ar",
+      "en-US",
+      "en"
+    ],
+    "checks": [
+      "PASS chrome.i18n resolves messages synchronously with Chrome's semantics"
+    ]
+  },
+  "panelTabTitleFromGetMessage": "لوحة Osudio",
+  "issues": [],
+  "console": []
+}

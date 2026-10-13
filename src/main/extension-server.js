@@ -21,9 +21,11 @@ const { protocol, net } = require("electron");
 const config = require("./config");
 const {
   EXTENSION_SCHEME,
+  I18N_BUNDLE_PATH,
   parseExtensionURL,
 } = require("../shared/protocol");
 const { contentSecurityPolicyFor, unsafeReason } = require("../shared/csp");
+const i18nHost = require("./i18n-host");
 
 // Acceptable extension-id folder names (id == folder name == URL hostname).
 const EXTENSION_ID_RE = /^[A-Za-z0-9._-]+$/;
@@ -34,7 +36,10 @@ const RESERVED_IDS = new Set([".", ".."]);
 // file inside an extension folder can be served under this path, and a real
 // folder named this cannot take the path either — see RESERVED_INNER_PATHS.
 const BACKGROUND_BOOTSTRAP_PATH = "__rozenite_background__";
-const RESERVED_INNER_PATHS = new Set([BACKGROUND_BOOTSTRAP_PATH]);
+// Reserved the same way: the chrome.i18n message bundle of this extension, JSON, read
+// synchronously by the frame's preload before any page script runs
+// (src/main/i18n-host.js says why it travels over this protocol).
+const RESERVED_INNER_PATHS = new Set([BACKGROUND_BOOTSTRAP_PATH, I18N_BUNDLE_PATH]);
 
 /**
  * The containment guard, in one place: the id must be a plausible folder name,
@@ -110,13 +115,36 @@ const registerExtensionSchemePrivileges = () => {
 // Read + parse an extension's manifest.json (host-side, for chrome.runtime.
 // getManifest and for the CSP above). Anything unreadable/invalid degrades to
 // {} — same net effect as the pre-runtime-shim behavior.
+//
+// `__MSG_name__` is replaced here, from the extension's `_locales`, but ONLY in the
+// fields Chrome localizes (name, short_name, description, action.default_title,
+// commands.*.description, omnibox.keyword — src/shared/i18n.js). Everything else stays
+// literal on purpose: a marker in host_permissions, the CSP or a script path must not
+// make what an extension may DO depend on the UI language
+// (docs/features/STORAGE-AND-I18N.md).
 const loadManifest = (extensionId) => {
   const filePath = resolveExtensionFile(extensionId, "manifest.json");
   if (!filePath) {
     return {};
   }
   try {
-    return JSON.parse(fs.readFileSync(filePath, "utf8"));
+    const rawText = fs.readFileSync(filePath, "utf8").replace(/^\uFEFF/, "");
+    const manifest = JSON.parse(rawText);
+    if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) {
+      return {};
+    }
+    try {
+      return i18nHost.localizeManifest({
+        manifest,
+        rawText,
+        root: path.dirname(filePath),
+        extensionId,
+        uiLocaleOverride: config.uiLocale,
+      });
+    } catch (error) {
+      console.warn(`[i18n] ${extensionId}: manifest not localized (${error.message})`);
+      return manifest;
+    }
   } catch {
     return {};
   }
@@ -208,10 +236,54 @@ const registerExtensionProtocol = ({ log = console } = {}) => {
     );
   };
 
+  const serveI18nBundle = (extensionId) => {
+    const root = resolveInsideExtension(extensionId, "");
+    if (!root || !fs.existsSync(root)) {
+      return notFound(extensionId, "i18n bundle for an unknown extension");
+    }
+    const bundle = i18nHost.loadBundle({
+      root,
+      extensionId,
+      uiLocaleOverride: config.uiLocale,
+      log,
+    });
+    return new Response(JSON.stringify(bundle), {
+      status: 200,
+      headers: headersFor(extensionId, { "Content-Type": "application/json; charset=utf-8" }),
+    });
+  };
+
+  // CSS gets `__MSG_name__` (and `__MSG_@@bidi_dir__`) substituted, as in Chrome.
+  const serveLocalizedCss = (extensionId, filePath) => {
+    if (!i18nHost.cssUsesMessages(filePath)) {
+      return null; // the common case: no marker, no extra read — net.fetch serves it
+    }
+    return new Response(
+      i18nHost.localizeCssFile({
+        text: fs.readFileSync(filePath, "utf8"),
+        root: resolveInsideExtension(extensionId, ""),
+        extensionId,
+        uiLocaleOverride: config.uiLocale,
+        log,
+      }),
+      { status: 200, headers: headersFor(extensionId, { "Content-Type": "text/css; charset=utf-8" }) }
+    );
+  };
+
   const serveFile = async (extensionId, innerPath) => {
     const filePath = resolveExtensionFile(extensionId, innerPath);
     if (!filePath || !fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
       return notFound(extensionId, `no such file: ${innerPath || "<empty>"}`);
+    }
+    if (filePath.toLowerCase().endsWith(".css")) {
+      try {
+        const localized = serveLocalizedCss(extensionId, filePath);
+        if (localized) {
+          return localized;
+        }
+      } catch (error) {
+        log.warn(`[i18n] ${extensionId}: ${innerPath} not localized (${error.message})`);
+      }
     }
     // net.fetch (file://) so Chromium picks the MIME type: a module script with
     // the wrong type is a hard load failure, and guessing here would be worse
@@ -243,6 +315,9 @@ const registerExtensionProtocol = ({ log = console } = {}) => {
     if (innerPath === BACKGROUND_BOOTSTRAP_PATH) {
       return serveBootstrap(parsed.extensionId, queryOf(request.url));
     }
+    if (innerPath === I18N_BUNDLE_PATH) {
+      return serveI18nBundle(parsed.extensionId);
+    }
     return serveFile(parsed.extensionId, innerPath);
   });
 
@@ -251,6 +326,7 @@ const registerExtensionProtocol = ({ log = console } = {}) => {
 
 module.exports = {
   BACKGROUND_BOOTSTRAP_PATH,
+  I18N_BUNDLE_PATH,
   bootstrapDocument,
   resolveExtensionFile,
   resolveInsideExtension,

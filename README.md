@@ -35,6 +35,9 @@ Notes:
   app through Metro's `/json/list` and answers on the frontend's `ws` port. Knobs:
   `DEVTOOLS_METRO_HOST` / `DEVTOOLS_METRO_PORT`, `DEVTOOLS_APP_FILTER` /
   `DEVTOOLS_DEVICE_FILTER`, `DEVTOOLS_CDP_PORT`.
+- `chrome.i18n` follows Electron's UI locale (`npm start -- --lang=pt-BR`, or the OS language);
+  `DEVTOOLS_UI_LOCALE=ar` overrides it for extensions only. The sample extension ships
+  `_locales` for en, pt_BR, de and ar ([docs/features/STORAGE-AND-I18N.md](docs/features/STORAGE-AND-I18N.md)).
 - Want the relay outside the shell (or a Chrome tab as the target)? Set
   `DEVTOOLS_CDP_BRIDGE=off` and run `npm run rn-cdp` (RN app) or `npm run fake-cdp`
   (Chrome tab) on that port. The shell's frontend URL is `DEVTOOLS_FRONTEND_URL`

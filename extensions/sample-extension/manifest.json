@@ -1,6 +1,7 @@
 {
-  "name": "Hello Extensions",
-  "description": "Base Level Extension",
+  "name": "__MSG_extName__",
+  "description": "__MSG_extDesc__",
+  "default_locale": "en",
   "version": "1.0",
   "manifest_version": 3,
   "devtools_page": "devtools.html",

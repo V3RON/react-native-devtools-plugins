@@ -41,6 +41,11 @@
    extension frame. `panelId` derives from (extensionId, pagePath), so frontend reloads
    replay the registry and fresh `panels.create` calls dedupe against it.
 
+Panel titles may be localized: `panels.create(chrome.i18n.getMessage("panelTitle"), …)` works
+because `getMessage` is synchronous before the first script (the sample extension's tab reads
+"Painel Osudio" under `--lang=pt-BR`; [STORAGE-AND-I18N.md](STORAGE-AND-I18N.md)), and the
+extension name the host lists comes from the localized manifest (`__MSG_name__`).
+
 All three bundled extensions (`sample-extension` "Osudio", GraphQL Network Inspector,
 Altair GraphQL) register and render this way. The old `setInjectedScriptForOrigin`
 channel (fork-provided devtools script) remains, unused by the stock frontend.
