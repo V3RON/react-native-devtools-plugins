@@ -7,6 +7,7 @@
 // frontend-supplied script to `new Function`. `chrome.devtools.*` is implemented
 // shell-side now (docs/features/DEVTOOLS-PANELS.md), so there is nothing to
 // deliver synchronously and no arbitrary-code-evaluation channel left.
+const fs = require("fs");
 const { ipcMain } = require("electron");
 const preferences = require("./preferences");
 const windowOps = require("./window");
@@ -52,6 +53,8 @@ const {
   RUNTIME_PORT_CLOSE,
   RUNTIME_DELIVER,
   EXT_PANEL_CREATE,
+  EXT_PANEL_VISIBILITY,
+  EXT_PANEL_EVENT,
   THEME_REPORT,
   DEVTOOLS_EVAL,
   DEVTOOLS_RELOAD,
@@ -208,6 +211,17 @@ const extensionIdOfFrame = (event) => {
     return new URL(event.senderFrame.url).hostname;
   } catch {
     return null;
+  }
+};
+
+/** Whether `pagePath` (query/hash ignored) names an existing file inside the extension. */
+const panelPageExists = (extensionId, pagePath) => {
+  const file = pagePath.split(/[?#]/)[0].replace(/^\/+/, "");
+  const resolved = file && extensionServer.resolveExtensionFile(extensionId, file);
+  try {
+    return Boolean(resolved) && fs.statSync(resolved).isFile();
+  } catch {
+    return false;
   }
 };
 
@@ -399,14 +413,33 @@ const registerIpcHandlers = () => {
     } catch {
       return { ok: false };
     }
+    // The page must be a real file of THIS extension: an empty or missing path would
+    // host a tab that can only show a 404, and the old check (does the extension
+    // folder exist) passed for any path.
     if (
       typeof title !== "string" ||
       typeof pagePath !== "string" ||
-      !extensionServer.resolveExtensionFile(extensionId, "")
+      !panelPageExists(extensionId, pagePath)
     ) {
       return { ok: false };
     }
-    return { ok: panelHost.addPanel({ extensionId, title, pagePath }) };
+    // The creating frame owns the Panel object, so it is the one that hears
+    // onShown/onHidden (Chrome gives them to no other context).
+    const key = resolveFrameKey(event);
+    const owner = {
+      send: makeFrameSender(key, event.sender, event.senderFrame, EXT_PANEL_EVENT),
+    };
+    return { ok: panelHost.addPanel({ extensionId, title, pagePath, owner }) };
+  });
+
+  // The frontend reports its tab selection for extension panels. Only the frontend's
+  // own main frame may say so: an extension frame cannot make another extension's
+  // panel look shown, and panelId only selects among panels main already hosts.
+  ipcMain.handle(EXT_PANEL_VISIBILITY, (event, { panelId, shown } = {}) => {
+    if (!isFrontendFrame(event)) {
+      return { ok: false };
+    }
+    return { ok: panelHost.setPanelVisible(panelId, shown === true) };
   });
 
   // The frontend reporting its theme. Identity is the frame (the frontend's own

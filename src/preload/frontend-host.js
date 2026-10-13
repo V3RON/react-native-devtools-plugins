@@ -36,6 +36,7 @@ const {
   HOST_CLOSE_FILE,
   HOST_OPEN_EXTERNAL,
   HOST_CONFIG,
+  EXT_PANEL_VISIBILITY,
 } = require("../shared/ipc");
 
 // ── dispatch channel receiver ───────────────────────────────────────────────
@@ -320,12 +321,18 @@ const InspectorFrontendHost = {
   },
 };
 
-// The panel bridge (src/frontend/panel-bridge.js) reports the theme the frontend is
-// showing through this one-purpose function. It is not part of InspectorFrontendHost
-// (a stock-frontend surface); main accepts it only from this window's main frame.
+// The panel bridge (src/frontend/panel-bridge.js) reports frontend state through these
+// one-purpose functions. They are not part of InspectorFrontendHost (a stock-frontend
+// surface); main accepts each only from this window's main frame.
 contextBridge.exposeInMainWorld("__SHELL_HOST__", {
   reportTheme: (themeName) =>
     ipcRenderer.invoke(THEME_REPORT, { themeName }).catch(() => {}),
+  // An extension panel's tab was selected / deselected: main turns it into
+  // Panel.onShown / onHidden for the devtools page that created the panel.
+  reportPanelVisible: (panelId, shown) =>
+    ipcRenderer
+      .invoke(EXT_PANEL_VISIBILITY, { panelId: String(panelId), shown: shown === true })
+      .catch(() => {}),
 });
 
 // context-bridge bridge: exposeInMainWorld proxies functions; the frontend

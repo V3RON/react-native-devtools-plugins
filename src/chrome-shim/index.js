@@ -195,6 +195,7 @@ const createChromeNamespace = ({
     evalInPage,
     reloadInPage,
     networkApi: networkBridge.network,
+    logger,
   });
 
   const chrome = {
@@ -401,6 +402,13 @@ const createChromeNamespace = ({
       }
       handleDelivery(delivery);
     },
+    enumerable: false,
+  });
+
+  // Host -> frame panel visibility (Panel.onShown / onHidden), fed by the preload from
+  // the EXT_PANEL_EVENT channel. Non-enumerable like handleDelivery.
+  Object.defineProperty(chrome, "handlePanelEvent", {
+    value: devtoolsShim.handlePanelEvent,
     enumerable: false,
   });
 

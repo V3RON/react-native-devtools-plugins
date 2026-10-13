@@ -64,6 +64,13 @@ module.exports = {
   // ── shell-driven extension hosting (docs/features/DEVTOOLS-PANELS.md) ────
   /** ({title, pagePath}) from a devtools frame -> registers a frontend panel. */
   EXT_PANEL_CREATE: "ext-panel-create",
+  /** ({panelId, shown}) from the FRONTEND's main frame when the tab for an extension
+   *  panel is selected / deselected. Accepted from that one frame only (main checks
+   *  the sender against the frontend webContents), never from an extension frame. */
+  EXT_PANEL_VISIBILITY: "ext-panel-visibility",
+  /** main -> devtools-page frame push: {kind: "panel", payload: {pagePath, event}} with
+   *  event "shown" | "hidden". Sent only to the frame that created the panel. */
+  EXT_PANEL_EVENT: "ext-panel-event",
 
   /** ({themeName}) from the FRONTEND's main frame -> the theme the frontend is
    *  showing ("default" | "dark"); main fans changes out to extension contexts as

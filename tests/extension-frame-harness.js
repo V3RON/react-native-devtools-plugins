@@ -45,6 +45,10 @@ const SETTLE_MS = Number(arg("settle") || 900);
 // main frame may send THEME_REPORT. Off by default: nothing else here has a frontend.
 const registerDelayMs = Number(arg("register-delay-ms") || "0");
 const frontendIsHost = ["on", "true", "1"].includes(arg("frontend-host"));
+// Run the PRODUCTION panel bridge (src/frontend/panel-bridge.js) in the loopback page, via
+// panelHost.attach — the page then plays the part of a frontend whose legacy.js is a fake
+// (tests/panel-events-electron.test.js). Implies --frontend-host.
+const panelBridge = ["on", "true", "1"].includes(arg("panel-bridge"));
 const withBackgroundHost = ["on", "true", "1"].includes(arg("background-host"));
 // Which extension id's CSP to report in the `harness` line.
 const reportedExtensionId = arg("extension-id") || "probe.local";
@@ -304,7 +308,16 @@ app
         response.end("nope");
         return;
       }
-      response.writeHead(200, { "content-type": "text/html" });
+      // A file the page asks for that the fixture does not provide is a 404, not an
+      // unhandled stream error (which would be an uncaught exception in main).
+      if (!fs.existsSync(target) || !fs.statSync(target).isFile()) {
+        response.writeHead(404);
+        response.end("not found");
+        return;
+      }
+      response.writeHead(200, {
+        "content-type": inner.endsWith(".js") ? "text/javascript" : "text/html",
+      });
       fs.createReadStream(target).pipe(response);
     });
     await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -316,11 +329,21 @@ app
       height: 700,
       webPreferences: frontendPreferences({ preloadPath: config.preloadPath }),
     });
-    if (frontendIsHost) {
+    if (panelBridge || frontendIsHost) {
       // The shared rule also checks the main frame is still on the frontend ORIGIN
       // (src/main/frontend-frame.js), so the configured frontend URL is this loopback page's.
       config.frontendURL = `http://127.0.0.1:${port}/`;
       require("../src/main/frontend-frame").setFrontendContents(win.webContents);
+    }
+    if (panelBridge) {
+      const { windowOpenHandler } = require("../src/main/window-open-policy");
+      win.webContents.setWindowOpenHandler(windowOpenHandler);
+      require("../src/main/panel-host").attach(win.webContents);
+      app.on("browser-window-created", (_event, created) => {
+        if (created !== win) {
+          note({ kind: "window-created" });
+        }
+      });
     }
 
     const note = (entry) => write(entry);

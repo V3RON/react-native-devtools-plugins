@@ -10,7 +10,8 @@ Per-namespace plans live in [../features/README.md](../features/README.md).
   `src/chrome-shim/devtools.js`, not by a frontend-injected script); `themeName` /
   `setThemeChangeHandler` ✅ in devtools/panel frames (the frontend's real theme, `"default"` | `"dark"`,
   correct from the first script; background contexts learn it async, see the Theme section
-  of the panels doc); `Panel` events,
+  of the panels doc); `Panel.onShown(window)`/`onHidden` ✅ real (host-routed to the creating
+  devtools page; `setWidth` is not a Chrome API);
   `elements` sidebar panes, `sources`, `performance` ❌ →
   [features/DEVTOOLS-PANELS.md](../features/DEVTOOLS-PANELS.md). `recorder` 🚫.
   `openExtensionInDevtools(descriptor)` 🔧 (install flow).

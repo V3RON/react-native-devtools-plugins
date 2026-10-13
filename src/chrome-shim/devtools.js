@@ -13,6 +13,7 @@
 // bridge; the rest are inert shapes per the stubbing rule of thumb
 // (docs/OVERVIEW.md) — extensions feature-detect by calling.
 const { createEvent } = require("./event");
+const { panelIdFor } = require("../shared/protocol");
 
 // Stable synthetic inspectedWindow.tabId (Chrome's is a small positive int).
 const tabIdFor = (extensionId) => {
@@ -70,13 +71,51 @@ const createDevtools = ({
   reloadInPage = () => Promise.resolve(),
   logger = console,
 }) => {
-  const createPanel = (title, pagePath) => ({
-    onShown: createEvent(), // deviation: never fires until panel events land
-    onHidden: createEvent(),
-    setWidth: () => {},
-    _title: title,
-    _pagePath: pagePath,
-  });
+  // Every Panel this context created, so a host panel event can find them. Matched on
+  // the exact pagePath the frame passed to panels.create: the host echoes that string
+  // back (src/main/panel-host.js keeps the creator's own spelling), so no path
+  // normalization has to agree across the two sides.
+  const createdPanels = [];
+
+  // Chrome fires onShown with the panel page's window. A Window cannot cross the
+  // contextBridge from this isolated world, so the events fire argument-less here and
+  // the preload's main-world half resolves the window and appends it
+  // (src/preload/extension-frame.js, docs/features/DEVTOOLS-PANELS.md).
+  // `setWidth` is not a Chrome ExtensionPanel method (Chrome has createStatusBarButton
+  // and onSearch); it stays an inert shape for extensions that probe for it.
+  const createPanel = (title, pagePath) => {
+    const panel = {
+      onShown: createEvent(),
+      onHidden: createEvent(),
+      setWidth: () => {},
+      _title: title,
+      _pagePath: pagePath,
+    };
+    createdPanels.push(panel);
+    return panel;
+  };
+
+  /**
+   * A host panel event ({pagePath, event: "shown" | "hidden"}) for the panels this
+   * context created. A throwing listener is reported, not rethrown: one bad listener
+   * must not stop the delivery to the next panel.
+   */
+  const handlePanelEvent = (delivery) => {
+    const event = delivery && delivery.event;
+    if (event !== "shown" && event !== "hidden") {
+      return;
+    }
+    for (const panel of createdPanels) {
+      if (panel._pagePath !== delivery.pagePath) {
+        continue;
+      }
+      try {
+        (event === "shown" ? panel.onShown : panel.onHidden)._fire();
+      } catch (error) {
+        logger.error(`[devtools.panels] panel event listener threw:`, error);
+      }
+    }
+  };
 
   // Chrome's values: "default" (light) or "dark". Starts at the frontend's own
   // pre-detection default; the host's answer arrives via setThemeName()
@@ -110,6 +149,10 @@ const createDevtools = ({
     // `themeName` as a live getter in the page world over this helper (same
     // trick as runtime.lastError) and deletes it from the exposed object.
     _getThemeName: () => themeName,
+    // The id of the iframe the host names after a panel (shared with the host, so both
+    // sides agree). The preload's main-world half uses it to find the panel's window and
+    // deletes it from the page-visible object, like _getThemeName.
+    _panelIdFor: (pagePath) => panelIdFor(extensionId, pagePath),
     create(title, iconPath, pagePath, cb) {
       const panel = createPanel(title, pagePath);
       onPanelCreated({ title, pagePath });
@@ -272,6 +315,7 @@ const createDevtools = ({
   const network = { ...NO_NETWORK, ...(networkApi || {}) };
 
   return {
+    handlePanelEvent,
     setThemeName,
     namespace: {
       inspectedWindow,

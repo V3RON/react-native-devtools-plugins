@@ -1,0 +1,165 @@
+// Panel.onShown / onHidden (docs/features/DEVTOOLS-PANELS.md): the shim half
+// (src/chrome-shim/devtools.js handlePanelEvent) and the host half
+// (src/main/panel-host.js setPanelVisible) — who hears a panel's
+// visibility, who may report it, and that a reload or a repeat report cannot
+// produce a phantom event. The live end-to-end run is documented in
+// docs/evidence/panel-events/.
+// Run: npm test
+const test = require("node:test");
+const assert = require("node:assert");
+
+const { createDevtools } = require("../src/chrome-shim/devtools");
+const panelHost = require("../src/main/panel-host");
+const { panelIdFor } = require("../src/shared/protocol");
+
+const tick = () => new Promise((resolve) => setTimeout(resolve, 5));
+
+const makeShim = (extensionId = "my-ext") => {
+  const errors = [];
+  const shim = createDevtools({
+    extensionId,
+    onPanelCreated: () => {},
+    logger: { error: (...args) => errors.push(args), warn: () => {}, log: () => {} },
+  });
+  const create = async (path) => {
+    let panel;
+    shim.namespace.panels.create("P", null, path, (p) => {
+      panel = p;
+    });
+    await tick();
+    return panel;
+  };
+  return { shim, create, errors };
+};
+
+test("a host panel event fires onShown / onHidden of the panel created at that pagePath only", async () => {
+  const { shim, create } = makeShim();
+  const mine = await create("/panel.html");
+  const other = await create("/other.html");
+  const seen = [];
+  mine.onShown.addListener((...args) => seen.push(["mine.shown", args.length]));
+  mine.onHidden.addListener(() => seen.push("mine.hidden"));
+  other.onShown.addListener(() => seen.push("other.shown"));
+
+  shim.handlePanelEvent({ pagePath: "/panel.html", event: "shown" });
+  shim.handlePanelEvent({ pagePath: "/panel.html", event: "hidden" });
+  assert.deepStrictEqual(seen, [["mine.shown", 0], "mine.hidden"]);
+});
+
+test("junk panel events are ignored and a throwing listener does not stop the next", async () => {
+  const { shim, create, errors } = makeShim();
+  const panel = await create("/panel.html");
+  const seen = [];
+  panel.onShown.addListener(() => {
+    throw new Error("bad listener");
+  });
+  panel.onShown.addListener(() => seen.push("second"));
+
+  shim.handlePanelEvent(null);
+  shim.handlePanelEvent({ pagePath: "/panel.html", event: "exploded" });
+  shim.handlePanelEvent({ pagePath: "/missing.html", event: "shown" });
+  assert.deepStrictEqual(seen, []);
+
+  shim.handlePanelEvent({ pagePath: "/panel.html", event: "shown" });
+  assert.strictEqual(errors.length, 1, "the bad listener is reported");
+});
+
+test("the shim names a panel's iframe with the id the host derives, off the Panel object", async () => {
+  const { shim, create } = makeShim("sample-extension");
+  const panel = await create("/panel.html");
+  assert.strictEqual(shim.namespace.panels._panelIdFor("/panel.html"), panelIdFor("sample-extension", "/panel.html"));
+  assert.strictEqual(panel._panelId, undefined, "the id is not on the page-visible Panel");
+});
+
+test("panelIdFor is injective across extensions (the old join was not)", () => {
+  // both were "ext.exta.panel.html" before the extension id was length-prefixed
+  const one = panelIdFor("exta", "panel.html");
+  const two = panelIdFor("exta.panel", "html");
+  assert.notStrictEqual(one, two);
+  assert.match(one, /^[A-Za-z0-9.-]+$/);
+  assert.match(two, /^[A-Za-z0-9.-]+$/);
+  assert.strictEqual(panelIdFor("exta", "/panel.html"), one, "leading slash is not part of the identity");
+  assert.notStrictEqual(panelIdFor("a", "b.c"), panelIdFor("a.b", "c"));
+});
+
+// ── host half ────────────────────────────────────────────────────────────────
+const register = (extensionId, pagePath, send) =>
+  panelHost.addPanel({ extensionId, title: "T", pagePath, owner: send ? { send } : undefined });
+
+test("setPanelVisible delivers one event per real transition, to the creating frame only", () => {
+  const a = [];
+  const b = [];
+  register("ext-a", "/p.html", (d) => a.push(d));
+  register("ext-b", "/p.html", (d) => b.push(d));
+  const id = panelIdFor("ext-a", "/p.html");
+
+  assert.strictEqual(panelHost.setPanelVisible(id, true), true);
+  assert.strictEqual(panelHost.setPanelVisible(id, true), false, "repeat shown is not an event");
+  assert.strictEqual(panelHost.setPanelVisible(id, false), true);
+  assert.strictEqual(panelHost.setPanelVisible(id, false), false, "repeat hidden is not an event");
+
+  assert.deepStrictEqual(a, [
+    { kind: "panel", payload: { pagePath: "/p.html", event: "shown" } },
+    { kind: "panel", payload: { pagePath: "/p.html", event: "hidden" } },
+  ]);
+  assert.deepStrictEqual(b, [], "another extension's frame hears nothing");
+});
+
+test("an unknown or non-string panelId is not an event", () => {
+  assert.strictEqual(panelHost.setPanelVisible("ext.nobody.nothing", true), false);
+  assert.strictEqual(panelHost.setPanelVisible(undefined, true), false);
+  assert.strictEqual(panelHost.setPanelVisible({ toString: () => "x" }, true), false);
+});
+
+test("another extension cannot take over a panel's seat or hijack its events", () => {
+  const owner = [];
+  const thief = [];
+  assert.strictEqual(register("exta", "panel.html", (d) => owner.push(d)), true);
+  // the colliding pair: extension "exta.panel" asking for page "html"
+  assert.strictEqual(register("exta.panel", "html", (d) => thief.push(d)), true);
+  panelHost.setPanelVisible(panelIdFor("exta", "panel.html"), true);
+  assert.strictEqual(owner.length, 1);
+  assert.deepStrictEqual(thief, []);
+  // ids that only collide after sanitizing ("a b" and "a-b"): the second claimant is refused
+  assert.strictEqual(register("a b", "p.html", () => {}), true);
+  assert.strictEqual(register("a-b", "p.html", () => {}), false, "a different extension may not re-claim the id");
+});
+
+test("a re-created panel (reloaded devtools page) moves the seat; the old frame goes quiet", () => {
+  const stale = [];
+  const fresh = [];
+  register("ext-c", "/p.html", (d) => stale.push(d));
+  // the devtools page reloads and calls panels.create again: dedupe keeps the tab,
+  // the new frame becomes the owner
+  register("ext-c", "/p.html", (d) => fresh.push(d));
+  const id = panelIdFor("ext-c", "/p.html");
+
+  panelHost.setPanelVisible(id, true);
+  assert.deepStrictEqual(stale, []);
+  assert.strictEqual(fresh.length, 1);
+});
+
+// ── showPanel (host -> frontend) ─────────────────────────────────────────────
+test("showPanel only asks the frontend to show a panel this host registered", async () => {
+  const { setFrontendWebContents } = require("../src/main/dispatch");
+  const { HOST_EVENT } = require("../src/shared/ipc");
+  const sent = [];
+  setFrontendWebContents({ isDestroyed: () => false, send: (channel, payload) => sent.push([channel, payload]) });
+
+  register("ext-show", "/p.html");
+  const id = panelIdFor("ext-show", "/p.html");
+  assert.strictEqual(await panelHost.showPanel(id), true);
+  assert.deepStrictEqual(sent, [[HOST_EVENT, { name: "showPanel", args: [id] }]]);
+
+  assert.strictEqual(await panelHost.showPanel("ext.9.nobody.x.html"), false, "unregistered id");
+  assert.strictEqual(await panelHost.showPanel("network"), false, "a built-in tab is not ours to show");
+  assert.strictEqual(await panelHost.showPanel(undefined), false);
+  assert.strictEqual(sent.length, 1, "nothing else was dispatched");
+});
+
+test("the frontend window denies every window.open", () => {
+  const { windowOpenHandler } = require("../src/main/window-open-policy");
+  for (const url of ["", "about:blank", "about:blank#x", "about:srcdoc", "https://example.com", "rozenite://exta/panel.html"]) {
+    assert.deepStrictEqual(windowOpenHandler({ url }), { action: "deny" }, url);
+  }
+});
