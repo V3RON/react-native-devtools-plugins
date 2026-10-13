@@ -30,6 +30,20 @@ native Electron `Menu` from the `ContextMenuDescriptor[]` (pure mapping in
 `src/main/context-menu.js`, unit-tested) and pops it; the selection returns as
 `contextMenuItemSelected(id)` and close as `contextMenuCleared`.
 
+Second consumer, and the first one observed arriving end to end in a real run: the **file
+save family** (`src/main/host-files.js`). `InspectorFrontendHost.save/append` answer with
+`savedURL(url, fileSystemPath)`, `canceledSaveURL(url)` and `appendedToURL(url)`, which the
+frontend's `FileManager` turns into the promise `save()` returns and the progress of a
+streamed write (Console "Save as…", Network "Export HAR…";
+[evidence](../evidence/electron-leftovers/README.md)). Note the hosted frontend draws its
+own **soft** context menu, so the native-menu path above is not what the stock UI exercises.
+
+**A bug this surfaced:** the preload's receiver called
+`contextBridge.executeInMainWorld({func, arguments: [...]})`. Electron's option is `args`;
+`arguments` is silently ignored, so the function ran with no arguments and every event was
+dropped as `InspectorFrontendAPI.undefined not ready`. Fixed, with a source-level guard in
+`tests/host-primitives.test.js`.
+
 Also landed with it: async-only IPC for everything new (`invoke`/`handle` —
 `src/shared/ipc.js` house rule), and preferences/zoom/window ops now REAL.
 

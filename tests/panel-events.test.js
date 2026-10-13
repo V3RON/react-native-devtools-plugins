@@ -1,6 +1,6 @@
 // Panel.onShown / onHidden (docs/features/DEVTOOLS-PANELS.md): the shim half
 // (src/chrome-shim/devtools.js handlePanelEvent) and the host half
-// (src/main/panel-host.js setPanelVisible / isFrontendFrame) — who hears a panel's
+// (src/main/panel-host.js setPanelVisible) — who hears a panel's
 // visibility, who may report it, and that a reload or a repeat report cannot
 // produce a phantom event. The live end-to-end run is documented in
 // docs/evidence/panel-events/.
@@ -139,23 +139,6 @@ test("a re-created panel (reloaded devtools page) moves the seat; the old frame 
   assert.strictEqual(fresh.length, 1);
 });
 
-test("only the frontend's own main frame may report visibility", () => {
-  const frontend = { on: () => {}, isDestroyed: () => false, mainFrame: { id: "main" } };
-  panelHost.attach(frontend);
-  const frame = frontend.mainFrame;
-  assert.strictEqual(panelHost.isFrontendFrame({ sender: frontend, senderFrame: frame }), true);
-  // an extension iframe inside the SAME webContents is not the main frame
-  assert.strictEqual(
-    panelHost.isFrontendFrame({ sender: frontend, senderFrame: { id: "ext-iframe" } }),
-    false
-  );
-  // nor is any other webContents (e.g. a background context's window)
-  assert.strictEqual(
-    panelHost.isFrontendFrame({ sender: { mainFrame: frame }, senderFrame: frame }),
-    false
-  );
-});
-
 // ── showPanel (host -> frontend) ─────────────────────────────────────────────
 test("showPanel only asks the frontend to show a panel this host registered", async () => {
   const { setFrontendWebContents } = require("../src/main/dispatch");
@@ -174,9 +157,9 @@ test("showPanel only asks the frontend to show a panel this host registered", as
   assert.strictEqual(sent.length, 1, "nothing else was dispatched");
 });
 
-test("the frontend window denies blank window.open but keeps real opens", () => {
+test("the frontend window denies every window.open", () => {
   const { windowOpenHandler } = require("../src/main/window-open-policy");
-  assert.deepStrictEqual(windowOpenHandler({ url: "" }), { action: "deny" });
-  assert.deepStrictEqual(windowOpenHandler({ url: "about:blank" }), { action: "deny" });
-  assert.deepStrictEqual(windowOpenHandler({ url: "https://example.com" }), { action: "allow" });
+  for (const url of ["", "about:blank", "about:blank#x", "about:srcdoc", "https://example.com", "rozenite://exta/panel.html"]) {
+    assert.deepStrictEqual(windowOpenHandler({ url }), { action: "deny" }, url);
+  }
 });

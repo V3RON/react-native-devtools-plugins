@@ -1,0 +1,154 @@
+{
+  "hostConfig": {
+    "aidaAvailability": {
+      "enabled": false,
+      "blockedByAge": false,
+      "blockedByGeo": false,
+      "blockedByEnterprisePolicy": false,
+      "disallowLogging": true
+    },
+    "devToolsConsoleInsights": {
+      "enabled": false
+    },
+    "devToolsFreestyler": {
+      "enabled": false
+    },
+    "devToolsAiAssistanceNetworkAgent": {
+      "enabled": false
+    },
+    "devToolsAiAssistanceFileAgent": {
+      "enabled": false
+    },
+    "devToolsAiAssistancePerformanceAgent": {
+      "enabled": false
+    },
+    "devToolsAiGeneratedTimelineLabels": {
+      "enabled": false
+    },
+    "devToolsPrivacyUI": {
+      "enabled": false
+    },
+    "thirdPartyCookieControls": {
+      "thirdPartyCookieMetadataEnabled": false,
+      "thirdPartyCookieHeuristicsEnabled": false,
+      "managedBlockThirdPartyCookies": "Unset"
+    },
+    "devToolsVeLogging": {
+      "enabled": false
+    },
+    "isOffTheRecord": false
+  },
+  "drawerTabsDefault": [
+    "Rozenite 💎",
+    "Welcome",
+    "Console",
+    "Sources",
+    "Network",
+    "Performance",
+    "Memory",
+    "Components ⚛",
+    "Console"
+  ],
+  "consoleMenuEntry": "Save as...",
+  "consoleSaveFile": "127.0.0.1-1791902297958.log",
+  "consoleSaveContent": " leftovers: hello from the inspected page #12\n leftovers: a warning line #12\ntick @ 127.0.0.1/:9\nsetInterval\n(anonymous) @ 127.0.0.1/:16\n leftovers: fetched {\"ok\":true,\"n\":42}\n leftovers: hello from the inspected page #13\n leftovers: fetched {\"ok\":true,\"n\":42}\n leftovers: hello from the inspected page #14\n leftovers: fetched {\"ok\":true,\"n\":42}\n leftovers: hello from the inspected page #15\n leftovers: a warning line #15\ntick @ 127.0.0.1/:9\nsetInterval\n(anonymous) @ 127.0.0.1/:16\n leftovers: an error line #15\ntick @ 127.0.0.1/:10\nsetInterval\n(anonymous) @ 127.0.0.1/:16\n leftovers: fetched {\"ok\":true,\"n\":42}\n",
+  "consoleEvents": [
+    [
+      "savedURL",
+      "127.0.0.1-1791902297958.log",
+      "<outDir>/saved/127.0.0.1-1791902297958.log"
+    ],
+    [
+      "appendedToURL",
+      "127.0.0.1-1791902297958.log"
+    ]
+  ],
+  "consoleCalls": [
+    [
+      "save",
+      "127.0.0.1-1791902297958.log",
+      0
+    ],
+    [
+      "append",
+      "127.0.0.1-1791902297958.log",
+      613
+    ],
+    [
+      "close",
+      "127.0.0.1-1791902297958.log",
+      0
+    ]
+  ],
+  "networkRows": 5,
+  "rowMenuEntry": "Open in new tab",
+  "openLogAfterRowMenu": [
+    "http://127.0.0.1:9295/"
+  ],
+  "harMenuEntry": "Export HAR (sanitized)...",
+  "harFile": "127.0.0.1.har",
+  "harEntries": [
+    "GET http://127.0.0.1:9295/",
+    "GET http://127.0.0.1:9295/data.json?n=1",
+    "GET http://127.0.0.1:9295/favicon.ico",
+    "GET http://127.0.0.1:9295/data.json?n=2",
+    "GET http://127.0.0.1:9295/data.json?n=3",
+    "GET http://127.0.0.1:9295/data.json?n=4"
+  ],
+  "harEvents": [
+    [
+      "savedURL",
+      "127.0.0.1.har",
+      "<outDir>/saved/127.0.0.1.har"
+    ],
+    [
+      "appendedToURL",
+      "127.0.0.1.har"
+    ]
+  ],
+  "openLog": [
+    "http://127.0.0.1:9295/",
+    "https://reactnative.dev/docs/debugging",
+    "http://localhost:8081/rozenite/"
+  ],
+  "openRefusals": [
+    "InspectorFrontendHost.openInNewTab: refused to open a URL that is not http(s): file:///etc/passwd",
+    "InspectorFrontendHost.openInNewTab: refused to open a URL that is not http(s): javascript:alert(1)",
+    "InspectorFrontendHost.openInNewTab: refused to open a URL that is not http(s): smb://host/share",
+    "InspectorFrontendHost.openInNewTab: refused to open a URL that is not http(s): ms-msdt:/id",
+    "InspectorFrontendHost.openInNewTab: refused to open a URL that is not http(s): not a url"
+  ],
+  "cancelEvents": [
+    [
+      "canceledSaveURL",
+      "127.0.0.1-1791902318613.log"
+    ]
+  ],
+  "cancelCalls": [
+    [
+      "save",
+      "127.0.0.1-1791902318613.log",
+      0
+    ]
+  ],
+  "cancelFilesWritten": [],
+  "overrideAida": {
+    "enabled": true,
+    "blockedByAge": false,
+    "blockedByGeo": false,
+    "blockedByEnterprisePolicy": false,
+    "disallowLogging": true
+  },
+  "drawerTabsOverride": [
+    "Rozenite 💎",
+    "Welcome",
+    "Console",
+    "Sources",
+    "Network",
+    "Performance",
+    "Memory",
+    "Components ⚛",
+    "Console",
+    "AI assistance"
+  ]
+}

@@ -13,7 +13,6 @@ const fs = require("fs");
 const path = require("path");
 const { scanExtensions } = require("./extensions");
 const { buildExtensionURL, panelIdFor } = require("../shared/protocol");
-const { isMainFrameOf } = require("./theme-host");
 const { dispatchToFrontend } = require("./dispatch");
 const config = require("./config");
 
@@ -41,6 +40,13 @@ const hosted = new Map(); // panelId -> promise: the bridge has added the tab
 // DEVTOOLS_SHOW_PANEL=<extensionId>[/<pagePath>]: open the shell on that extension's
 // panel, once, the first time it registers (the host-internal consumer of showPanel).
 let startupPanel = config.showPanel ? String(config.showPanel).trim() : "";
+if (startupPanel.endsWith("/")) {
+  console.warn(
+    `[extensions] DEVTOOLS_SHOW_PANEL="${startupPanel}" has an empty page path, so it can never ` +
+      "match a panel; use <extensionId> or <extensionId>/<pagePath>"
+  );
+  startupPanel = "";
+}
 const matchesStartupPanel = (extensionId, pagePath) => {
   if (!startupPanel) {
     return false;
@@ -165,23 +171,4 @@ const showPanel = (panelId) => {
   );
 };
 
-/** Whether an IPC event came from the frontend window's own main frame. */
-const isFrontendFrame = (event) => isMainFrameOf(contents, event);
-
-/**
- * Name the frontend window without booting the bridge in it. `attach` does this for the
- * app; the Electron test harness (a loopback page standing in for the frontend) calls it
- * directly so THEME_REPORT has a frontend to be accepted from.
- */
-const setFrontendContents = (webContents) => {
-  contents = webContents;
-};
-
-module.exports = {
-  attach,
-  addPanel,
-  showPanel,
-  isFrontendFrame,
-  setFrontendContents,
-  setPanelVisible,
-};
+module.exports = { attach, addPanel, showPanel, setPanelVisible };

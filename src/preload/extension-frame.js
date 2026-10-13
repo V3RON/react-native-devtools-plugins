@@ -227,7 +227,18 @@ const chrome = createChromeNamespace({
         windowId: details.windowId,
         active: details.active,
       })
-    ).then((reply) => (reply && reply.ok ? { via: reply.via ?? null, handle: reply.handle } : { via: null })),
+    ).then((reply) => {
+      if (reply && reply.ok) {
+        return { via: reply.via ?? null, handle: reply.handle };
+      }
+      // Nothing opened: the tab still resolves with `openedVia: null` (Chrome's `create`
+      // has no refusal to model), but WHY — a scheme outside the http(s) allowlist, an
+      // opener that failed — is said here rather than dropped.
+      if (reply && reply.error) {
+        console.warn(`[chrome.tabs] tabs.create opened nothing: ${reply.error}`);
+      }
+      return { via: null };
+    }),
   closeTabById: (handle) =>
     asRegisteredCaller(() => ipcRenderer.invoke(TABS_CLOSE, { handle })).then(
       (closed) => Boolean(closed)
@@ -434,9 +445,10 @@ contextBridge.executeInMainWorld({
     merged.runtime = { ...(window.chrome && window.chrome.runtime), ...bridge.runtime };
     merged.devtools = { ...(window.chrome && window.chrome.devtools), ...bridge.devtools };
     // themeName must stay live (a cloned getter would freeze at expose time).
-    // Known leftover: `window.chromeElectron` is the raw bridge object and still carries
-    // the expose-time snapshot of `themeName` plus `_getThemeName`; it is the shell's own
-    // handle (like `chromeElectron.runtime`), not part of `chrome.*`.
+    // `window.chromeElectron` is the raw bridge object (expose-time `themeName` snapshot,
+    // `_getThemeName`, `_panelIdFor`, `_getLastLastError`, the unwrapped `panels.create`);
+    // it is deleted at the end of this function, and the getters below keep their own
+    // reference to it.
     merged.devtools.panels = { ...merged.devtools.panels };
     Object.defineProperty(merged.devtools.panels, "themeName", {
       get: () => bridge.devtools.panels._getThemeName(),
@@ -454,7 +466,7 @@ contextBridge.executeInMainWorld({
     // NAMED after its panel id: `window.open("", name)` resolves an existing named frame
     // without navigating it and returns its WindowProxy, which is fully scriptable from
     // here once the panel has loaded, because both pages are `rozenite://<id>`. The
-    // shell denies every blank window.open (src/main/window-open-policy.js), so a name that matches no
+    // shell denies every window.open (src/main/window-open-policy.js), so a name that matches no
     // frame gives null instead of a popup. The listeners of one panel are serialized, so
     // onHidden can never overtake an onShown that is still waiting for the panel to load.
     const panels = merged.devtools.panels;
@@ -543,5 +555,10 @@ contextBridge.executeInMainWorld({
     }
 
     window.chrome = merged;
+    try {
+      delete window.chromeElectron;
+    } catch {
+      // not configurable on some embedders: the handle then stays, as before
+    }
   },
 });

@@ -71,10 +71,10 @@ channel (fork-provided devtools script) remains, unused by the stock frontend.
    with `window.open("", name)`, which returns an existing named frame without navigating it.
    Devtools page and panel page are both `rozenite://<id>`, so the window is fully scriptable
    (the sample extension writes into the panel's DOM through it). `window.parent.frames`
-   cannot be used: the panel frame sits in a shadow tree. The frontend window denies every
-   blank `window.open` (`src/main/window-open-policy.js`), so a name that matches no frame —
-   or another extension's panel, which is cross-origin — gives `null`/an opaque proxy instead
-   of spawning a window.
+   cannot be used: the panel frame sits in a shadow tree. The frontend window denies **every**
+   `window.open` (`src/main/window-open-policy.js`; nothing here needs one — `openInNewTab`
+   goes through the host), so a name that matches no frame — or another extension's panel,
+   which is cross-origin — gives `null`/an opaque proxy instead of spawning a window.
    - The **first** show is reported once the panel iframe has **loaded** (or after a 1.5 s
      grace period), because the window only exists usefully after that; `onShown` may thus lag
      the click by the page's load time, bounded (grace 1.5 s plus up to ~3 s waiting for the
@@ -141,8 +141,9 @@ Divergences, stated plainly:
   script runs. Main normalises it away too (`stripThemeHintFromUrl`) before it records the
   frame's address for the message router, the frame observers and tab messages, so
   `MessageSender.url` is never hinted — asserted by the Electron test.
-- `window.chromeElectron` (the shell's raw bridge handle) keeps an expose-time `themeName`
-  snapshot; `chrome.devtools.panels.themeName` is the live one.
+- `window.chromeElectron` (the shell's raw bridge handle, which carried an expose-time
+  `themeName` snapshot and the internal helpers) is deleted from the page world once
+  `chrome.*` is assembled; `chrome.devtools.panels.themeName` is the live getter.
 - Test coverage: `tests/theme.test.js` (rules, frame check, hint parsing, byte-preserving
   strip) and `tests/theme-electron.test.js` (real broadcast, page-world surface, stripping,
   `sender.url`). The Electron run holds every register reply back (`--register-delay-ms`), so
@@ -157,7 +158,7 @@ ID") — `panelIdFor` sanitizes path separators/underscores accordingly.
 
 | Sub-API | Status | Notes |
 | --- | --- | --- |
-| `panels.create` | 🟨 | works; `width`/`icon` cosmetic bits unverified |
+| `panels.create` | 🟨 | works; `width`/`icon` cosmetic bits unverified. **Divergence:** a `pagePath` that is not an existing file of the calling extension (including an empty one) is refused — no tab is created — where Chrome creates the tab and shows its 404 |
 | `Panel.onShown/onHidden` | ✅ | real, incl. the panel `window` argument and panel pages that stay alive across hide/show; see [Panel events](#panel-events-panelonshown--onhidden). Verified live: [../evidence/panel-events/](../evidence/panel-events/README.md) |
 | `Panel.setWidth` | n/a | not a Chrome API (`ExtensionPanel` has none); inert shape kept |
 | `Panel.onSearch`, `createStatusBarButton` | ❌ | not implemented (deprecated / search UI) |

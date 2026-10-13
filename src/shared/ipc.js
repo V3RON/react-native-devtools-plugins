@@ -32,6 +32,15 @@ module.exports = {
    *  click a synthetic `<a download>` at a `blob:` URL, which told nobody whether
    *  anything was written; now it is the same service `chrome.downloads` uses. */
   HOST_SAVE: "host-save",
+  /** ({url, content}) -> `InspectorFrontendHost.append` to the file a prior save of
+   *  `url` chose; replies via `appendedToURL` on the dispatch channel. */
+  HOST_APPEND: "host-append",
+  /** ({url}) -> `InspectorFrontendHost.close`: forget the handle a save of `url` made. */
+  HOST_CLOSE_FILE: "host-close-file",
+  /** ({url}) -> `InspectorFrontendHost.openInNewTab` through the scheme allowlist. */
+  HOST_OPEN_EXTERNAL: "host-open-external",
+  /** () -> the host config object `InspectorFrontendHost.getHostConfig` returns. */
+  HOST_CONFIG: "host-config",
 
   // ── chrome.runtime (docs/features/RUNTIME-MESSAGING.md) ──────────────────
   /** () -> manifest of the calling frame's extension (id from frame URL). */
@@ -66,7 +75,7 @@ module.exports = {
   /** ({themeName}) from the FRONTEND's main frame -> the theme the frontend is
    *  showing ("default" | "dark"); main fans changes out to extension contexts as
    *  RUNTIME_DELIVER {kind: "theme"}. Accepted only from the frontend window's own
-   *  main frame (src/main/panel-host.js isFrontendFrame), never from an extension. */
+   *  main frame (src/main/frontend-frame.js isFrontendFrame), never from an extension. */
   THEME_REPORT: "theme-report",
 
   // ── inspected window (docs/features/INSPECTED-WINDOW.md) ──────────────────

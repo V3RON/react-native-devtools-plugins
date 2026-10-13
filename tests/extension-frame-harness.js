@@ -329,6 +329,12 @@ app
       height: 700,
       webPreferences: frontendPreferences({ preloadPath: config.preloadPath }),
     });
+    if (panelBridge || frontendIsHost) {
+      // The shared rule also checks the main frame is still on the frontend ORIGIN
+      // (src/main/frontend-frame.js), so the configured frontend URL is this loopback page's.
+      config.frontendURL = `http://127.0.0.1:${port}/`;
+      require("../src/main/frontend-frame").setFrontendContents(win.webContents);
+    }
     if (panelBridge) {
       const { windowOpenHandler } = require("../src/main/window-open-policy");
       win.webContents.setWindowOpenHandler(windowOpenHandler);
@@ -338,8 +344,6 @@ app
           note({ kind: "window-created" });
         }
       });
-    } else if (frontendIsHost) {
-      require("../src/main/panel-host").setFrontendContents(win.webContents);
     }
 
     const note = (entry) => write(entry);

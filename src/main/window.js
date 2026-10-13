@@ -11,6 +11,7 @@ const { frontendPreferences } = require("./frame-security");
 const { setFrontendWebContents } = require("./dispatch");
 const panelHost = require("./panel-host");
 const { windowOpenHandler } = require("./window-open-policy");
+const { setFrontendContents, guardNavigation } = require("./frontend-frame");
 
 let currentWindow = null;
 
@@ -26,6 +27,8 @@ const createWindow = () => {
   win.loadURL(config.frontendURL);
   currentWindow = win;
   setFrontendWebContents(win.webContents);
+  setFrontendContents(win.webContents); // who may call the frontend-only IPC channels
+  guardNavigation(win.webContents); // ...and the frontend cannot be navigated away from its origin
   panelHost.attach(win.webContents); // shell-driven extensions (panel-bridge)
 
   win.on("closed", () => {

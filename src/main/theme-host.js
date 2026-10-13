@@ -7,8 +7,8 @@
 // the one place that remembers it and fans a change out to every reachable
 // extension context. Chrome's vocabulary: "default" (light) | "dark".
 //
-// Pure: the fan-out and the frame check are injected, so the rules are unit-tested
-// under bare Node.
+// Pure: the fan-out and the frame check are injected (the check is
+// src/main/frontend-frame.js `isFrontendFrame`), so the rules are unit-tested under bare Node.
 const { THEME_NAMES } = require("../shared/theme");
 
 /**
@@ -39,21 +39,6 @@ const createThemeHost = ({ broadcast }) => {
 };
 
 /**
- * Whether an IPC event came from `contents`' own main frame — the only principal
- * allowed to report frontend state. Extension iframes live in the same webContents
- * but are different frames, so this is decided by frame, not by sender.
- */
-const isMainFrameOf = (contents, event) =>
-  Boolean(
-    contents &&
-      !contents.isDestroyed() &&
-      event &&
-      event.sender === contents &&
-      event.senderFrame &&
-      event.senderFrame === contents.mainFrame
-  );
-
-/**
  * The THEME_REPORT handler body. The frame is checked FIRST; the payload is not
  * even looked at for a caller that is not the frontend.
  */
@@ -66,4 +51,4 @@ const createThemeReportHandler =
     return { ok: true, changed: themeHost.report(payload ? payload.themeName : undefined) };
   };
 
-module.exports = { createThemeHost, createThemeReportHandler, isMainFrameOf, THEME_NAMES };
+module.exports = { createThemeHost, createThemeReportHandler, THEME_NAMES };

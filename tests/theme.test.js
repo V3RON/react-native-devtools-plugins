@@ -16,8 +16,8 @@ const {
 const {
   createThemeHost,
   createThemeReportHandler,
-  isMainFrameOf,
 } = require("../src/main/theme-host");
+const { isFrontendFrame } = require("../src/main/frontend-frame");
 const { createContextRegistry } = require("../src/main/context-registry");
 const { takeThemeHint, stripThemeHintFromUrl, THEME_PARAM } = require("../src/shared/theme");
 
@@ -116,11 +116,12 @@ test("theme host broadcasts only real, valid changes", () => {
 test("THEME_REPORT: only the frontend's own main frame is believed, payload or not", () => {
   const sent = [];
   const host = createThemeHost({ broadcast: (d) => sent.push(d) });
-  const mainFrame = { id: "main" };
+  const FRONTEND = "http://127.0.0.1:8081/";
+  const mainFrame = { id: "main", url: `${FRONTEND}rozenite/rn_fusebox.html?ws=x` };
   const contents = { isDestroyed: () => false, mainFrame };
   const handler = createThemeReportHandler({
     themeHost: host,
-    isFrontendFrame: (event) => isMainFrameOf(contents, event),
+    isFrontendFrame: (event) => isFrontendFrame(event, { contents, frontendURL: FRONTEND }),
   });
   const payload = { themeName: "dark" };
 
@@ -138,12 +139,20 @@ test("THEME_REPORT: only the frontend's own main frame is believed, payload or n
   // a destroyed frontend is not a frontend
   const dead = { isDestroyed: () => true, mainFrame };
   assert.deepStrictEqual(
-    createThemeReportHandler({ themeHost: host, isFrontendFrame: (e) => isMainFrameOf(dead, e) })(
+    createThemeReportHandler({ themeHost: host, isFrontendFrame: (e) => isFrontendFrame(e, { contents: dead, frontendURL: FRONTEND }) })(
       { sender: dead, senderFrame: mainFrame },
       payload
     ),
     { ok: false }
   );
+
+  // the frontend's main frame navigated away (still the same WebContents and preload)
+  const navigated = { sender: contents, senderFrame: { ...mainFrame } };
+  contents.mainFrame = navigated.senderFrame;
+  navigated.senderFrame.url = "https://evil.example/";
+  assert.deepStrictEqual(handler(navigated, payload), { ok: false });
+  contents.mainFrame = mainFrame;
+  assert.deepStrictEqual(sent, [], "still nothing broadcast");
 
   // the real one: accepted, validated, a null payload cannot throw
   const frontend = { sender: contents, senderFrame: mainFrame };
