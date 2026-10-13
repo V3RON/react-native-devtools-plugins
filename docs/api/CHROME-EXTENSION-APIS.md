@@ -7,8 +7,12 @@ Per-namespace plans live in [../features/README.md](../features/README.md).
 ## A. DevTools-only namespaces (must be complete — nothing works otherwise)
 
 - **`devtools.panels`** — `create` 🟨 shell-driven (`chrome.devtools.*` is implemented in
-  `src/chrome-shim/devtools.js`, not by a frontend-injected script); `Panel` events,
-  `themeName/themeChanged`, `elements` sidebar panes, `sources`, `performance` ❌ →
+  `src/chrome-shim/devtools.js`, not by a frontend-injected script); `themeName` /
+  `setThemeChangeHandler` ✅ in devtools/panel frames (the frontend's real theme, `"default"` | `"dark"`,
+  correct from the first script; background contexts learn it async, see the Theme section
+  of the panels doc); `Panel.onShown(window)`/`onHidden` ✅ real (host-routed to the creating
+  devtools page; `setWidth` is not a Chrome API);
+  `elements` sidebar panes, `sources`, `performance` ❌ →
   [features/DEVTOOLS-PANELS.md](../features/DEVTOOLS-PANELS.md). `recorder` 🚫.
   `openExtensionInDevtools(descriptor)` 🔧 (install flow).
 - **`devtools.network`** — 🟨 real: `onRequestFinished` (a `Request` = a HAR 1.2 entry with
@@ -31,7 +35,7 @@ Per-namespace plans live in [../features/README.md](../features/README.md).
 | API | Real Chrome surface | Verdict here |
 | --- | --- | --- |
 | `runtime` | `id`, `getURL`, `sendMessage`, `connect` (Port: `postMessage/onMessage/onDisconnect`, transferables), `onMessage`, `getManifest`, `reload`, `openOptionsPage`, `getBackgroundPage`, `lastError`, `onInstalled`, `onStartup`, `onUpdateAvailable`; omitted: `requestUpdate`, `connectNative`, `sendMessageExternal` | ✅ identity/manifest/platform + `sendMessage` + Ports are real (host router, extension-scoped); `lastError` scoped, promise+callback on all methods; **`onInstalled` (`install`/`update`) and `onStartup` fire** (produced by the background host); **`openOptionsPage` opens a real window** for a manifest that declares `options_ui` and refuses, by extension id, one that does not. Remaining: Port transferables (JSON-only today); `getBackgroundPage` is `undefined` — Chrome's answer too, for an MV3 service worker; `reload` inert; `onUpdateAvailable`/`onSuspend` never fire → [RUNTIME-MESSAGING.md](../features/RUNTIME-MESSAGING.md) |
-| `storage` | `local/session/sync/managed`, `onChanged`; StorageArea `get/set/remove/clear/getBytesInUse/getKeys`, `QUOTA_BYTES` | ✅ local/sync real (electron-store), session per-frame in-memory; managed + cross-frame `onChanged` remain → [STORAGE-AND-I18N.md](../features/STORAGE-AND-I18N.md) |
+| `storage` | `local/session/sync/managed`, `onChanged`; StorageArea `get/set/remove/clear/getBytesInUse/getKeys`, `QUOTA_BYTES` | ✅ local/sync/session real: one host-owned store per extension (local/sync persisted via electron-store, session in memory), `onChanged` + `storage.<area>.onChanged` delivered to every context of the extension, quotas, `session.setAccessLevel`; `managed` remains → [STORAGE-AND-I18N.md](../features/STORAGE-AND-I18N.md) |
 | `extension` (legacy) | `getURL`, `getViews`, `getBackgroundPage`, `lastError`, `isWritableFileSystem`, `inIncognitoContext`, `sendRequest/onRequest` (dead) | 🔧 thin aliases; omit `sendRequest/onRequest` |
 | `i18n` | `getMessage`, `getUILanguage`, `acceptLanguages`, `detectLanguage` | ✅ `getMessage` reads the extension's `_locales` with Chrome's semantics (locale fallback per message, placeholders, `$$`, `@@` messages), synchronously; `getUILanguage`, `getAcceptLanguages` (promise + callback) real; `__MSG_` substituted in manifest and CSS; ❌ `detectLanguage` is an honest `{isReliable:false, languages:[]}` stub (no CLD3); lenient where Chrome refuses to load → [STORAGE-AND-I18N.md](../features/STORAGE-AND-I18N.md) |
 | `permissions` | `contains/request/remove/getAll/onAdded/onRemoved` | 🟨 real as a report: `contains`/`getAll` answer the manifest's truth from the host's verdict; `request` resolves `true` only for what is already declared and grants nothing new; `onAdded`/`onRemoved` never fire → [SMALL-SHIMS.md](../features/SMALL-SHIMS.md) |

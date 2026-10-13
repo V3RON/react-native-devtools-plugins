@@ -11,6 +11,10 @@
 // every extension page with Chrome's MV3 CSP default (`script-src 'self'`)
 // unless the manifest declares its own, and inline scripts do not survive that
 // policy. That is the policy working — see the "manifest CSP is enforced" check.
+// A token set once per document load: Panel.onShown/onHidden's panel page stays alive
+// across tab switches (docs/features/DEVTOOLS-PANELS.md), so it does not change on re-show.
+document.getElementById("loaded-at").textContent =
+  new Date().toLocaleTimeString() + " #" + Math.random().toString(36).slice(2, 6);
 const results = document.getElementById("results");
 const check = async (name, fn) => {
   try {
@@ -32,6 +36,23 @@ const assert = (cond, msg) => {
   if (!cond) throw new Error(msg || "assertion failed");
 };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// ── chrome.devtools.panels.themeName / setThemeChangeHandler ───────────────────────
+// Rendered live: switch Settings -> Preferences -> Theme in DevTools (or flip the
+// system theme while it is "System preference") and this line follows.
+const themeLine = document.getElementById("theme");
+const showTheme = (via) => {
+  const name = chrome.devtools.panels.themeName;
+  themeLine.textContent = `themeName = ${name} (${via})`;
+  document.body.style.background = name === "dark" ? "#202124" : "#ffffff";
+  document.body.style.color = name === "dark" ? "#e8eaed" : "#202124";
+  console.log(`[theme] themeName=${name} (${via})`);
+};
+showTheme("at load");
+chrome.devtools.panels.setThemeChangeHandler((name) => {
+  console.log(`[theme] setThemeChangeHandler -> ${name}`);
+  showTheme("setThemeChangeHandler");
+});
 
 (async () => {
   // ── the frame this panel runs in (docs/LIMITATIONS.md §Security) ─────────

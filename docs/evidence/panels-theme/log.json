@@ -1,0 +1,56 @@
+[
+  {
+    "label": "boot dark",
+    "frontendDark": true,
+    "panel": [
+      {
+        "v": "{\"themeName\":\"dark\",\"line\":\"themeName = dark (at load)\"}",
+        "theme": [
+          "[theme] themeName=dark (at load)"
+        ]
+      }
+    ]
+  },
+  {
+    "label": "after switch to light",
+    "frontendDark": false,
+    "panel": [
+      {
+        "v": "{\"themeName\":\"default\",\"line\":\"themeName = default (setThemeChangeHandler)\"}",
+        "theme": [
+          "[theme] themeName=dark (at load)",
+          "[theme] setThemeChangeHandler -> default",
+          "[theme] themeName=default (setThemeChangeHandler)"
+        ]
+      }
+    ]
+  },
+  {
+    "label": "after switch to dark",
+    "frontendDark": true,
+    "panel": [
+      {
+        "v": "{\"themeName\":\"dark\",\"line\":\"themeName = dark (setThemeChangeHandler)\"}",
+        "theme": [
+          "[theme] themeName=dark (at load)",
+          "[theme] setThemeChangeHandler -> default",
+          "[theme] themeName=default (setThemeChangeHandler)",
+          "[theme] setThemeChangeHandler -> dark",
+          "[theme] themeName=dark (setThemeChangeHandler)"
+        ]
+      }
+    ]
+  },
+  {
+    "label": "boot light",
+    "frontendDark": false,
+    "panel": [
+      {
+        "v": "{\"themeName\":\"default\",\"line\":\"themeName = default (at load)\"}",
+        "theme": [
+          "[theme] themeName=default (at load)"
+        ]
+      }
+    ]
+  }
+]

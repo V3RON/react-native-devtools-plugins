@@ -1,25 +1,28 @@
-// Pure chrome.storage.StorageArea implementation against an injected
-// backend — no electron-store (or any storage tech) reference in here.
+// chrome.storage for one extension context (docs/features/STORAGE-AND-I18N.md).
 //
-// Backend interface (synchronous):
-//   getAll(): object        — every key/value
-//   get(key): value         — single value (undefined if absent)
-//   set(itemsObject): void  — set many
-//   delete(key): void
-//   clear(): void
+// What an area MEANS (get/set/remove/clear, quota, change detection, JSON copies) lives
+// in src/shared/storage-core.js and runs wherever the state lives. This file is the
+// API shape around it — promise AND callback style, lastError, the per-area and global
+// `onChanged` events — and it runs in one of two modes, chosen by what is injected:
 //
-// NOTE: per-frame backend instances writing the same file race with each
-// other (docs/LIMITATIONS.md). The fix is to inject a main-process-backed
-// backend later — no changes needed in this file.
+//   call      — the production mode. The state is the HOST's (src/main/storage-service.js):
+//               every call is an async round trip, and every change to the extension's
+//               storage, from this context or any other, comes back as a delivery that
+//               `handleDelivery` turns into events. A write's callback is held until its
+//               own event has been delivered here, so listeners see the change first, as
+//               in Chrome.
+//   createBackend — a synchronous in-process backend (unit tests, tools): the state lives
+//               in this context and the events are fired by the write itself.
+//
+// Backend interface (synchronous, createBackend mode):
+//   getAll(): object   get(key): value   set(itemsObject): void
+//   delete(key): void  clear(): void
 const { createEvent } = require("./event");
+const { promiseOrCallback } = require("./async-style");
+const core = require("../shared/storage-core");
 
-const QUOTA_BYTES = { local: 10485760, sync: 102400 }; // 10MB / 100KB
-// Chrome exposes the session quota as MAX_SESSION_STORAGE_QUOTA (1 MiB).
-const SESSION_MAX_BYTES = 1048576;
-
-// In-memory backend: chrome.storage.session semantics (per-context, not
-// persisted). Deviation: Chrome shares session storage across an extension's
-// contexts; here it is per-frame until the router owns storage.
+// In-memory backend for the in-process mode (the production session area is the
+// host's, shared by the extension's contexts).
 const createMemoryBackend = () => {
   const map = new Map();
   return {
@@ -31,222 +34,167 @@ const createMemoryBackend = () => {
   };
 };
 
-const createStorageArea = (backend, areaName) => {
-  const onChanged = createEvent();
+// How long a write waits for its own change event before giving up and answering
+// anyway. The event follows the reply within a tick in practice; the bound exists so a
+// lost delivery degrades to "listener told late" and never to "write never completes".
+const EVENT_WAIT_MS = 2000;
 
-  return {
-    QUOTA_BYTES: areaName === "session" ? undefined : QUOTA_BYTES[areaName],
-    ...(areaName === "session" ? { MAX_SESSION_STORAGE_QUOTA: SESSION_MAX_BYTES } : {}),
-
-    get: (keys, callback) => {
-      const executeGet = () => {
-        if (keys === null || keys === undefined) {
-          return backend.getAll();
-        } else if (typeof keys === "string") {
-          const value = backend.get(keys);
-          return { [keys]: value };
-        } else if (Array.isArray(keys)) {
-          const result = {};
-          keys.forEach((key) => {
-            result[key] = backend.get(key);
-          });
-          return result;
-        } else if (typeof keys === "object") {
-          const result = {};
-          Object.keys(keys).forEach((key) => {
-            const value = backend.get(key);
-            result[key] = value !== undefined ? value : keys[key];
-          });
-          return result;
-        }
-        return {};
-      };
-
-      if (callback) {
-        try {
-          callback(executeGet());
-        } catch (error) {
-          callback({});
-        }
-      } else {
-        return Promise.resolve(executeGet());
-      }
-    },
-
-    set: (items, callback) => {
-      const executeSet = () => {
-        const oldValues = {};
-        const changedItems = {};
-
-        Object.keys(items).forEach((key) => {
-          oldValues[key] = backend.get(key);
-        });
-
-        backend.set(items);
-
-        Object.keys(items).forEach((key) => {
-          const oldValue = oldValues[key];
-          const newValue = items[key];
-
-          if (JSON.stringify(oldValue) !== JSON.stringify(newValue)) {
-            changedItems[key] = { oldValue, newValue };
-          }
-        });
-
-        if (Object.keys(changedItems).length > 0) {
-          onChanged._fire(changedItems, areaName);
-        }
-      };
-
-      if (callback) {
-        try {
-          executeSet();
-        } catch (error) {
-          // Chrome-like: surface nothing, still invoke the callback
-        }
-        callback();
-      } else {
-        return Promise.resolve(executeSet());
-      }
-    },
-
-    remove: (keys, callback) => {
-      const executeRemove = () => {
-        const keysToRemove = Array.isArray(keys) ? keys : [keys];
-        const oldValues = {};
-        const changedItems = {};
-
-        keysToRemove.forEach((key) => {
-          oldValues[key] = backend.get(key);
-        });
-
-        keysToRemove.forEach((key) => {
-          backend.delete(key);
-        });
-
-        keysToRemove.forEach((key) => {
-          if (oldValues[key] !== undefined) {
-            changedItems[key] = { oldValue: oldValues[key], newValue: undefined };
-          }
-        });
-
-        if (Object.keys(changedItems).length > 0) {
-          onChanged._fire(changedItems, areaName);
-        }
-      };
-
-      if (callback) {
-        try {
-          executeRemove();
-        } catch (error) {
-          // Chrome-like: surface nothing, still invoke the callback
-        }
-        callback();
-      } else {
-        return Promise.resolve(executeRemove());
-      }
-    },
-
-    clear: (callback) => {
-      const executeClear = () => {
-        const oldStore = { ...backend.getAll() };
-        backend.clear();
-
-        const changedItems = {};
-        Object.keys(oldStore).forEach((key) => {
-          changedItems[key] = { oldValue: oldStore[key], newValue: undefined };
-        });
-
-        if (Object.keys(changedItems).length > 0) {
-          onChanged._fire(changedItems, areaName);
-        }
-      };
-
-      if (callback) {
-        try {
-          executeClear();
-        } catch (error) {
-          // Chrome-like: surface nothing, still invoke the callback
-        }
-        callback();
-      } else {
-        return Promise.resolve(executeClear());
-      }
-    },
-
-    getBytesInUse: (keys, callback) => {
-      const executeGetBytesInUse = () => {
-        let itemsToCheck = {};
-
-        if (keys === null || keys === undefined) {
-          itemsToCheck = backend.getAll();
-        } else if (typeof keys === "string") {
-          const value = backend.get(keys);
-          if (value !== undefined) {
-            itemsToCheck[keys] = value;
-          }
-        } else if (Array.isArray(keys)) {
-          keys.forEach((key) => {
-            const value = backend.get(key);
-            if (value !== undefined) {
-              itemsToCheck[key] = value;
-            }
-          });
-        }
-
-        let totalBytes = 0;
-        Object.keys(itemsToCheck).forEach((key) => {
-          const keyBytes = new TextEncoder().encode(key).length;
-          const valueBytes = new TextEncoder().encode(
-            JSON.stringify(itemsToCheck[key])
-          ).length;
-          totalBytes += keyBytes + valueBytes;
-        });
-
-        return totalBytes;
-      };
-
-      if (callback) {
-        try {
-          callback(executeGetBytesInUse());
-        } catch (error) {
-          callback(0);
-        }
-      } else {
-        return Promise.resolve(executeGetBytesInUse());
-      }
-    },
-
-    getKeys: (callback) => {
-      const executeGetKeys = () => Object.keys(backend.getAll());
-
-      if (callback) {
-        try {
-          callback(executeGetKeys());
-        } catch (error) {
-          callback([]);
-        }
-      } else {
-        return Promise.resolve(executeGetKeys());
-      }
-    },
-
-    onChanged,
-  };
-};
+/** `fn(keys, cb)`-style signatures where the leading argument is optional. */
+const optionalFirst = (first, second) =>
+  typeof first === "function" ? [undefined, first] : [first, second];
 
 /**
- * Build the local+sync+session areas for one extension, backends created via
- * `createBackend(areaName)`.
+ * Build the local+sync+session areas for one extension.
+ *
+ * @param {object} deps
+ * @param {(area: string) => object} [deps.createBackend] in-process mode
+ * @param {(area: string, op: string, arg: any) => Promise<{ok: boolean, value?: any, seq?: number, error?: string}>} [deps.call]
+ *        host mode: one storage operation, executed against the host's store
  */
-const createExtensionStorage = ({ createBackend }) => ({
-  local: createStorageArea(createBackend("local"), "local"),
-  sync: createStorageArea(createBackend("sync"), "sync"),
-  session: createStorageArea(createBackend("session"), "session"),
-});
+const createExtensionStorage = ({ createBackend, call }) => {
+  const globalChanged = createEvent();
+  const events = {};
+  let lastErrorPair = null;
+
+  const fire = (area, changes) => {
+    // Per-area events take (changes); chrome.storage.onChanged adds the area name.
+    events[area]._fire(changes);
+    globalChanged._fire(changes, area);
+  };
+
+  // ── host mode: events arrive as deliveries; writes wait for their own ──────
+  let delivered = 0;
+  let waiters = [];
+  const handleDelivery = (delivery) => {
+    const change = delivery && delivery.payload ? delivery.payload : delivery;
+    if (!change || !events[change.area] || !change.changes) {
+      return;
+    }
+    try {
+      fire(change.area, change.changes);
+    } finally {
+      delivered = Math.max(delivered, Number(change.seq) || 0);
+      waiters = waiters.filter((waiter) => {
+        if (waiter.seq > delivered) {
+          return true;
+        }
+        waiter.release();
+        return false;
+      });
+    }
+  };
+  const eventDelivered = (seq) =>
+    !seq || seq <= delivered
+      ? Promise.resolve()
+      : new Promise((resolve) => {
+          const waiter = { seq, release: () => (clearTimeout(timer), resolve()) };
+          const timer = setTimeout(() => {
+            waiters = waiters.filter((w) => w !== waiter);
+            resolve();
+          }, EVENT_WAIT_MS);
+          waiters.push(waiter);
+        });
+
+  const executeRemote = (area, op, arg) =>
+    Promise.resolve(call(area, op, arg)).then((reply) => {
+      if (!reply || !reply.ok) {
+        throw new Error((reply && reply.error) || "storage: the host did not answer");
+      }
+      return eventDelivered(reply.seq).then(() => reply.value);
+    });
+
+  // ── in-process mode: the same core over a synchronous backend ──────────────
+  const backends = {};
+  if (!call) {
+    for (const area of core.AREAS) {
+      backends[area] = createBackend(area);
+    }
+  }
+  const executeLocal = (area, op, arg) => {
+    const backend = backends[area];
+    const map = new Map(Object.entries(backend.getAll()));
+    let changes = null;
+    let value;
+    switch (op) {
+      case "get":
+        value = core.get(map, arg);
+        break;
+      case "getBytesInUse":
+        value = core.getBytesInUse(map, arg);
+        break;
+      case "getKeys":
+        value = core.getKeys(map);
+        break;
+      case "set":
+        changes = core.set(map, area, arg);
+        backend.set(Object.fromEntries(Object.keys(changes).map((key) => [key, map.get(key)])));
+        break;
+      case "remove":
+        changes = core.remove(map, arg);
+        Object.keys(changes).forEach((key) => backend.delete(key));
+        break;
+      case "clear":
+        changes = core.clear(map);
+        backend.clear();
+        break;
+      case "setAccessLevel":
+        // One context sees its own memory: there is no other context to restrict.
+        break;
+    }
+    if (changes && Object.keys(changes).length > 0) {
+      fire(area, changes);
+    }
+    return Promise.resolve(value);
+  };
+  const execute = call ? executeRemote : executeLocal;
+
+  const createArea = (area) => {
+    const onChanged = createEvent();
+    events[area] = onChanged;
+    const run = (op, arg, callback) =>
+      promiseOrCallback(() => execute(area, op, arg), callback, {
+        setError: lastErrorPair && lastErrorPair.setError,
+        clearError: lastErrorPair ? lastErrorPair.clearError : undefined,
+      });
+
+    const api = {
+      ...core.LIMITS[area],
+      get: (keys, callback) => {
+        [keys, callback] = optionalFirst(keys, callback);
+        return run("get", keys, callback);
+      },
+      set: (items, callback) => run("set", items, callback),
+      remove: (keys, callback) => run("remove", keys, callback),
+      clear: (callback) => run("clear", undefined, callback),
+      getBytesInUse: (keys, callback) => {
+        [keys, callback] = optionalFirst(keys, callback);
+        return run("getBytesInUse", keys, callback);
+      },
+      getKeys: (callback) => run("getKeys", undefined, callback),
+      onChanged,
+    };
+    if (area === "session") {
+      // Chrome: session is invisible to content scripts unless the extension widens it.
+      api.setAccessLevel = (details, callback) => run("setAccessLevel", details, callback);
+    }
+    return api;
+  };
+
+  const storage = {};
+  for (const area of core.AREAS) {
+    storage[area] = createArea(area);
+  }
+  storage.onChanged = globalChanged;
+  // Host -> context entry points; src/chrome-shim/index.js does not expose them, it only
+  // reads the three areas and `onChanged`.
+  storage.handleDelivery = handleDelivery;
+  storage.bindLastError = (pair) => {
+    lastErrorPair = pair;
+  };
+  return storage;
+};
 
 module.exports = {
-  createStorageArea,
   createExtensionStorage,
   createMemoryBackend,
 };

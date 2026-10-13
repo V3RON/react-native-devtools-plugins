@@ -1,0 +1,17 @@
+<!doctype html><title>electron-leftovers target</title>
+<script>
+  // Keeps logging and fetching, so the DevTools console and network panel have live
+  // content whenever the frontend attaches.
+  let n = 0;
+  const tick = () => {
+    n += 1;
+    console.log("leftovers: hello from the inspected page #" + n);
+    if (n % 3 === 0) console.warn("leftovers: a warning line #" + n);
+    if (n % 5 === 0) console.error("leftovers: an error line #" + n);
+    fetch("/data.json?n=" + n)
+      .then((r) => r.json())
+      .then((j) => console.log("leftovers: fetched", JSON.stringify(j)));
+  };
+  tick();
+  setInterval(tick, 1500);
+</script>

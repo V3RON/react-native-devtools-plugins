@@ -57,7 +57,7 @@ the real host inside the app):
   [BACKGROUND-WORKER.md](BACKGROUND-WORKER.md).
 - **Cross-cutting rules honored**: Chrome-style `Event` objects (`src/chrome-shim/event.js`:
   dedupe, identity removal, `hasListener`/`hasListeners`) now used by runtime,
-  storage and storage.onChanged; scoped `lastError` via live getter re-established
+  storage and storage.onChanged (the latter delivered across contexts by the host); scoped `lastError` via live getter re-established
   across the contextBridge; dual promise/callback style throughout.
 
 Known deviations (deliberate, PoC):
@@ -74,9 +74,6 @@ Known deviations (deliberate, PoC):
   PoC has.
 - Port payloads are JSON-only (no structured-clone transferables through contextBridge yet).
 - `sender` carries `{id, url}` — no `tab`/`frame` objects until tabs shims exist.
-- `storage.session` is per-frame in-memory, not extension-wide. This now has a real
-  consequence, because the worker is a second context that wants to talk to a panel through
-  it: [STORAGE-AND-I18N.md](STORAGE-AND-I18N.md) states it precisely.
 - `onDisconnect`'s `lastError` is a snapshot set before the event, not a live property.
 - **Host pushes can arrive before the page's listeners exist.** The host sends a frame its
   first delivery the moment it registers, which happens during preload evaluation — strictly
@@ -96,7 +93,8 @@ Remaining:
    aliases' main uses (`getViews`, `getBackgroundPage`) have no honest answer here, so
    installing the namespace would only invent one.
 4. ~~Retire the raw `ipcRenderer` exposure~~ ✅ done with the rest of issue #6.
-5. Cross-frame `storage.onChanged` (the router already has the fan-out this needs).
+5. ~~Cross-frame `storage.onChanged`~~ ✅ done, with an extension-wide `storage.session`: the host
+   owns the store and fans changes out over their own channel ([STORAGE-AND-I18N.md](STORAGE-AND-I18N.md)).
 
 ## Plan (original, with progress)
 

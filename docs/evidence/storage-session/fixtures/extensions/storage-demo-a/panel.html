@@ -1,0 +1,26 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Storage Demo A panel</title>
+<style>
+  body { font: 13px/1.4 system-ui, sans-serif; margin: 12px; color: #1b1f24; background: #fff; }
+  h1 { font-size: 15px; margin: 0 0 8px; }
+  h2 { font-size: 12px; margin: 12px 0 4px; color: #57606a; text-transform: uppercase; letter-spacing: .04em; }
+  pre { background: #f3f5f7; padding: 8px; border-radius: 4px; margin: 0; white-space: pre-wrap; min-height: 1.4em; }
+  button { font: inherit; padding: 3px 10px; margin-right: 6px; }
+  .tag { display: inline-block; background: #1a7f37; color: #fff; padding: 1px 6px; border-radius: 3px; font-size: 12px; }
+</style></head><body>
+<h1><span class="tag">panel</span> Storage Demo A &mdash; <span id="id"></span></h1>
+<div>
+  <button id="write">session.set({counter})</button>
+  <button id="local">local.set({note})</button>
+  <button id="remove">session.remove("counter")</button>
+  <button id="options">Open options page</button>
+</div>
+<h2>Written by this panel</h2>
+<pre id="wrote">(nothing yet)</pre>
+<h2>chrome.storage.session as read by this panel</h2>
+<pre id="snapshot">(loading)</pre>
+<h2>onChanged heard by other contexts of this extension (reported by each one)</h2>
+<pre id="heard">(nothing yet)</pre>
+<script src="common.js"></script>
+<script src="panel.js"></script>
+</body></html>

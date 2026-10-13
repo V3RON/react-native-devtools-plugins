@@ -1,0 +1,32 @@
+[
+  {
+    "label": "systemPreferred + system dark",
+    "frontendDark": true,
+    "panel": [
+      {
+        "v": "{\"themeName\":\"dark\",\"line\":\"themeName = dark (setThemeChangeHandler)\"}",
+        "theme": [
+          "[theme] themeName=default (at load)",
+          "[theme] setThemeChangeHandler -> dark",
+          "[theme] themeName=dark (setThemeChangeHandler)"
+        ]
+      }
+    ]
+  },
+  {
+    "label": "systemPreferred + system flips to light",
+    "frontendDark": false,
+    "panel": [
+      {
+        "v": "{\"themeName\":\"default\",\"line\":\"themeName = default (setThemeChangeHandler)\"}",
+        "theme": [
+          "[theme] themeName=default (at load)",
+          "[theme] setThemeChangeHandler -> dark",
+          "[theme] themeName=dark (setThemeChangeHandler)",
+          "[theme] setThemeChangeHandler -> default",
+          "[theme] themeName=default (setThemeChangeHandler)"
+        ]
+      }
+    ]
+  }
+]

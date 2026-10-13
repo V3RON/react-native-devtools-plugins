@@ -4,7 +4,7 @@
 //   extensionId    — id == rozenite URL hostname (load-bearing contract)
 //   getManifest    — () => manifest object ({} until loaded)
 //   platform       — {os, arch} in Chrome's vocabulary
-//   storage        — from ./storage createExtensionStorage({ createBackend })
+//   storage        — from ./storage createExtensionStorage({ call | createBackend })
 //   networkBridge  — from ./network-bridge createNetworkBridge({ ... }): feeds
 //                    BOTH chrome.webRequest and chrome.devtools.network (one CDP
 //                    capture in main, two Chrome APIs — docs/features/
@@ -188,12 +188,21 @@ const createChromeNamespace = ({
     handleDelivery = messaging.handleDelivery;
   }
 
-  const onChanged = createEvent();
-  for (const area of ["local", "sync", "session"]) {
-    storage[area].onChanged.addListener((changes, areaName) =>
-      onChanged._fire(changes, areaName)
-    );
+  // chrome.storage.onChanged is the storage object's own event (it fires for the
+  // three areas with the area name); storage failures travel as Chrome's lastError.
+  const onChanged = storage.onChanged;
+  if (typeof storage.bindLastError === "function") {
+    storage.bindLastError(lastErrorScope);
   }
+
+  const devtoolsShim = createDevtools({
+    extensionId,
+    onPanelCreated,
+    evalInPage,
+    reloadInPage,
+    networkApi: networkBridge.network,
+    logger,
+  });
 
   const chrome = {
     runtime: runtime.namespace,
@@ -224,13 +233,7 @@ const createChromeNamespace = ({
     // permission, and the bundled extensions prove the point — Altair declares
     // no `webRequest` yet uses the network capture. Gating these would break
     // them without Chrome's blessing.
-    devtools: createDevtools({
-      extensionId,
-      onPanelCreated,
-      evalInPage,
-      reloadInPage,
-      networkApi: networkBridge.network,
-    }).namespace,
+    devtools: devtoolsShim.namespace,
 
     // [REAL for one tab] `chrome.tabs` answers with the ONE tab this shell has: the
     // inspected RN target, under the same id `devtools.inspectedWindow.tabId`
@@ -268,9 +271,9 @@ const createChromeNamespace = ({
       onDenied: (method, error) => reportDenied(`${method}: ${error.message}`, "tabs"),
     }),
 
-    // [REAL] persistent per-extension storage (session area: per-frame
-    // in-memory, see storage.js deviation note)
-    // (docs/features/STORAGE-AND-I18N.md). Gated on the declared `storage`
+    // [REAL] chrome.storage: one store per extension shared by all its contexts, with
+    // onChanged delivered to every one of them (session area: in memory, cleared when
+    // the shell restarts) (docs/features/STORAGE-AND-I18N.md). Gated on the declared `storage`
     // permission, like Chrome's. The methods live one level down (per area), so
     // each area is gated and `onChanged` — an Event, not an API — is left alone.
     storage: {
@@ -403,8 +406,28 @@ const createChromeNamespace = ({
           return;
         }
       }
+      // `theme` pushes are chrome.devtools.panels' own (themeName / setThemeChangeHandler).
+      if (delivery && delivery.kind === "theme") {
+        devtoolsShim.setThemeName(delivery.payload && delivery.payload.themeName);
+        return;
+      }
       handleDelivery(delivery);
     },
+    enumerable: false,
+  });
+
+  // Host -> frame panel visibility (Panel.onShown / onHidden), fed by the preload from
+  // the EXT_PANEL_EVENT channel. Non-enumerable like handleDelivery.
+  Object.defineProperty(chrome, "handlePanelEvent", {
+    value: devtoolsShim.handlePanelEvent,
+    enumerable: false,
+  });
+
+  // The host's current DevTools theme, handed back at registration (non-enumerable
+  // like handleDelivery). Calls the theme change handler only if it differs from what the
+  // frame was already showing.
+  Object.defineProperty(chrome, "_setThemeName", {
+    value: (themeName) => devtoolsShim.setThemeName(themeName),
     enumerable: false,
   });
 

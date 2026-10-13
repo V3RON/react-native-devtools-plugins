@@ -52,7 +52,8 @@ Notes:
   the custom `rozenite://<extension-id>/...` protocol. The shell scans the folder itself —
   no frontend-fork knowledge required:
   - a manifest with `devtools_page` gets a hidden devtools page and its `panels.create`
-    calls become real tabs (docs/features/DEVTOOLS-PANELS.md);
+    calls become real tabs, and `Panel.onShown(window)` / `onHidden` fire as the tab is
+    selected / left (docs/features/DEVTOOLS-PANELS.md);
   - a manifest with `background.service_worker` (or legacy `background.scripts`) also gets an
     **always-on background context** — a hidden window per extension running that script
     against the same `chrome.*` shim, with `runtime.onInstalled`/`onStartup` firing

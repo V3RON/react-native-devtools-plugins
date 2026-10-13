@@ -36,4 +36,33 @@ const parseExtensionURL = (url) => {
 const buildExtensionURL = (extensionId, innerPath = "") =>
   `${EXTENSION_SCHEME}://${extensionId}/${innerPath.replace(/^\//, "")}`;
 
-module.exports = { EXTENSION_SCHEME, I18N_BUNDLE_PATH, parseExtensionURL, buildExtensionURL };
+const sanitizeIdPart = (value) => String(value).replace(/[^A-Za-z0-9.-]+/g, "-");
+
+/**
+ * The frontend View id (and iframe `name`) of the panel an extension creates at
+ * `pagePath`: `ext.<len>.<extensionId>.<path>`. devtools' View rejects ids outside
+ * [A-Za-z0-9.-] ("Invalid view ID"), so every other character is folded to `-`.
+ *
+ * The extension id is LENGTH-PREFIXED so the join is injective across extensions: a
+ * plain `ext.<id>.<path>` made ("exta", "panel.html") and ("exta.panel", "html") the
+ * same id, which let one extension take over another's panel events and window. Paths
+ * within ONE extension that differ only in punctuation still fold together (replay and
+ * dedupe treat them as one panel) — that cannot reach another extension.
+ *
+ * Shared because the host, the frontend bridge and the devtools-page shim must all derive
+ * the SAME id from the same (extensionId, pagePath): that is what makes replay, dedupe and
+ * the onShown(window) lookup agree.
+ */
+const panelIdFor = (extensionId, pagePath) => {
+  const id = sanitizeIdPart(extensionId);
+  const pathPart = sanitizeIdPart(String(pagePath || "").replace(/^\/+/, "") || "index");
+  return `ext.${id.length}.${id}.${pathPart}`;
+};
+
+module.exports = {
+  EXTENSION_SCHEME,
+  I18N_BUNDLE_PATH,
+  parseExtensionURL,
+  buildExtensionURL,
+  panelIdFor,
+};

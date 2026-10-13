@@ -1,0 +1,10 @@
+# before frontend reload
+[panel-events] onShown (window: rozenite://sample-extension/panel.html)
+[panel-events] onHidden
+[panel-events] onShown (window: rozenite://sample-extension/panel.html)
+[panel-events] onHidden
+[panel-events] onShown (window: rozenite://sample-extension/panel.html)
+# after frontend reload (new devtools page, panel deduped)
+[panel-events] onShown (window: rozenite://sample-extension/panel.html)
+[panel-events] onHidden
+[panel-events] onShown (window: rozenite://sample-extension/panel.html)
