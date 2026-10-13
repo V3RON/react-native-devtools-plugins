@@ -73,9 +73,10 @@ test("every _fire call site in chrome-shim is attributed to a real producer", ()
     "alarms.js:_fire": 1,
     // main's save service reported a transition it performed; the shim relays it.
     "downloads.js:_fire": 2,
-    // The storage write this very context just made.
-    "storage.js:_fire": 3,
-    "index.js:_fire": 1, // the per-area events above, fanned into chrome.storage.onChanged
+    // A storage change the HOST applied and pushed to this context (any context of the
+    // extension may have made it): the per-area event and the chrome.storage.onChanged
+    // fan-in, fired together by the single `fire` helper.
+    "storage.js:_fire": 2,
     // RUNTIME_DELIVER really arrived for this extension from another context, or the host
     // reported the worker's own onInstalled/onStartup (main decides those, from install state).
     "messaging.js:_fire": 8,

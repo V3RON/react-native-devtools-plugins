@@ -20,11 +20,9 @@
 // host derives this frame's identity from the frame itself, never from payload.
 
 const { contextBridge, ipcRenderer } = require("electron");
-const { default: Store } = require("electron-store");
 const {
   createChromeNamespace,
   createExtensionStorage,
-  createMemoryBackend,
   createNetworkBridge,
 } = require("../chrome-shim");
 const { createGrantGate } = require("../shared/permissions");
@@ -38,6 +36,8 @@ const {
   RUNTIME_PORT_POST,
   RUNTIME_PORT_CLOSE,
   RUNTIME_DELIVER,
+  STORAGE_CALL,
+  STORAGE_DELIVER,
   EXT_PANEL_CREATE,
   EXT_PANEL_EVENT,
   DEVTOOLS_EVAL,
@@ -97,22 +97,18 @@ const permissions = createGrantGate(() => grants);
 // headless run can observe a real timer fire inside a worker.
 let alarmClockScale = 1;
 
-// electron-store -> chrome-shim StorageBackend adapter.
-// NOTE: one Store instance per frame per area races on the shared JSON file;
-// swap for a main-process-backed backend (docs/LIMITATIONS.md).
-const storeBackend = (store) => ({
-  getAll: () => store.store,
-  get: (key) => store.get(key),
-  set: (items) => store.set(items),
-  delete: (key) => store.delete(key),
-  clear: () => store.clear(),
-});
-
+// chrome.storage: the state lives in the HOST (src/main/storage-service.js), one store per
+// extension shared by all of its contexts, so this frame only forwards calls and turns the
+// host's STORAGE_DELIVER pushes into onChanged events. Like every other host-backed call it
+// waits for RUNTIME_REGISTER (below): the host derives whose storage this is from the
+// registered frame, never from anything sent here.
 const storage = createExtensionStorage({
-  createBackend: (areaName) =>
-    areaName === "session"
-      ? createMemoryBackend() // deviation: per-frame, not extension-wide
-      : storeBackend(new Store({ name: `extension-${extensionId}-${areaName}` })),
+  call: (area, op, arg) =>
+    registered.then((reply) =>
+      reply.ok
+        ? ipcRenderer.invoke(STORAGE_CALL, { area, op, arg })
+        : { ok: false, error: "storage: this frame is not registered with the host" }
+    ),
 });
 
 // chrome.devtools.network + chrome.webRequest, both fed by the host's CDP network
@@ -407,6 +403,12 @@ const startDeliveries = (channel, handle) => {
 };
 
 startDeliveries(RUNTIME_DELIVER, (delivery) => chrome.handleDelivery(delivery));
+
+// Storage changes from ANY context of this extension. Not queued behind page load like the
+// runtime deliveries: a write's callback waits for its own event (chrome-shim/storage.js),
+// and a module worker's top-level await must not be able to wait on DOMContentLoaded.
+// An event that fires before the page has added a listener reaches nobody, as in Chrome.
+ipcRenderer.on(STORAGE_DELIVER, (_event, delivery) => storage.handleDelivery(delivery));
 
 // An alarm is a timer, and this context owns it: when the document goes away, nothing
 // may fire any more. Chrome's worker would be evicted and its alarms persisted; this

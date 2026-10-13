@@ -61,6 +61,17 @@ module.exports = {
   /** main -> frame push: {kind: lifecycle|message|connect|port-message|port-disconnect}. */
   RUNTIME_DELIVER: "runtime-deliver",
 
+  // ── chrome.storage (docs/features/STORAGE-AND-I18N.md) ───────────────────────
+  /** ({area, op, arg}) -> one StorageArea call, executed against the HOST's store for
+   *  the calling frame's extension (src/main/storage-service.js). Resolves
+   *  {ok, value, seq} or {ok: false, error}; never throws across IPC. */
+  STORAGE_CALL: "storage-call",
+  /** main -> frame push: {kind: "storage-changed", payload: {seq, area, changes}} — one
+   *  change that happened in ANY context of this frame's extension. Its own channel and
+   *  never queued behind page load, so a write's reply can wait for its own event
+   *  without waiting for DOMContentLoaded. */
+  STORAGE_DELIVER: "storage-deliver",
+
   // ── shell-driven extension hosting (docs/features/DEVTOOLS-PANELS.md) ────
   /** ({title, pagePath}) from a devtools frame -> registers a frontend panel. */
   EXT_PANEL_CREATE: "ext-panel-create",
