@@ -1,11 +1,11 @@
 {
   "runtime-info": {
-    "state": "ok",
-    "text": "id showcase\n__MSG_extName__ v1.0.0 (MV3)\nrozenite://showcase/panel.html"
+    "state": "warn",
+    "text": "id showcase\n__MSG_extName__ v1.0.0 (MV3)\nrozenite://showcase/panel.html\n(manifest name is still a __MSG_ key: this host does not resolve manifest i18n)"
   },
   "theme": {
-    "state": "ok",
-    "text": "themeName = \"dark\" (themeName) -> page is dark\nlistening via themeChanged.addListener"
+    "state": "warn",
+    "text": "themeName = \"dark\" (page is dark); setThemeChangeHandler is not available, so changes cannot be followed"
   },
   "visibility": {
     "state": "warn",
@@ -37,11 +37,11 @@
   },
   "webrequest": {
     "state": "idle",
-    "text": "background: 0 before / 0 completed / 0 errors\npanel listener: 0 completed"
+    "text": "background: 0 before / 0 completed / 0 errors (localhost only)\npanel listener: 0 completed"
   },
   "msg-bg": {
-    "state": "ok",
-    "text": "reply from background at 2:33:20 PM"
+    "state": "warn",
+    "text": "no reply from background (undefined): either nothing answered, or a silent peer's empty answer replaced the real one on a host that settles on the last response; Chrome keeps the first real one"
   },
   "msg-dev": {
     "state": "ok",
@@ -49,11 +49,11 @@
   },
   "port": {
     "state": "ok",
-    "text": "echo {\"n\":1791902000406,\"hello\":\"from the panel\"} from background"
+    "text": "echo {\"n\":1791902765047,\"hello\":\"from the panel\"} from background"
   },
   "lifecycle": {
     "state": "ok",
-    "text": "onInstalled reason=install at 2:06:07 PM\nonStartup fired 7x"
+    "text": "onInstalled reason=install at 2:06:07 PM\nonStartup fired 8x"
   },
   "bridge": {
     "state": "warn",
@@ -61,11 +61,11 @@
   },
   "storage-local": {
     "state": "ok",
-    "text": "showcase:local-probe: 18 -> 19 (round-trip OK)"
+    "text": "showcase:local-probe: 20 -> 21 (round-trip OK)"
   },
   "storage-sync": {
     "state": "ok",
-    "text": "showcase:sync-probe: 18 -> 19 (round-trip OK)"
+    "text": "showcase:sync-probe: 20 -> 21 (round-trip OK)"
   },
   "storage-session": {
     "state": "ok",
@@ -81,15 +81,15 @@
   },
   "xframe": {
     "state": "warn",
-    "text": "wrote session+local\nbackground heard: session 0x, local 0x\ndevtools page heard: session 0x, local 0x\nsession readable back: true\n(other contexts did not receive both onChanged events: per-frame storage here)"
+    "text": "wrote session+local\nbackground heard: no reply\ndevtools page heard: session 0x, local 0x\nsession readable back: true\n(other contexts did not receive both onChanged events: per-frame storage here)"
   },
   "alarms": {
     "state": "ok",
-    "text": "onAlarm fired 7x, last 2:33:44 PM"
+    "text": "armed 2:45:59 PM, onAlarm fired 2:46:29 PM (one-shot, now cleared)"
   },
   "notifications": {
     "state": "warn",
-    "text": "created 10x but no id came back: the platform cannot show notifications here"
+    "text": "notifications.create ran but no id came back: the platform cannot show notifications here"
   },
   "downloads": {
     "state": "ok",

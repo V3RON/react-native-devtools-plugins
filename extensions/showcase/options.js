@@ -10,15 +10,21 @@ const render = (name) => {
 
 if (t("optionsTitle")) $("title").textContent = t("optionsTitle");
 
-chrome.storage.sync.get(KEY, (got) => {
-  const name = (got && got[KEY]) || "";
-  $("name").value = name;
-  render(name);
-});
+const sync = chrome.storage && chrome.storage.sync;
+if (!sync) {
+  $("status").textContent = "chrome.storage.sync is not available on this host";
+} else {
+  sync.get(KEY, (got) => {
+    const name = (got && got[KEY]) || "";
+    $("name").value = name;
+    render(name);
+  });
+}
 
 $("save").addEventListener("click", () => {
+  if (!sync) return;
   const name = $("name").value.trim();
-  chrome.storage.sync.set({ [KEY]: name }, () => {
+  sync.set({ [KEY]: name }, () => {
     $("status").textContent = chrome.runtime.lastError
       ? "Save failed: " + chrome.runtime.lastError.message
       : "Saved to storage.sync";

@@ -51,7 +51,10 @@ const inspectorView = `(async()=>{const m=await import('devtools://devtools/bund
     evaluate(p, `(()=>{const b=[...document.querySelectorAll('button')].find(b=>b.textContent.trim()===${JSON.stringify(label)});if(!b)return false;b.click();return true})()`);
 
   // 3. Press the interactive cards.
-  for (const label of ["Notify", "Arm alarm", "Save HAR", "Reload", "Re-run"]) console.log("click", label, await click(label));
+  // Reload first so the HAR has traffic, then the rest.
+  console.log("click Reload", await click("Reload"));
+  await sleep(5000);
+  for (const label of ["Notify", "Arm alarm", "Save HAR", "Re-run"]) console.log("click", label, await click(label));
   await sleep(1200);
   console.log("click Save JSON", await click("Save JSON"));
   await sleep(1500);
@@ -62,15 +65,16 @@ const inspectorView = `(async()=>{const m=await import('devtools://devtools/bund
   await sleep(33000);
 
   await screenshot(c, path.join(OUT, "chrome-1-showcase-panel.png"));
-  const results = JSON.parse(await evaluate(p, `JSON.stringify(window.__showcase.results)`));
-  fs.writeFileSync(path.join(OUT, "chrome-results.json"), JSON.stringify(results, null, 2));
-  console.log(JSON.stringify(results, null, 2));
-
-  // 4. Theme: flip DevTools to dark and prove the panel follows (themeChanged).
+  // 4. Theme: flip DevTools to dark and prove the panel follows (setThemeChangeHandler).
   await evaluate(c, `(async()=>{const m=await import('devtools://devtools/bundled/core/common/common.js');m.Settings.Settings.instance().moduleSetting('ui-theme').set('dark')})()`).catch((e) => console.log("theme set failed", e.message));
   await sleep(2500);
   console.log("panel theme attr after dark:", await evaluate(p, `document.documentElement.dataset.theme + ' / ' + chrome.devtools.panels.themeName`));
   await screenshot(c, path.join(OUT, "chrome-3-dark-theme.png"));
+  const results = JSON.parse(await evaluate(p, `JSON.stringify(window.__showcase.results)`));
+  fs.writeFileSync(path.join(OUT, "chrome-results.json"), JSON.stringify(results, null, 2));
+  console.log(JSON.stringify(results, null, 2));
+
+
   c.close();
   p.close();
 })().catch((e) => {

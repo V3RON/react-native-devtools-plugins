@@ -11,8 +11,7 @@ const api = typeof chrome !== "undefined" ? chrome : {};
 const KEY = {
   lifecycle: "showcase:lifecycle", // { installReason, installedAt, startups }
   alarms: "showcase:alarms", // { fired, last }
-  webreq: "showcase:webreq", // { before, completed, errors, last }
-  notif: "showcase:notif", // { created, clicked, closed, lastId }
+    notif: "showcase:notif", // { created, clicked, closed, lastId }
   download: "showcase:download", // { id, state, filename }
 };
 
@@ -74,11 +73,17 @@ const log = (source, text) => {
   }
 };
 
+const resetSession = () => {
+  storeSet(KEY.download, {});
+  storeSet(KEY.alarms, {});
+  storeSet(KEY.notif, {});
+};
+
 // ── lifecycle ───────────────────────────────────────────────────────────────────
 if (api.runtime && api.runtime.onInstalled) {
   api.runtime.onInstalled.addListener((details) => {
     log("background", `runtime.onInstalled reason=${details && details.reason}`);
-    storeSet(KEY.download, {});
+    resetSession();
     bump(KEY.lifecycle, {
       installReason: (details && details.reason) || "unknown",
       installedAt: Date.now(),
@@ -88,7 +93,7 @@ if (api.runtime && api.runtime.onInstalled) {
 if (api.runtime && api.runtime.onStartup) {
   api.runtime.onStartup.addListener(() => {
     log("background", "runtime.onStartup");
-    storeSet(KEY.download, {}); // download ids restart with the host
+    resetSession(); // download ids, alarm and notification stats restart with the host
     bump(KEY.lifecycle, { startups: (n) => (n || 0) + 1 });
   });
 }
@@ -104,18 +109,18 @@ if (api.runtime && api.runtime.onMessage) {
     switch (msg.type) {
       case "ping":
         log("background", "ping from " + (msg.from || "?"));
-        // Answer asynchronously: where several pages hear one message, the silent ones
-        // conclude at once, and an async answer is the one that arrives last (hosts that
-        // settle on the last leg then keep it; Chrome keeps the first real response).
-        setTimeout(() => sendResponse({ type: "pong", from: "background", at: Date.now() }), 0);
-        return true;
+        sendResponse({ type: "pong", from: "background", at: Date.now() });
+        return undefined;
       case "log":
         log(msg.from || "page", msg.text);
         sendResponse({ ok: true });
         return undefined;
       case "xframe-report":
-        setTimeout(() => sendResponse({ ...xf }), 0); // async, see "ping"
-        return true;
+        sendResponse({ ...xf });
+        return undefined;
+      case "webreq-report":
+        sendResponse({ ...webreq });
+        return undefined;
       case "arm-alarm":
         armAlarm()
           .then(sendResponse)
@@ -173,18 +178,19 @@ if (api.storage && api.storage.onChanged) {
 const ALARM = "showcase-tick";
 async function armAlarm() {
   if (!api.alarms) throw new Error("chrome.alarms is not available");
-  // 0.5 min is Chrome's 30 s floor.
-  // periodInMinutes alone: the first tick comes one period (30 s) from now. Chrome
-  // also accepts delayInMinutes next to it, but not every host does.
-  api.alarms.create(ALARM, { periodInMinutes: 0.5 });
+  // One-shot, 30 s (Chrome's floor). delayInMinutes alone: portable across hosts.
+  await bump(KEY.alarms, { armedAt: Date.now(), fired: 0, last: null });
+  api.alarms.create(ALARM, { delayInMinutes: 0.5 });
   const alarm = await call(api.alarms.get.bind(api.alarms), ALARM);
   log("background", "alarms.create " + JSON.stringify(alarm));
   return { armed: !!alarm, alarm };
 }
 if (api.alarms && api.alarms.onAlarm) {
   api.alarms.onAlarm.addListener((alarm) => {
+    if (alarm.name !== ALARM) return;
     log("background", `alarms.onAlarm ${alarm.name}`);
     bump(KEY.alarms, { fired: (n) => (n || 0) + 1, last: Date.now() });
+    if (api.alarms.clear) api.alarms.clear(ALARM); // belt and braces: never tick again
   });
 }
 
@@ -198,7 +204,7 @@ async function notify(title, message) {
     message: message || "Hello from the showcase extension",
   });
   log("background", "notifications.create -> " + id);
-  await bump(KEY.notif, { created: (n) => (n || 0) + 1, lastId: id || null });
+  await bump(KEY.notif, { created: (n) => (n || 0) + 1, lastId: id || null, notifiedAt: Date.now() });
   return { id };
 }
 if (api.notifications) {
@@ -236,12 +242,16 @@ if (api.downloads && api.downloads.onChanged) {
 }
 
 // ── webRequest (observe only; blocking is not available on this host) ───────────
-const filter = { urls: ["<all_urls>"] };
+// Scope: localhost only, matching host_permissions. Counters stay in memory: nothing
+// about the requests (and no URL) is written to storage. A Chrome worker that is
+// evicted starts counting again from zero.
+const webreq = { before: 0, completed: 0, errors: 0 };
+const filter = { urls: ["http://127.0.0.1/*", "http://localhost/*"] };
 const observe = (name, field) => {
   const ev = api.webRequest && api.webRequest[name];
   if (!ev || typeof ev.addListener !== "function") return;
-  ev.addListener((d) => {
-    bump(KEY.webreq, { [field]: (n) => (n || 0) + 1, last: `${d.method} ${d.url}` });
+  ev.addListener(() => {
+    webreq[field] += 1;
   }, filter);
 };
 observe("onBeforeRequest", "before");

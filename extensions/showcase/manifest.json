@@ -9,8 +9,8 @@
   "background": { "service_worker": "background.js" },
   "options_ui": { "page": "options.html", "open_in_tab": true },
   "permissions": ["storage", "alarms", "notifications", "downloads", "webRequest", "tabs"],
-  "host_permissions": ["<all_urls>"],
+  "host_permissions": ["http://127.0.0.1/*", "http://localhost/*"],
   "content_scripts": [
-    { "matches": ["<all_urls>"], "js": ["content.js"], "run_at": "document_idle" }
+    { "matches": ["http://127.0.0.1/*", "http://localhost/*"], "js": ["content.js"], "run_at": "document_idle" }
   ]
 }

@@ -36,7 +36,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const click = (label) =>
     evaluate(p, `(()=>{const b=[...document.querySelectorAll('button')].find(b=>b.textContent.trim()===${JSON.stringify(label)});if(!b)return false;b.click();return true})()`);
 
-  for (const label of ["Notify", "Arm alarm", "Save JSON", "Re-run", ...(process.env.EXTRA_CLICKS || "").split(",").filter(Boolean)]) console.log("click", label, await click(label));
+  for (const label of ["Reload", "Notify", "Arm alarm", "Save JSON", "Re-run", ...(process.env.EXTRA_CLICKS || "").split(",").filter(Boolean)]) console.log("click", label, await click(label));
   await sleep(1500);
   await show(logId);
   await sleep(800);

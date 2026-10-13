@@ -24,11 +24,16 @@ const toBackground = (type, extra) => {
 
 const STATE_KEY = "showcase:visibility";
 
+/** Run `fn` against storage.local when this host has it. */
+const localStore = (fn) => {
+  if (chrome.storage && chrome.storage.local) fn(chrome.storage.local);
+};
+
 // This page is the single writer and lives as long as the DevTools window, so the
 // counters are kept in memory and mirrored to storage (a read-modify-write against
 // storage would race when hidden and shown fire a few ms apart).
 const visibility = {};
-chrome.storage.local.remove(STATE_KEY); // counters are per DevTools window, not per install
+localStore((area) => area.remove(STATE_KEY)); // counters are per DevTools window, not per install
 
 /** Persist + announce a visibility transition (the panel may not be loaded yet). */
 const record = (panelName, kind, win) => {
@@ -37,7 +42,7 @@ const record = (panelName, kind, win) => {
   s.last = kind;
   s.lastAt = Date.now();
   if (kind === "shown") s.gotWindow = !!win && typeof win === "object";
-  chrome.storage.local.set({ [STATE_KEY]: JSON.parse(JSON.stringify(visibility)) });
+  localStore((area) => area.set({ [STATE_KEY]: JSON.parse(JSON.stringify(visibility)) }));
   try {
     chrome.runtime.sendMessage({ to: "panel", type: "visibility", panelName, kind, state: { ...s } }, () => {
       void chrome.runtime.lastError;
@@ -55,7 +60,7 @@ const wire = (name, panel) => {
     onShown: !!(panel && panel.onShown && typeof panel.onShown.addListener === "function"),
     onHidden: !!(panel && panel.onHidden && typeof panel.onHidden.addListener === "function"),
   };
-  chrome.storage.local.set({ ["showcase:support:" + name]: support });
+  localStore((area) => area.set({ ["showcase:support:" + name]: support }));
   if (!panel) return;
   if (panel.onShown && typeof panel.onShown.addListener === "function") {
     panel.onShown.addListener((win) => record(name, "shown", win));
@@ -65,12 +70,13 @@ const wire = (name, panel) => {
   }
 };
 
-chrome.devtools.panels.create(msg("panelTitle", "Showcase"), "icon.png", "panel.html", (panel) =>
-  wire("main", panel)
-);
-chrome.devtools.panels.create(msg("logPanelTitle", "Showcase Log"), "icon.png", "log.html", (panel) =>
-  wire("log", panel)
-);
+const panelsApi = chrome.devtools && chrome.devtools.panels;
+if (panelsApi && typeof panelsApi.create === "function") {
+  panelsApi.create(msg("panelTitle", "Showcase"), "icon.png", "panel.html", (panel) => wire("main", panel));
+  panelsApi.create(msg("logPanelTitle", "Showcase Log"), "icon.png", "log.html", (panel) => wire("log", panel));
+} else {
+  toBackground("log", { text: "chrome.devtools.panels.create is not available on this host" });
+}
 
 // Cross-frame storage.onChanged: counted here, reported on request.
 const xf = { local: 0, session: 0, last: null };
@@ -83,25 +89,17 @@ if (chrome.storage && chrome.storage.onChanged) {
   });
 }
 
-chrome.runtime.onMessage.addListener((m, sender, sendResponse) => {
+if (chrome.runtime && chrome.runtime.onMessage) chrome.runtime.onMessage.addListener((m, sender, sendResponse) => {
   if (!m || m.to !== "devtools") return undefined;
-  // Answer asynchronously (see background.js "ping" for why).
   if (m.type === "xframe-report") {
-    setTimeout(() => sendResponse({ ...xf }), 0);
-    return true;
-  }
-  if (m.type === "ping") {
-    setTimeout(
-      () =>
-        sendResponse({
-          type: "pong",
-          from: "devtools-page",
-          tabId: chrome.devtools.inspectedWindow.tabId,
-          themeName: chrome.devtools.panels.themeName,
-        }),
-      0
-    );
-    return true;
+    sendResponse({ ...xf });
+  } else if (m.type === "ping") {
+    sendResponse({
+      type: "pong",
+      from: "devtools-page",
+      tabId: chrome.devtools.inspectedWindow && chrome.devtools.inspectedWindow.tabId,
+      themeName: panelsApi && panelsApi.themeName,
+    });
   }
   return undefined;
 });

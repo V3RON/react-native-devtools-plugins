@@ -1,21 +1,6 @@
 // Second panel: a live log fed by a long-lived runtime.connect Port to the
-// background worker. Also adopts the DevTools theme (see panel.js for the details).
-const applyTheme = (name) => {
-  document.documentElement.dataset.theme = name === "dark" ? "dark" : "light";
-};
-const panels = chrome.devtools && chrome.devtools.panels;
-applyTheme(panels && panels.themeName);
-// Chrome's real hook is setThemeChangeHandler; event-style spellings are tried first.
-let wired = false;
-for (const name of ["themeChanged", "onThemeChanged"]) {
-  if (!wired && panels && panels[name] && typeof panels[name].addListener === "function") {
-    panels[name].addListener(applyTheme);
-    wired = true;
-  }
-}
-if (!wired && panels && typeof panels.setThemeChangeHandler === "function") {
-  panels.setThemeChangeHandler(applyTheme);
-}
+// background worker. Also adopts the DevTools theme (theme.js).
+window.ShowcaseTheme.init();
 
 const out = document.getElementById("entries");
 const conn = document.getElementById("conn");

@@ -1,18 +1,18 @@
 {
   "extName": {
-    "message": "Pokaz DevTools"
+    "message": "Pokaż DevTools"
   },
   "extDescription": {
-    "message": "Rozszerzenie DevTools testujace wszystkie wspierane API."
+    "message": "Rozszerzenie DevTools testujące wszystkie wspierane API."
   },
   "panelTitle": {
-    "message": "Pokaz"
+    "message": "Pokaż"
   },
   "logPanelTitle": {
     "message": "Dziennik pokazu"
   },
   "greeting": {
-    "message": "Czesc, $NAME$!",
+    "message": "Cześć, $NAME$!",
     "placeholders": {
       "name": {
         "content": "$1",

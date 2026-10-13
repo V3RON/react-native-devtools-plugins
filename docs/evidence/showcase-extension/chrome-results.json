@@ -5,7 +5,7 @@
   },
   "theme": {
     "state": "ok",
-    "text": "themeName = \"default\" (themeName) -> page is light\nlistening via setThemeChangeHandler"
+    "text": "theme changed to \"dark\" (observed 1x): page is now dark"
   },
   "visibility": {
     "state": "ok",
@@ -13,19 +13,19 @@
   },
   "eval": {
     "state": "ok",
-    "text": "eval ->\n{\"href\":\"http://127.0.0.1:9253/\",\"title\":\"Showcase target\",\"demo\":\"hello from the inspected page\",\"now\":\"2026-10-13T14:31:51.183Z\"}"
+    "text": "eval ->\n{\"href\":\"http://127.0.0.1:9253/\",\"title\":\"Showcase target\",\"demo\":\"hello from the inspected page\",\"now\":\"2026-10-13T14:44:30.853Z\"}"
   },
   "reload": {
     "state": "ok",
-    "text": "reload({ignoreCache:true}) sent at 2:31:50 PM"
+    "text": "reloaded: the page's performance.timeOrigin changed (1791902642952.5 to 1791902665817)"
   },
   "tabs": {
     "state": "ok",
-    "text": "tabId 807318360\nhttp://127.0.0.1:9253/\nShowcase target\ntabs.query({}) -> 1 tab(s)"
+    "text": "tabId 2089154696\nhttp://127.0.0.1:9253/\nShowcase target\ntabs.query({}) -> 1 tab(s)"
   },
   "net-live": {
     "state": "ok",
-    "text": "5 seen\nlatest: GET http://127.0.0.1:9253/favicon.ico -> 404 (23 ms)"
+    "text": "5 seen\nlatest: GET http://127.0.0.1:9253/favicon.ico -> 404 (19 ms)"
   },
   "net-content": {
     "state": "ok",
@@ -37,23 +37,23 @@
   },
   "webrequest": {
     "state": "ok",
-    "text": "background: 15 before / 17 completed / 0 errors\npanel listener: 5 completed\nlast: GET http://127.0.0.1:9253/favicon.ico"
+    "text": "background: 6 before / 6 completed / 0 errors (localhost only)\npanel listener: 5 completed"
   },
   "msg-bg": {
     "state": "ok",
-    "text": "reply from background at 2:31:47 PM"
+    "text": "reply from background at 2:44:22 PM"
   },
   "msg-dev": {
     "state": "ok",
-    "text": "reply from devtools-page; its tabId 807318360, its themeName \"default\""
+    "text": "reply from devtools-page; its tabId 2089154696, its themeName \"default\""
   },
   "port": {
     "state": "ok",
-    "text": "echo {\"n\":1791901907391,\"hello\":\"from the panel\"} from background"
+    "text": "echo {\"n\":1791902662702,\"hello\":\"from the panel\"} from background"
   },
   "lifecycle": {
     "state": "ok",
-    "text": "onInstalled reason=install at 2:31:26 PM\nonStartup fired 0x"
+    "text": "onInstalled reason=install at 2:44:03 PM\nonStartup fired 0x"
   },
   "bridge": {
     "state": "ok",
@@ -73,7 +73,7 @@
   },
   "storage-changed": {
     "state": "ok",
-    "text": "29 change event(s)\nlast: local showcase:alarms"
+    "text": "17 change event(s)\nlast: local showcase:alarms"
   },
   "i18n": {
     "state": "ok",
@@ -85,11 +85,11 @@
   },
   "alarms": {
     "state": "ok",
-    "text": "onAlarm fired 1x, last 2:32:20 PM"
+    "text": "armed 2:44:30 PM, onAlarm fired 2:45:00 PM (one-shot, now cleared)"
   },
   "notifications": {
     "state": "ok",
-    "text": "created 1x, id 44e9bcc1-430d-44dc-aad8-0f56130d0c68; clicked 0x, closed 1x"
+    "text": "created at 2:44:30 PM, id dd9c02ed-f9f9-4b45-92c3-eedc29be887e; clicked 0x, closed 1x"
   },
   "downloads": {
     "state": "ok",

@@ -55,17 +55,18 @@ const isFn = (obj, ...path) => {
 };
 /**
  * Address one peer. Every extension page hears every sendMessage and the others stay
- * silent (Chrome: the first real sendResponse wins). A host that settles on the LAST
- * leg's answer can lose the reply to a silent peer, so an `undefined` reply is retried
- * and then reported as such rather than mistaken for a protocol failure.
+ * silent; Chrome delivers the first real sendResponse. Some hosts settle on the LAST
+ * leg's answer instead, so a silent peer's empty answer can replace the real one. Only
+ * `idempotent` messages (ping, reports) are retried on an `undefined` reply: re-sending
+ * notify/download/arm-alarm would repeat the side effect.
  */
-const sendTo = async (to, type, extra) => {
-  for (let attempt = 0; attempt < 3; attempt++) {
+const sendTo = async (to, type, extra, { idempotent = false } = {}) => {
+  for (let attempt = 0; attempt < (idempotent ? 4 : 1); attempt++) {
     const r = await call(C.runtime.sendMessage.bind(C.runtime), { to, from: "panel", type, ...extra });
     if (r !== undefined) return r;
     await sleep(150);
   }
-  throw new LostReply(`no reply from ${to}: a silent peer's empty answer replaced it (sendMessage settles on the last leg here; Chrome keeps the first real response)`);
+  throw new LostReply(`no reply from ${to} (undefined): either nothing answered, or a silent peer's empty answer replaced the real one on a host that settles on the last response; Chrome keeps the first real one`);
 };
 class LostReply extends Unsupported {}
 const storeGet = (area, key) => call(C.storage[area].get.bind(C.storage[area]), key).then((g) => g && g[key]);
@@ -176,10 +177,6 @@ const eventLog = (text) => {
 // ── theme (chrome.devtools.panels.themeName / themeChanged) ──────────────────────
 const dtPanels = has(C, "devtools", "panels") ? C.devtools.panels : null;
 let themeChanges = 0;
-const applyTheme = (name, source) => {
-  document.documentElement.dataset.theme = name === "dark" ? "dark" : "light";
-  return `themeName = ${JSON.stringify(name)} (${source}) -> page is ${document.documentElement.dataset.theme}`;
-};
 
 // ── build the cards ──────────────────────────────────────────────────────────────
 const tabIdOf = () => (has(C, "devtools", "inspectedWindow", "tabId") ? C.devtools.inspectedWindow.tabId : undefined);
@@ -187,22 +184,12 @@ const iw = has(C, "devtools", "inspectedWindow") ? C.devtools.inspectedWindow : 
 
 const gHost = addSection("Host, theme and panel events");
 addCard(gHost, "runtime-info", "Runtime identity", "runtime.id / getManifest / getURL");
-addCard(gHost, "theme", "Theme follows DevTools", "devtools.panels.themeName + themeChanged");
+addCard(gHost, "theme", "Theme follows DevTools", "devtools.panels.themeName + setThemeChangeHandler");
 addCard(gHost, "visibility", "Panel shown / hidden", "ExtensionPanel.onShown + onHidden");
 
 const gTarget = addSection("Inspected target");
 addCard(gTarget, "eval", "Evaluate in the page", "devtools.inspectedWindow.eval", [["Re-run", () => runEval()]]);
-addCard(gTarget, "reload", "Reload the target", "devtools.inspectedWindow.reload", [
-  [
-    "Reload",
-    async () => {
-      if (!iw || !isFn(iw, "reload")) throw unsupported("inspectedWindow.reload is not available");
-      iw.reload({ ignoreCache: true });
-      setResult("reload", "ok", "reload({ignoreCache:true}) sent at " + new Date().toLocaleTimeString());
-      eventLog("inspectedWindow.reload requested");
-    },
-  ],
-]);
+addCard(gTarget, "reload", "Reload the target", "devtools.inspectedWindow.reload", [["Reload", () => runReload()]]);
 addCard(gTarget, "tabs", "Inspected tab", "tabs.get(inspectedWindow.tabId) / tabs.query");
 
 const gNet = addSection("Network");
@@ -229,7 +216,7 @@ addCard(gStore, "xframe", "Cross-frame storage events", "storage.session/local +
 ]);
 
 const gBrowser = addSection("Browser APIs");
-addCard(gBrowser, "alarms", "Alarms", "alarms.create / get / onAlarm (30 s period)", [["Arm alarm", () => runAlarm()]]);
+addCard(gBrowser, "alarms", "Alarms", "alarms.create / get / onAlarm / clear (30 s one-shot)", [["Arm alarm", () => runAlarm()]]);
 addCard(gBrowser, "notifications", "Notifications", "notifications.create", [["Notify", () => runNotify()]]);
 addCard(gBrowser, "downloads", "Downloads", "downloads.download", [
   ["Save HAR", () => runDownload("har")],
@@ -248,55 +235,70 @@ addCard(gBrowser, "options", "Options page", "runtime.openOptionsPage (options_u
 ]);
 
 // ── probes ───────────────────────────────────────────────────────────────────────
+const timeOrigin = async () => {
+  const [v, exc] = await new Promise((resolve) =>
+    iw.eval("String(performance.timeOrigin)", (value, e) => resolve([value, e]))
+  );
+  return exc && (exc.isError || exc.isException) ? null : v;
+};
+let navigations = 0;
+const runReload = () =>
+  probe("reload", async () => {
+    if (!iw || !isFn(iw, "reload")) throw unsupported("inspectedWindow.reload is not available");
+    if (navigations === 0 && isFn(C, "devtools", "network", "onNavigated", "addListener")) {
+      C.devtools.network.onNavigated.addListener(() => (navigations += 1));
+      navigations = -1; // listener armed
+    }
+    const before = isFn(iw, "eval") ? await timeOrigin() : null;
+    const navBefore = navigations;
+    iw.reload({ ignoreCache: true });
+    eventLog("inspectedWindow.reload requested");
+    // Confirm it happened: the page's performance.timeOrigin changes on a new document.
+    for (let i = 0; i < 12; i++) {
+      await sleep(500);
+      const now = before === null ? null : await timeOrigin();
+      if (before !== null && now !== null && now !== before) {
+        return `reloaded: the page's performance.timeOrigin changed (${before} to ${now})`;
+      }
+      if (navigations > navBefore && navBefore >= -1 && navigations > 0) return "reloaded: network.onNavigated fired";
+    }
+    return {
+      state: "warn",
+      text: before === null
+        ? "reload() sent, but this host has no eval to confirm it and no onNavigated fired"
+        : "reload() sent, but performance.timeOrigin did not change within 6 s",
+    };
+  });
+
 const runInfo = () =>
   probe("runtime-info", () => {
     if (!has(C, "runtime", "id")) throw unsupported("chrome.runtime is not available");
     const m = C.runtime.getManifest();
     const host = typeof location !== "undefined" ? location.protocol : "";
     $("#host").textContent = `host protocol ${host} · extension ${C.runtime.id}`;
-    return `id ${C.runtime.id}\n${m.name} v${m.version} (MV${m.manifest_version})\n${C.runtime.getURL("panel.html")}`;
+    const text = `id ${C.runtime.id}\n${m.name} v${m.version} (MV${m.manifest_version})\n${C.runtime.getURL("panel.html")}`;
+    if (/^__MSG_/.test(m.name || "")) {
+      return { state: "warn", text: text + "\n(manifest name is still a __MSG_ key: this host does not resolve manifest i18n)" };
+    }
+    return text;
   });
 
-/**
- * Subscribe to DevTools theme changes. Chrome's real surface is the method
- * `panels.setThemeChangeHandler(cb)` (Chromium 141 has no `themeChanged` event on
- * `chrome.devtools.panels`); the docs and this host's event-style surface spell it
- * `onThemeChanged` / `themeChanged`. Use whichever exists; returns the mechanism name.
- */
-const onThemeChange = (panels, cb) => {
-  for (const name of ["themeChanged", "onThemeChanged"]) {
-    if (isFn(panels, name, "addListener")) {
-      panels[name].addListener(cb);
-      return name + ".addListener";
-    }
-  }
-  if (isFn(panels, "setThemeChangeHandler")) {
-    panels.setThemeChangeHandler(cb);
-    return "setThemeChangeHandler";
-  }
-  return null;
-};
 const runTheme = () =>
   probe("theme", () => {
     if (!dtPanels) throw unsupported("chrome.devtools.panels is not available");
-    const name = dtPanels.themeName;
-    const how = onThemeChange(dtPanels, (n) => {
-      if (document.documentElement.dataset.theme === (n === "dark" ? "dark" : "light")) return; // Chrome may notify twice
+    const { name, hasHook, fallback } = window.ShowcaseTheme.init((n) => {
       themeChanges += 1;
-      const text = applyTheme(n, "theme change") + `\nchange handler fired ${themeChanges}x via ${how}`;
-      setResult("theme", "ok", text);
+      setResult("theme", "ok", `theme changed to ${JSON.stringify(n)} (observed ${themeChanges}x): page is now ${document.documentElement.dataset.theme}`);
       eventLog("theme changed -> " + n);
     });
-    if (name === undefined) {
-      // Not provided by this host (yet): follow the OS scheme so the page is still usable.
-      const dark = typeof matchMedia === "function" && matchMedia("(prefers-color-scheme: dark)").matches;
-      applyTheme(dark ? "dark" : "default", "prefers-color-scheme fallback");
-      return {
-        state: "warn",
-        text: `themeName is undefined${how ? "" : " and no theme-change hook exists"}; fell back to prefers-color-scheme (${dark ? "dark" : "light"})`,
-      };
+    const page = document.documentElement.dataset.theme;
+    if (fallback) {
+      return { state: "warn", text: `themeName is undefined${hasHook ? "" : " and there is no change hook"}; following prefers-color-scheme (${page})` };
     }
-    return applyTheme(name, "themeName") + (how ? `\nlistening via ${how}` : "\nno theme-change hook on this host");
+    if (!hasHook) {
+      return { state: "warn", text: `themeName = ${JSON.stringify(name)} (page is ${page}); setThemeChangeHandler is not available, so changes cannot be followed` };
+    }
+    return { state: "idle", text: `themeName = ${JSON.stringify(name)} read, page is ${page}; change hook present, not observed yet (switch the DevTools theme)` };
   });
 
 const VIS = "showcase:visibility";
@@ -402,32 +404,34 @@ const runTabs = () =>
     return `tabId ${id}\n${tab.url || "(no url)"}\n${tab.title || ""}${all}`;
   });
 
+const LOCAL_URLS = ["http://127.0.0.1/*", "http://localhost/*"]; // all this extension may observe
 const runWebRequest = () =>
   probe("webrequest", async () => {
     if (!has(C, "webRequest", "onCompleted")) throw unsupported("chrome.webRequest is not available");
     C.webRequest.onCompleted.addListener(() => {
       wrLocal += 1;
       refreshWebRequest();
-    }, { urls: ["<all_urls>"] });
+    }, { urls: LOCAL_URLS });
     await refreshWebRequest();
   });
 let wrLocal = 0;
 const refreshWebRequest = async () => {
   const local = wrLocal;
   if (!has(C, "webRequest", "onCompleted")) return;
-  const bg = (await storeGet("local", "showcase:webreq").catch(() => null)) || {};
+  // Counters live in the worker's memory (nothing about browsed URLs is persisted).
+  const bg = (await sendTo("background", "webreq-report", undefined, { idempotent: true }).catch(() => null)) || {};
   const n = (bg.completed || 0) + local;
   setResult(
     "webrequest",
     n > 0 || bg.before > 0 ? "ok" : "idle",
-    `background: ${bg.before || 0} before / ${bg.completed || 0} completed / ${bg.errors || 0} errors\npanel listener: ${local} completed${bg.last ? "\nlast: " + bg.last : ""}`
+    `background: ${bg.before || 0} before / ${bg.completed || 0} completed / ${bg.errors || 0} errors (localhost only)\npanel listener: ${local} completed`
   );
 };
 
 const runMsgBg = () =>
   probe("msg-bg", async () => {
     if (!isFn(C, "runtime", "sendMessage")) throw unsupported("runtime.sendMessage is not available");
-    const r = await sendTo("background", "ping");
+    const r = await sendTo("background", "ping", undefined, { idempotent: true });
     if (!r || r.type !== "pong") throw new Error("unexpected reply " + short(r));
     eventLog("sendMessage -> background pong");
     return `reply from ${r.from} at ${new Date(r.at).toLocaleTimeString()}`;
@@ -435,7 +439,7 @@ const runMsgBg = () =>
 const runMsgDev = () =>
   probe("msg-dev", async () => {
     if (!isFn(C, "runtime", "sendMessage")) throw unsupported("runtime.sendMessage is not available");
-    const r = await sendTo("devtools", "ping");
+    const r = await sendTo("devtools", "ping", undefined, { idempotent: true });
     if (!r || r.type !== "pong") throw new Error("unexpected reply " + short(r));
     return `reply from ${r.from}; its tabId ${r.tabId}, its themeName ${JSON.stringify(r.themeName)}`;
   });
@@ -545,8 +549,8 @@ const runXframe = () =>
     await storeSet("session", { "showcase:xframe": stamp });
     await storeSet("local", { "showcase:xframe": stamp });
     await sleep(600);
-    const bg = await sendTo("background", "xframe-report").catch(() => null);
-    const dev = await sendTo("devtools", "xframe-report").catch(() => null);
+    const bg = await sendTo("background", "xframe-report", undefined, { idempotent: true }).catch(() => null);
+    const dev = await sendTo("devtools", "xframe-report", undefined, { idempotent: true }).catch(() => null);
     const fmt = (r) => (r ? `session ${r.session}x, local ${r.local}x` : "no reply");
     const seen = (r) => !!r && r.session > 0 && r.local > 0;
     const sessionBack = await storeGet("session", "showcase:xframe");
@@ -560,11 +564,14 @@ const runAlarm = () =>
     const r = await sendTo("background", "arm-alarm");
     if (r && r.error) throw r.error.includes("not available") ? unsupported(r.error) : new Error(r.error);
     eventLog("alarm armed " + short(r.alarm, 80));
-    return { state: "idle", text: `armed ${short(r.alarm, 120)}; waiting for the first tick (~30 s)` };
+    return { state: "idle", text: `armed ${short(r.alarm, 120)}; waiting for the tick (~30 s)` };
   });
 const refreshAlarm = async () => {
   const a = await storeGet("local", "showcase:alarms").catch(() => null);
-  if (a && a.fired) setResult("alarms", "ok", `onAlarm fired ${a.fired}x, last ${new Date(a.last).toLocaleTimeString()}`);
+  // "works" only when a tick landed after this arm: stale counts cannot pass.
+  if (a && a.last && a.armedAt && a.last > a.armedAt) {
+    setResult("alarms", "ok", `armed ${new Date(a.armedAt).toLocaleTimeString()}, onAlarm fired ${new Date(a.last).toLocaleTimeString()} (one-shot, now cleared)`);
+  }
 };
 
 const runNotify = () =>
@@ -576,10 +583,10 @@ const runNotify = () =>
   });
 const refreshNotif = async () => {
   const n = await storeGet("local", "showcase:notif").catch(() => null);
-  if (n && n.created && !n.lastId) {
-    setResult("notifications", "warn", `created ${n.created}x but no id came back: the platform cannot show notifications here`);
-  } else if (n && n.created) {
-    setResult("notifications", "ok", `created ${n.created}x, id ${n.lastId}; clicked ${n.clicked || 0}x, closed ${n.closed || 0}x`);
+  if (n && n.notifiedAt && !n.lastId) {
+    setResult("notifications", "warn", "notifications.create ran but no id came back: the platform cannot show notifications here");
+  } else if (n && n.notifiedAt) {
+    setResult("notifications", "ok", `created at ${new Date(n.notifiedAt).toLocaleTimeString()}, id ${n.lastId}; clicked ${n.clicked || 0}x, closed ${n.closed || 0}x`);
   }
 };
 
