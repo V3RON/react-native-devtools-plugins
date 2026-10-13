@@ -7,10 +7,13 @@
       manifest declares its own policy, and inline scripts do not survive that
       policy (docs/LIMITATIONS.md §Security). panel.html has no inline script.
     -->
+    <link rel="stylesheet" href="/panel.css" />
     <script src="/panel.js" defer></script>
   </head>
   <body>
-    <h1>Basic devtools panel</h1>
+    <h1 id="heading">Basic devtools panel</h1>
+    <!-- filled by panel.js from chrome.i18n (see _locales/) -->
+    <div id="i18n-demo"></div>
     <ul id="results"></ul>
     <!-- same-extension frame: the runtime-messaging responder -->
     <iframe src="/ping.html" style="display: none"></iframe>

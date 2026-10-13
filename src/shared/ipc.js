@@ -8,6 +8,10 @@
 // `new Function` that evaluated them: `chrome.devtools.*` is implemented
 // shell-side (src/chrome-shim/devtools.js), so the fork's injected-script
 // channel has no consumer (docs/features/DEVTOOLS-PANELS.md).
+//
+// The one synchronous read a frame makes is NOT an IPC channel: chrome.i18n's message
+// bundle is fetched with a synchronous XHR to the frame's own extension origin
+// (docs/features/STORAGE-AND-I18N.md), because getMessage is synchronous in Chrome.
 
 module.exports = {
   // ── dispatch channel (docs/features/DISPATCH-CHANNEL.md) ────────────────

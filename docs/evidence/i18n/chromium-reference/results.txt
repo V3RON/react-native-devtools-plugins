@@ -1,0 +1,97 @@
+# Recorded answers of REAL Chromium 141.0.7390.37 (headless, --load-extension) for cases.js.
+# Regenerate: node docs/evidence/i18n/chromium-reference/ref-batch.js docs/evidence/i18n/chromium-reference/cases.js
+# Keys read "<call index>:[name, substitutions...]" -> what chrome.i18n.getMessage returned
+# (a missing key means it returned undefined). "LOAD ERROR" = Chromium refused the extension.
+# Default-case noise (the unchanged manifest of the throwaway extension) is trimmed.
+== dollar5
+{"0:[\"m\"]":"cost $5","1:[\"m\",[\"S1\",\"S2\"]]":"cost $5","uiLang":"en-US","ui_locale":"en_US","bidi":["ltr","rtl","left","right"],"accept":["en-US","en"],"detect":[]}
+== dollar4
+{"0:[\"m\"]":"a $$$ b","1:[\"m\",[\"S1\",\"S2\"]]":"a $$$ b","uiLang":"en-US","ui_locale":"en_US","bidi":["ltr","rtl","left","right"],"accept":["en-US","en"],"detect":[]}
+== dollar2
+{"0:[\"m\"]":"$","1:[\"m\",[\"S1\",\"S2\"]]":"$","uiLang":"en-US","ui_locale":"en_US","bidi":["ltr","rtl","left","right"],"accept":["en-US","en"],"detect":[]}
+== loneDollar
+{"0:[\"m\"]":"a b","1:[\"m\",[\"S1\",\"S2\"]]":"a b","uiLang":"en-US","ui_locale":"en_US","bidi":["ltr","rtl","left","right"],"accept":["en-US","en"],"detect":[]}
+== trailing
+{"0:[\"m\"]":"100","1:[\"m\",[\"S1\",\"S2\"]]":"100","uiLang":"en-US","ui_locale":"en_US","bidi":["ltr","rtl","left","right"],"accept":["en-US","en"],"detect":[]}
+== unclosed
+{"0:[\"m\"]":"a  c","1:[\"m\",[\"S1\",\"S2\"]]":"a  c","uiLang":"en-US","ui_locale":"en_US","bidi":["ltr","rtl","left","right"],"accept":["en-US","en"],"detect":[]}
+== nums
+{"0:[\"m\"]":"  0  ","1:[\"m\",[\"S1\",\"S2\"]]":"S1 S2 S10  ","uiLang":"en-US","ui_locale":"en_US","bidi":["ltr","rtl","left","right"],"accept":["en-US","en"],"detect":[]}
+== dollarRuns
+{"0:[\"m1\",[\"S\"]]":"$$1","1:[\"m2\",[\"S\"]]":"$$$1","2:[\"m4\"]":"$ ","3:[\"m5\"]":"$$","uiLang":"en-US","ui_locale":"en_US","bidi":["ltr","rtl","left","right"],"accept":["en-US","en"],"detect":[]}
+== phContent
+{"0:[\"m\"]":"x lit$eral  y","1:[\"m\",[\"S1\",\"S2\"]]":"x lit$eral S1 y","uiLang":"en-US","ui_locale":"en_US","bidi":["ltr","rtl","left","right"],"accept":["en-US","en"],"detect":[]}
+== phUpper
+{"0:[\"m\"]":"x up y","1:[\"m\",[\"S1\",\"S2\"]]":"x up y","uiLang":"en-US","ui_locale":"en_US","bidi":["ltr","rtl","left","right"],"accept":["en-US","en"],"detect":[]}
+== phDigitsName
+{"0:[\"m\"]":"x dig y","1:[\"m\",[\"S1\",\"S2\"]]":"x dig y","uiLang":"en-US","ui_locale":"en_US","bidi":["ltr","rtl","left","right"],"accept":["en-US","en"],"detect":[]}
+== dd_b
+{"0:[\"m\"]":"a Bc","1:[\"m\",[\"S1\",\"S2\"]]":"a Bc","uiLang":"en-US","ui_locale":"en_US","bidi":["ltr","rtl","left","right"],"accept":["en-US","en"],"detect":[]}
+== ddd_b
+{"0:[\"m\"]":"a $BB c","1:[\"m\",[\"S1\",\"S2\"]]":"a $BB c","uiLang":"en-US","ui_locale":"en_US","bidi":["ltr","rtl","left","right"],"accept":["en-US","en"],"detect":[]}
+== b_dd
+{"0:[\"m\"]":"a BBc","1:[\"m\",[\"S1\",\"S2\"]]":"a BBc","uiLang":"en-US","ui_locale":"en_US","bidi":["ltr","rtl","left","right"],"accept":["en-US","en"],"detect":[]}
+== two_b
+{"0:[\"m\"]":"BBBB","1:[\"m\",[\"S1\",\"S2\"]]":"BBBB","uiLang":"en-US","ui_locale":"en_US","bidi":["ltr","rtl","left","right"],"accept":["en-US","en"],"detect":[]}
+== contentRefsBack
+{"0:[\"m\"]":"","uiLang":"en-US","ui_locale":"en_US","bidi":["ltr","rtl","left","right"],"accept":["en-US","en"],"detect":[]}
+== msgInMsg
+{"0:[\"m\"]":"x __MSG_n__ y","uiLang":"en-US","ui_locale":"en_US","bidi":["ltr","rtl","left","right"],"accept":["en-US","en"],"detect":[]}
+== placeholderNameRules
+{"0:[\"m\"]":"v=ok ok","uiLang":"en-US","ui_locale":"en_US","bidi":["ltr","rtl","left","right"],"accept":["en-US","en"],"detect":[]}
+== dupCase
+{"0:[\"m\"]":"lower","1:[\"M\"]":"lower","uiLang":"en-US","ui_locale":"en_US","bidi":["ltr","rtl","left","right"],"accept":["en-US","en"],"detect":[]}
+== dupOrder
+{"0:[\"a\"]":"lower","1:[\"A\"]":"lower","uiLang":"en-US","ui_locale":"en_US","bidi":["ltr","rtl","left","right"],"accept":["en-US","en"],"detect":[]}
+== dupOrder2
+{"0:[\"a\"]":"lower","1:[\"A\"]":"lower","uiLang":"en-US","ui_locale":"en_US","bidi":["ltr","rtl","left","right"],"accept":["en-US","en"],"detect":[]}
+== emptyMsg
+{"0:[\"m\"]":"","1:[\"m\",[\"S1\",\"S2\"]]":"","uiLang":"en-US","ui_locale":"en_US","bidi":["ltr","rtl","left","right"],"accept":["en-US","en"],"detect":[]}
+== subs
+{"0:[\"m\"]":"[||]","1:[\"m\",\"a\"]":"[a||]","2:[\"m\",[\"a\"]]":"[a||]","4:[\"m\",5]":"[||]","5:[\"m\",[1,2]]":"[1|2|]","6:[\"m\",null]":"[||]","7:[\"m\",{}]":"[||]","8:[\"m\",[\"a\",null]]":"[a|null|]","9:[\"m\",[]]":"[||]","10:[\"m\",[\"$2\",\"$1\"]]":"[$2|$1|]","11:[\"m\",\"\"]":"[||]","12:[\"m\",\"a\",\"b\"]":"THROW Error in invocation of i18n.getMessage(string messageName, optional any substitutions, optional object options): No matching signature.","13:[]":"THROW Error in invocation of i18n.getMessage(string messageName, optional any substitutions, optional object options): No matching signature.","14:[\"\"]":"","15:[\"nope\"]":"","16:[\"nope\",[\"a\"]]":"","17:[\"M\"]":"[||]","18:[null]":"THROW Error in invocation of i18n.getMessage(string messageName, optional any substitutions, optional object options): No matching signature.","19:[5]":"THROW Error in invocation of i18n.getMessage(string messageName, optional any substitutions, optional object options): No matching signature.","uiLang":"en-US","ui_locale":"en_US","bidi":["ltr","rtl","left","right"],"accept":["en-US","en"],"detect":[]}
+== escapeLt
+{"0:[\"m\",[\"<i>\"]]":"a<b><i>","1:[\"m\",[\"<i>\"],{\"escapeLt\":true}]":"a&lt;b><i>","2:[\"m\",null,{\"escapeLt\":true}]":"a&lt;b>","3:[\"m\",\"<i>\",{}]":"a<b><i>","uiLang":"en-US","ui_locale":"en_US","bidi":["ltr","rtl","left","right"],"accept":["en-US","en"],"detect":[]}
+== atVar
+LOAD ERROR: Variable $@@bidi_dir$ used but not defined.
+== undefinedVar
+LOAD ERROR: Variable $b$ used but not defined.
+== badName
+LOAD ERROR: Name of a key "a b" is invalid. Only ASCII [a-z], [A-Z], [0-9] and "_" are allowed.
+== noMessage
+LOAD ERROR: There is no "message" element for key m.
+== reservedKey
+LOAD ERROR: Reserved key @@ui_locale found in message catalog.
+== badPlaceholderContent
+LOAD ERROR: Invalid "content" element for key m.
+== noDefaultLocale
+LOAD ERROR: Localization used, but default_locale wasn't specified in the manifest.
+== manifestSubst
+{"manifest":{"__MSG_nm__":"key","action":{"default_title":"Name EN"},"background":{"service_worker":"sw.js"},"commands":{"c":{"description":"Desc $1"}},"current_locale":"en_US","default_locale":"en","description":"pre Name EN post mixed","manifest_version":3,"name":"Name EN","short_name":"__msg_nm__","version":"1"},"uiLang":"en-US","ui_locale":"en_US","bidi":["ltr","rtl","left","right"],"accept":["en-US","en"],"detect":[]}
+== detect
+{"manifest":{"background":{"service_worker":"sw.js"},"current_locale":"en_US","default_locale":"en","manifest_version":3,"name":"case","version":"1"},"uiLang":"en-US","ui_locale":"en_US","bidi":["ltr","rtl","left","right"],"accept":["en-US","en"],"detect":[{"isReliable":false,"languages":[]},{"isReliable":false,"languages":[{"language":"sr","percentage":100}]},{"isReliable":false,"languages":[]},{"isReliable":false,"languages":[{"language":"de","percentage":100}]},{"isReliable":true,"languages":[{"language":"fr","percentage":100}]}]}
+== lang:en-US
+{"0:[\"ovr\"]":"ovr en","1:[\"only_en\"]":"only en","2:[\"only_en_GB\"]":"","3:[\"only_pt\"]":"","4:[\"only_pt_BR\"]":"","5:[\"only_de\"]":"","6:[\"only_zh_TW\"]":"","7:[\"only_es_419\"]":"","8:[\"only_he\"]":"","9:[\"only_fr_CA\"]":"","uiLang":"en-US","ui_locale":"en_US","bidi":["ltr","rtl","left","right"],"accept":["en-US","en"],"detect":[{"isReliable":false,"languages":[{"language":"de","percentage":100}]}]}
+== lang:en-GB
+{"0:[\"ovr\"]":"ovr en_GB","1:[\"only_en\"]":"only en","2:[\"only_en_GB\"]":"only en_GB","3:[\"only_pt\"]":"","4:[\"only_pt_BR\"]":"","5:[\"only_de\"]":"","6:[\"only_zh_TW\"]":"","7:[\"only_es_419\"]":"","8:[\"only_he\"]":"","9:[\"only_fr_CA\"]":"","uiLang":"en-GB","ui_locale":"en_GB","bidi":["ltr","rtl","left","right"],"accept":["en-GB","en-US","en"],"detect":[{"isReliable":false,"languages":[{"language":"de","percentage":100}]}]}
+== lang:pt-BR
+{"0:[\"ovr\"]":"ovr pt_BR","1:[\"only_en\"]":"only en","2:[\"only_en_GB\"]":"","3:[\"only_pt\"]":"only pt","4:[\"only_pt_BR\"]":"only pt_BR","5:[\"only_de\"]":"","6:[\"only_zh_TW\"]":"","7:[\"only_es_419\"]":"","8:[\"only_he\"]":"","9:[\"only_fr_CA\"]":"","uiLang":"pt-BR","ui_locale":"pt_BR","bidi":["ltr","rtl","left","right"],"accept":["pt-BR","pt","en-US","en"],"detect":[{"isReliable":false,"languages":[{"language":"de","percentage":100}]}]}
+== lang:pt-PT
+{"0:[\"ovr\"]":"ovr pt","1:[\"only_en\"]":"only en","2:[\"only_en_GB\"]":"","3:[\"only_pt\"]":"only pt","4:[\"only_pt_BR\"]":"","5:[\"only_de\"]":"","6:[\"only_zh_TW\"]":"","7:[\"only_es_419\"]":"","8:[\"only_he\"]":"","9:[\"only_fr_CA\"]":"","uiLang":"pt-PT","ui_locale":"pt_PT","bidi":["ltr","rtl","left","right"],"accept":["pt-PT","pt","en-US","en"],"detect":[{"isReliable":false,"languages":[{"language":"de","percentage":100}]}]}
+== lang:de
+{"0:[\"ovr\"]":"ovr de","1:[\"only_en\"]":"only en","2:[\"only_en_GB\"]":"","3:[\"only_pt\"]":"","4:[\"only_pt_BR\"]":"","5:[\"only_de\"]":"only de","6:[\"only_zh_TW\"]":"","7:[\"only_es_419\"]":"","8:[\"only_he\"]":"","9:[\"only_fr_CA\"]":"","uiLang":"de","ui_locale":"de","bidi":["ltr","rtl","left","right"],"accept":["de-DE","de","en-US","en"],"detect":[{"isReliable":false,"languages":[{"language":"de","percentage":100}]}]}
+== lang:de-AT
+{"0:[\"ovr\"]":"ovr de","1:[\"only_en\"]":"only en","2:[\"only_en_GB\"]":"","3:[\"only_pt\"]":"","4:[\"only_pt_BR\"]":"","5:[\"only_de\"]":"only de","6:[\"only_zh_TW\"]":"","7:[\"only_es_419\"]":"","8:[\"only_he\"]":"","9:[\"only_fr_CA\"]":"","uiLang":"de","ui_locale":"de","bidi":["ltr","rtl","left","right"],"accept":["de-DE","de","en-US","en"],"detect":[{"isReliable":false,"languages":[{"language":"de","percentage":100}]}]}
+== lang:zh-TW
+{"0:[\"ovr\"]":"ovr zh_TW","1:[\"only_en\"]":"only en","2:[\"only_en_GB\"]":"","3:[\"only_pt\"]":"","4:[\"only_pt_BR\"]":"","5:[\"only_de\"]":"","6:[\"only_zh_TW\"]":"only zh_TW","7:[\"only_es_419\"]":"","8:[\"only_he\"]":"","9:[\"only_fr_CA\"]":"","uiLang":"zh-TW","ui_locale":"zh_TW","bidi":["ltr","rtl","left","right"],"accept":["zh-TW","zh","en-US","en"],"detect":[{"isReliable":false,"languages":[{"language":"de","percentage":100}]}]}
+== lang:zh-CN
+{"0:[\"ovr\"]":"ovr en","1:[\"only_en\"]":"only en","2:[\"only_en_GB\"]":"","3:[\"only_pt\"]":"","4:[\"only_pt_BR\"]":"","5:[\"only_de\"]":"","6:[\"only_zh_TW\"]":"","7:[\"only_es_419\"]":"","8:[\"only_he\"]":"","9:[\"only_fr_CA\"]":"","uiLang":"zh-CN","ui_locale":"zh_CN","bidi":["ltr","rtl","left","right"],"accept":["zh-CN","zh"],"detect":[{"isReliable":false,"languages":[{"language":"de","percentage":100}]}]}
+== lang:es-MX
+{"0:[\"ovr\"]":"ovr es_419","1:[\"only_en\"]":"only en","2:[\"only_en_GB\"]":"","3:[\"only_pt\"]":"","4:[\"only_pt_BR\"]":"","5:[\"only_de\"]":"","6:[\"only_zh_TW\"]":"","7:[\"only_es_419\"]":"only es_419","8:[\"only_he\"]":"","9:[\"only_fr_CA\"]":"","uiLang":"es-MX","ui_locale":"es_419","bidi":["ltr","rtl","left","right"],"accept":["es-419","es"],"detect":[{"isReliable":false,"languages":[{"language":"de","percentage":100}]}]}
+== lang:he
+{"0:[\"ovr\"]":"ovr he","1:[\"only_en\"]":"only en","2:[\"only_en_GB\"]":"","3:[\"only_pt\"]":"","4:[\"only_pt_BR\"]":"","5:[\"only_de\"]":"","6:[\"only_zh_TW\"]":"","7:[\"only_es_419\"]":"","8:[\"only_he\"]":"only he","9:[\"only_fr_CA\"]":"","uiLang":"he","ui_locale":"he","bidi":["rtl","ltr","right","left"],"accept":["he-IL","he","en-US","en"],"detect":[{"isReliable":false,"languages":[{"language":"de","percentage":100}]}]}
+== lang:ar
+{"0:[\"ovr\"]":"ovr ar","1:[\"only_en\"]":"only en","2:[\"only_en_GB\"]":"","3:[\"only_pt\"]":"","4:[\"only_pt_BR\"]":"","5:[\"only_de\"]":"","6:[\"only_zh_TW\"]":"","7:[\"only_es_419\"]":"","8:[\"only_he\"]":"","9:[\"only_fr_CA\"]":"","uiLang":"ar","ui_locale":"ar","bidi":["rtl","ltr","right","left"],"accept":["ar","en-US","en"],"detect":[{"isReliable":false,"languages":[{"language":"de","percentage":100}]}]}
+== lang:fr-CA
+{"0:[\"ovr\"]":"ovr fr_CA","1:[\"only_en\"]":"only en","2:[\"only_en_GB\"]":"","3:[\"only_pt\"]":"","4:[\"only_pt_BR\"]":"","5:[\"only_de\"]":"","6:[\"only_zh_TW\"]":"","7:[\"only_es_419\"]":"","8:[\"only_he\"]":"","9:[\"only_fr_CA\"]":"only fr_CA","uiLang":"fr","ui_locale":"fr","bidi":["ltr","rtl","left","right"],"accept":["fr-FR","fr","en-US","en"],"detect":[{"isReliable":false,"languages":[{"language":"de","percentage":100}]}]}
+== lang:ja
+{"0:[\"ovr\"]":"ovr en","1:[\"only_en\"]":"only en","2:[\"only_en_GB\"]":"","3:[\"only_pt\"]":"","4:[\"only_pt_BR\"]":"","5:[\"only_de\"]":"","6:[\"only_zh_TW\"]":"","7:[\"only_es_419\"]":"","8:[\"only_he\"]":"","9:[\"only_fr_CA\"]":"","uiLang":"ja","ui_locale":"ja","bidi":["ltr","rtl","left","right"],"accept":["ja","en-US","en"],"detect":[{"isReliable":false,"languages":[{"language":"de","percentage":100}]}]}

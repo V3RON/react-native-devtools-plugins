@@ -28,6 +28,7 @@ const {
   createNetworkBridge,
 } = require("../chrome-shim");
 const { createGrantGate } = require("../shared/permissions");
+const { I18N_BUNDLE_PATH } = require("../shared/protocol");
 const {
   RUNTIME_GET_MANIFEST,
   RUNTIME_REGISTER,
@@ -76,6 +77,24 @@ ipcRenderer
   })
   .catch(() => {});
 const getManifest = () => manifestCache;
+
+// chrome.i18n: the one place this preload reads something synchronously, and why it is
+// not IPC. `getMessage` is synchronous and extensions call it before an async answer can
+// have landed, while every channel in src/shared/ipc.js is async by house rule. The
+// extension's message bundle is therefore read with a synchronous XMLHttpRequest to this
+// frame's OWN origin — the extension protocol, which already carries the path guard and
+// is where the host builds the bundle (src/main/i18n-host.js). Nothing here picks an
+// extension or a locale: the id is the request's hostname, the locale is the host's.
+// Called lazily by the shim on the first i18n call, once.
+const loadI18nBundle = () => {
+  const request = new XMLHttpRequest();
+  request.open("GET", `${window.location.origin}/${I18N_BUNDLE_PATH}`, false);
+  request.send();
+  if (request.status !== 200) {
+    throw new Error(`the host answered ${request.status}`);
+  }
+  return JSON.parse(request.responseText);
+};
 
 // Declared permissions gate capability (docs/features/EXTENSION-MANAGEMENT.md).
 // The verdict this frame is gated on is the HOST's: RUNTIME_REGISTER read the
@@ -207,6 +226,7 @@ const chrome = createChromeNamespace({
   storage,
   networkBridge,
   transport,
+  loadI18nBundle,
   getTargetInfo: () =>
     asRegisteredCaller(() => ipcRenderer.invoke(TABS_TARGET_INFO)).then((reply) =>
       // A denial or a lost reply both mean the same thing to the shim: the host did

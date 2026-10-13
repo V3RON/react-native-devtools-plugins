@@ -1,0 +1,18 @@
+{
+  "extName": { "message": "Hello Extensions", "description": "Name shown in the extension list." },
+  "extDesc": { "message": "Base Level Extension" },
+  "panelTitle": { "message": "Osudio", "description": "Tab title of the DevTools panel." },
+  "heading": { "message": "Basic devtools panel" },
+  "greeting": {
+    "message": "Hello, $USER$! You have $COUNT$ new messages.",
+    "description": "Substitution demo: $1 is a name, $2 a number.",
+    "placeholders": {
+      "user": { "content": "$1", "example": "Ada" },
+      "count": { "content": "$2", "example": "3" }
+    }
+  },
+  "uiLanguageLabel": { "message": "UI language" },
+  "directionLabel": { "message": "Text direction" },
+  "onlyDefault": { "message": "(this line exists only in the default locale, en)" },
+  "price": { "message": "Costs $$5 per month" }
+}

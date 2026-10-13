@@ -12,6 +12,10 @@
 //   transport      — optional host transport for runtime messaging
 //                    (see ./messaging); when absent, runtime messaging
 //                    degrades to the previous no-op state.
+//   loadI18nBundle — optional SYNCHRONOUS () => bundle: the extension's chrome.i18n
+//                    message bundle (src/main/i18n-host.js). Synchronous on purpose —
+//                    getMessage is, and extensions call it before anything async can
+//                    have settled (see ./i18n). Absent = no catalog: messages are "".
 //   onPanelCreated — optional (docs/features/DEVTOOLS-PANELS.md): host hook
 //                    behind chrome.devtools.panels.create; absent = inert.
 //   evalInPage     — optional (docs/features/INSPECTED-WINDOW.md): host
@@ -49,6 +53,7 @@ const { createTabs } = require("./tabs");
 const { createAction, createNotifications } = require("./browser-apis");
 const { createPermissionsApi } = require("./permissions-api");
 const { createAlarms } = require("./alarms");
+const { createI18n } = require("./i18n");
 const { createDownloads } = require("./downloads");
 const { createCommands, createContextMenus, createSidePanel } = require("./browser-shells");
 const { declaredPermissions } = require("../shared/permissions");
@@ -65,6 +70,7 @@ const createChromeNamespace = ({
   storage,
   networkBridge,
   transport,
+  loadI18nBundle,
   onPanelCreated,
   evalInPage,
   reloadInPage,
@@ -282,6 +288,11 @@ const createChromeNamespace = ({
       ),
       onChanged,
     },
+
+    // [REAL] chrome.i18n over the extension's own `_locales`, resolved with Chrome's
+    // semantics (src/shared/i18n.js). `detectLanguage` is the one honest stub.
+    // Ungated, like Chrome's (no permission exists for it).
+    i18n: createI18n({ extensionId, loadBundle: loadI18nBundle, logger }),
 
     // [ACCEPT-AND-GRANT, truthful] `chrome.permissions` reports what this extension
     // really holds and grants nothing new: capability is decided from the manifest

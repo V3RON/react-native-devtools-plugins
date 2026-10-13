@@ -1,0 +1,16 @@
+{
+  "extName": { "message": "Extensões de Exemplo" },
+  "extDesc": { "message": "Extensão de nível básico" },
+  "panelTitle": { "message": "Painel Osudio" },
+  "heading": { "message": "Painel básico do devtools" },
+  "greeting": {
+    "message": "Olá, $USER$! Você tem $COUNT$ mensagens novas.",
+    "placeholders": {
+      "user": { "content": "$1" },
+      "count": { "content": "$2" }
+    }
+  },
+  "uiLanguageLabel": { "message": "Idioma da interface" },
+  "directionLabel": { "message": "Direção do texto" },
+  "price": { "message": "Custa R$$5 por mês" }
+}

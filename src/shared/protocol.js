@@ -10,6 +10,11 @@
 
 const EXTENSION_SCHEME = "rozenite";
 
+// Reserved inner path the host answers with the extension's chrome.i18n message bundle
+// (src/main/extension-server.js). Shared because the frame preload requests it and the
+// server must reserve it in both directions.
+const I18N_BUNDLE_PATH = "__rozenite_i18n__";
+
 /**
  * Parse `rozenite://<extension-id>/<path>`.
  * @returns {{ extensionId: string, innerPath: string } | null}
@@ -31,4 +36,4 @@ const parseExtensionURL = (url) => {
 const buildExtensionURL = (extensionId, innerPath = "") =>
   `${EXTENSION_SCHEME}://${extensionId}/${innerPath.replace(/^\//, "")}`;
 
-module.exports = { EXTENSION_SCHEME, parseExtensionURL, buildExtensionURL };
+module.exports = { EXTENSION_SCHEME, I18N_BUNDLE_PATH, parseExtensionURL, buildExtensionURL };

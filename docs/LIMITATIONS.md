@@ -55,6 +55,14 @@
   ([features/DEVTOOLS-NETWORK.md](features/DEVTOOLS-NETWORK.md)).
 - Network history is a bounded ring (500 settled records, in-flight requests never dropped);
   an evicted record's body then honestly reports itself as unavailable rather than stale.
+- `chrome.i18n` is real and Chromium-checked (the recorded cases are replayed in
+  `tests/i18n-chromium-parity.test.js`), but: `detectLanguage` never detects (no CLD3 —
+  `{isReliable: false, languages: []}`), `getAcceptLanguages` is derived from the UI/OS
+  languages rather than profile prefs, a `_locales/fr_CA` folder is not consulted for
+  fr-CA (only the resolved locale is known), and catalogs Chrome would refuse to load are
+  loaded leniently with a log line. The first `getMessage` costs one synchronous
+  `XMLHttpRequest` to the frame's own `rozenite://` origin — the one synchronous read a
+  frame makes, deliberately not IPC ([features/STORAGE-AND-I18N.md](features/STORAGE-AND-I18N.md)).
 - `chrome.tabs` answers with **one synthetic tab standing for the inspected RN
   target** (`src/chrome-shim/tabs.js`, [features/SMALL-SHIMS.md](features/SMALL-SHIMS.md)).
   `query`/`get`/`update` all return that same tab under the id

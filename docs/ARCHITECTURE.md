@@ -42,7 +42,8 @@ into the frontend's main world, never `require`d at runtime.
   extensions dir, CDP-bridge knobs; all env-overridable: `DEVTOOLS_FRONTEND_URL`,
   `DEVTOOLS_EXTENSIONS_DIR`, `DEVTOOLS_CDP_BRIDGE` (`off` = external relay),
   `DEVTOOLS_METRO_HOST` / `DEVTOOLS_METRO_PORT`, `DEVTOOLS_CDP_HOST` / `DEVTOOLS_CDP_PORT`,
-  `DEVTOOLS_APP_FILTER` / `DEVTOOLS_DEVICE_FILTER`, `DEVTOOLS_CDP_REQUEST_TIMEOUT_MS`.
+  `DEVTOOLS_APP_FILTER` / `DEVTOOLS_DEVICE_FILTER`, `DEVTOOLS_CDP_REQUEST_TIMEOUT_MS`,
+  `DEVTOOLS_UI_LOCALE` (UI locale `chrome.i18n` reports; default: Electron's).
   The frontend is a patched RN
   DevTools fork ("rozenite") that renders extension panels as iframes; it is **not** in
   this repo.

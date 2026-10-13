@@ -91,6 +91,11 @@ module.exports = {
 
   preloadPath: path.join(repoRoot, "src/preload/index.js"),
 
+  // Override for the UI locale chrome.i18n reports (`pt-BR`, `de`...). Unset = what
+  // Electron resolved for the app (`--lang=`, then the OS language) — see
+  // src/main/i18n-host.js. A knob for tests and for previewing a translation.
+  uiLocale: (process.env.DEVTOOLS_UI_LOCALE || "").trim(),
+
   // chrome.tabs.create policy: "none" | "external" | "window" (see
   // TABS_OPEN_POLICIES above for why the default opens nothing).
   tabsOpen: tabsOpenPolicy(),

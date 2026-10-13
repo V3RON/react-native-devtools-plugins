@@ -1,1 +1,1 @@
-chrome.devtools.panels.create("Osudio", null, "/panel.html", null);
+chrome.devtools.panels.create(chrome.i18n.getMessage("panelTitle"), null, "/panel.html", null);
