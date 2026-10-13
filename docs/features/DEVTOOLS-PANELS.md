@@ -141,9 +141,11 @@ Divergences, stated plainly:
   script runs. Main normalises it away too (`stripThemeHintFromUrl`) before it records the
   frame's address for the message router, the frame observers and tab messages, so
   `MessageSender.url` is never hinted — asserted by the Electron test.
-- `window.chromeElectron` (the shell's raw bridge handle, which carried an expose-time
-  `themeName` snapshot and the internal helpers) is deleted from the page world once
-  `chrome.*` is assembled; `chrome.devtools.panels.themeName` is the live getter.
+- `window.chromeElectron` (the shell's raw bridge handle) keeps an expose-time `themeName`
+  snapshot and the internal helpers (`_getThemeName`, `_panelIdFor`, the unwrapped
+  `panels.create`). `contextBridge` defines it non-configurable, so it cannot be deleted
+  (measured); `chrome.devtools.panels.themeName` and the rest of `chrome.*` are the clean,
+  live objects, and nothing on the handle reaches more than the page's own extension.
 - Test coverage: `tests/theme.test.js` (rules, frame check, hint parsing, byte-preserving
   strip) and `tests/theme-electron.test.js` (real broadcast, page-world surface, stripping,
   `sender.url`). The Electron run holds every register reply back (`--register-delay-ms`), so

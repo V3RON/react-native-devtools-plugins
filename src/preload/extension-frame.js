@@ -445,10 +445,11 @@ contextBridge.executeInMainWorld({
     merged.runtime = { ...(window.chrome && window.chrome.runtime), ...bridge.runtime };
     merged.devtools = { ...(window.chrome && window.chrome.devtools), ...bridge.devtools };
     // themeName must stay live (a cloned getter would freeze at expose time).
-    // `window.chromeElectron` is the raw bridge object (expose-time `themeName` snapshot,
-    // `_getThemeName`, `_panelIdFor`, `_getLastLastError`, the unwrapped `panels.create`);
-    // it is deleted at the end of this function, and the getters below keep their own
-    // reference to it.
+    // Known leftover: `window.chromeElectron` is the raw bridge object (expose-time
+    // `themeName` snapshot, `_getThemeName`, `_panelIdFor`, `_getLastLastError`, the
+    // unwrapped `panels.create`). contextBridge defines it non-configurable, so it CANNOT
+    // be deleted (measured: `delete` is a no-op and it stays an object); the page-visible
+    // `chrome.*` built below is clean. It is the same-origin extension's own handle.
     merged.devtools.panels = { ...merged.devtools.panels };
     Object.defineProperty(merged.devtools.panels, "themeName", {
       get: () => bridge.devtools.panels._getThemeName(),
@@ -555,10 +556,5 @@ contextBridge.executeInMainWorld({
     }
 
     window.chrome = merged;
-    try {
-      delete window.chromeElectron;
-    } catch {
-      // not configurable on some embedders: the handle then stays, as before
-    }
   },
 });

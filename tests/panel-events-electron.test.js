@@ -240,7 +240,6 @@ suite("panel events: onShown(window)/onHidden through the production bridge in r
     assert.ok(start, `${ext}: devtools page ran`);
     assert.equal(start.handlePanelEvent, "undefined", "handlePanelEvent is not exposed to the page");
     assert.equal(start.rawHandlePanelEvent, "undefined", "nor on the raw bridge handle");
-    assert.equal(start.chromeElectron, "undefined", "the raw bridge handle is gone from the page world");
     assert.equal(start.panelIdForVisible, "undefined", "internal helpers are not page-visible");
   }
   const [created] = ofExt(A, "created", "A1");

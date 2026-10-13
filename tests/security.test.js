@@ -332,8 +332,7 @@ test("extension pages are not handed a raw ipcRenderer", () => {
     /exposeInMainWorld\(\s*["'](process|require|module|electron)["']/,
     "no other Node surface either"
   );
-  // What the frame DOES expose: the chrome namespace under its bridge name (the main-world
-  // merge then deletes that handle; asserted live in tests/panel-events-electron.test.js).
+  // What the frame DOES expose: the chrome namespace under its bridge name.
   assert.match(preload, /exposeInMainWorld\("chromeElectron", chrome\)/);
 });
 
