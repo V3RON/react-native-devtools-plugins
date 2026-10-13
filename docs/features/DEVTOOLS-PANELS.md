@@ -52,24 +52,44 @@ bridge asks *it*, not the OS:
    (`default` | `dark` | `systemPreferred`) against `prefers-color-scheme`. It reports on
    boot — before it creates any extension frame — and again on every `themechange` event
    (setting switched, or the system theme flipped while the setting is "System preference").
+   This is best effort and bounded (try/catch, 2 s cap): if the module moved or the IPC
+   hangs, panels are still created and the theme stays `"default"`.
 2. The report is one async IPC, `THEME_REPORT` (`window.__SHELL_HOST__.reportTheme`,
    exposed by the frontend preload). Main accepts it only from the frontend window's own
-   main frame (`panelHost.isFrontendFrame`, by frame — never from an extension iframe),
-   and `src/main/theme-host.js` refuses anything but the two names.
+   main frame (`isFrontendFrame`, decided by frame — never from an extension iframe),
+   checks the frame before it reads the payload, and `src/main/theme-host.js` refuses
+   anything but the two names.
 3. A real change is broadcast to **every** registered extension context (devtools pages,
    panel pages, background contexts) as a `RUNTIME_DELIVER` `{kind: "theme"}` push through
    the context registry; the shim updates `themeName` and fires `themeChanged(name)`.
    Repeated reports of the same theme fire nothing.
-4. A frame that boots later learns the current theme from its `RUNTIME_REGISTER` reply.
-   `themeName` is a live getter in the page world (`contextBridge` would otherwise freeze it
-   at expose time).
+4. **Boot value.** The bridge also appends `?__rozenite_theme=<name>` to the URL of every
+   frame it creates (devtools pages and panels). The extension-frame preload runs before
+   page scripts, validates the hint against the two names, sets `themeName` from it
+   synchronously and removes it from the address with `history.replaceState` — the
+   extension's own query string (encoding, order, repeats) and hash are kept byte for byte
+   (`src/shared/theme.js`). Frames without a hint (background contexts, options pages) and
+   all frames, as a fallback, take the theme from their `RUNTIME_REGISTER` reply.
+5. `themeName` is a live getter in the page world (`contextBridge` would otherwise freeze
+   it at expose time).
 
-Divergences, stated plainly: the reply is async, so a script that reads `themeName`
-synchronously *before* registration lands sees `"default"` and then gets a `themeChanged`
-if the real theme is `"dark"` (Chrome's value is available synchronously; in practice the
-reply wins the race for deferred/module scripts — verified in
-`docs/evidence/panels-theme/`). Background contexts get the API too because the shim
-installs `chrome.devtools` everywhere; Chrome would not expose it there.
+Divergences, stated plainly:
+- For frames the bridge creates, `themeName` is correct from the first script, with no
+  IPC timing involved. For other frames (background workers/pages) it starts at `"default"`
+  until the register reply lands, then `themeChanged` fires if the theme is `"dark"`.
+  Chrome exposes `chrome.devtools` only in DevTools frames, so that second case has no Chrome
+  counterpart; the shim installs the API everywhere.
+- The hint is in the frame's URL until the preload strips it (before any extension script
+  runs), so it is visible only to the shell itself — e.g. the file server's request log — and
+  carries nothing but the theme name.
+- `window.chromeElectron` (the shell's raw bridge handle) keeps an expose-time `themeName`
+  snapshot; `chrome.devtools.panels.themeName` is the live one.
+- Test coverage: `tests/theme.test.js` (rules, frame check, hint parsing) and
+  `tests/theme-electron.test.js` (real broadcast, page-world surface, stripping). The
+  Electron run cannot make a script observe the hint *before* the register reply — the
+  extension CSP forbids inline scripts and an external one lets the reply land first — so
+  "hint wins before any IPC" rests on the preload running before page scripts, not on a
+  measurement. Live evidence: `docs/evidence/panels-theme/`.
 
 Note: the frontend's `View` ids reject anything outside `[A-Za-z0-9.-]` ("Invalid view
 ID") — `panelIdFor` sanitizes path separators/underscores accordingly.

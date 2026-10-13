@@ -41,6 +41,9 @@ const waitFor = arg("wait-for");
 const SETTLE_MS = Number(arg("settle") || 900);
 // Start the production background host too (src/main/background-host.js). Off by
 // default so every pre-existing run of this harness is unchanged.
+// Name the loopback page as THE frontend window (src/main/panel-host.js), so its
+// main frame may send THEME_REPORT. Off by default: nothing else here has a frontend.
+const frontendIsHost = ["on", "true", "1"].includes(arg("frontend-host"));
 const withBackgroundHost = ["on", "true", "1"].includes(arg("background-host"));
 // Which extension id's CSP to report in the `harness` line.
 const reportedExtensionId = arg("extension-id") || "probe.local";
@@ -300,6 +303,9 @@ app
       height: 700,
       webPreferences: frontendPreferences({ preloadPath: config.preloadPath }),
     });
+    if (frontendIsHost) {
+      require("../src/main/panel-host").setFrontendContents(win.webContents);
+    }
 
     const note = (entry) => write(entry);
 

@@ -8,7 +8,9 @@ Per-namespace plans live in [../features/README.md](../features/README.md).
 
 - **`devtools.panels`** — `create` 🟨 shell-driven (`chrome.devtools.*` is implemented in
   `src/chrome-shim/devtools.js`, not by a frontend-injected script); `themeName` /
-  `themeChanged` ✅ (the frontend's real theme, `"default"` | `"dark"`); `Panel` events,
+  `themeChanged` ✅ in devtools/panel frames (the frontend's real theme, `"default"` | `"dark"`,
+  correct from the first script; background contexts learn it async, see the Theme section
+  of the panels doc); `Panel` events,
   `elements` sidebar panes, `sources`, `performance` ❌ →
   [features/DEVTOOLS-PANELS.md](../features/DEVTOOLS-PANELS.md). `recorder` 🚫.
   `openExtensionInDevtools(descriptor)` 🔧 (install flow).

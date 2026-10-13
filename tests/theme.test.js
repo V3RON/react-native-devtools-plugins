@@ -1,6 +1,7 @@
 // chrome.devtools.panels.themeName / themeChanged (docs/features/DEVTOOLS-PANELS.md):
-// the shim's live property + event, the host's validated fan-out, and the
-// chrome namespace's delivery routing.
+// the shim's live property + event, the host's validated fan-out, the chrome
+// namespace's delivery routing, the THEME_REPORT frame check and the URL boot hint.
+// The cross-process chain is tests/theme-electron.test.js.
 // Run: npm test
 const test = require("node:test");
 const assert = require("node:assert");
@@ -12,8 +13,13 @@ const {
   createMemoryBackend,
   createNetworkBridge,
 } = require("../src/chrome-shim");
-const { createThemeHost } = require("../src/main/theme-host");
+const {
+  createThemeHost,
+  createThemeReportHandler,
+  isMainFrameOf,
+} = require("../src/main/theme-host");
 const { createContextRegistry } = require("../src/main/context-registry");
+const { takeThemeHint, THEME_PARAM } = require("../src/shared/theme");
 
 const makeShim = () => createDevtools({ extensionId: "my-ext" });
 
@@ -78,7 +84,48 @@ test("theme host broadcasts only real, valid changes", () => {
   assert.deepStrictEqual(sent, [{ kind: "theme", payload: { themeName: "dark" } }]);
 });
 
-test("registry broadcast reaches every context and retires dead ones", () => {
+test("THEME_REPORT: only the frontend's own main frame is believed, payload or not", () => {
+  const sent = [];
+  const host = createThemeHost({ broadcast: (d) => sent.push(d) });
+  const mainFrame = { id: "main" };
+  const contents = { isDestroyed: () => false, mainFrame };
+  const handler = createThemeReportHandler({
+    themeHost: host,
+    isFrontendFrame: (event) => isMainFrameOf(contents, event),
+  });
+  const payload = { themeName: "dark" };
+
+  // an extension iframe in the SAME webContents
+  assert.deepStrictEqual(handler({ sender: contents, senderFrame: { id: "ext" } }, payload), { ok: false });
+  // another webContents entirely (a background window, an options page)
+  const other = { isDestroyed: () => false, mainFrame: { id: "bg" } };
+  assert.deepStrictEqual(handler({ sender: other, senderFrame: other.mainFrame }, payload), { ok: false });
+  // no frame at all, no event at all
+  assert.deepStrictEqual(handler({ sender: contents, senderFrame: null }, payload), { ok: false });
+  assert.deepStrictEqual(handler(undefined, payload), { ok: false });
+  assert.deepStrictEqual(sent, [], "nothing was broadcast for any of them");
+  assert.strictEqual(host.get(), "default");
+
+  // a destroyed frontend is not a frontend
+  const dead = { isDestroyed: () => true, mainFrame };
+  assert.deepStrictEqual(
+    createThemeReportHandler({ themeHost: host, isFrontendFrame: (e) => isMainFrameOf(dead, e) })(
+      { sender: dead, senderFrame: mainFrame },
+      payload
+    ),
+    { ok: false }
+  );
+
+  // the real one: accepted, validated, a null payload cannot throw
+  const frontend = { sender: contents, senderFrame: mainFrame };
+  assert.deepStrictEqual(handler(frontend, null), { ok: true, changed: false });
+  assert.deepStrictEqual(handler(frontend, undefined), { ok: true, changed: false });
+  assert.deepStrictEqual(handler(frontend, { themeName: "light" }), { ok: true, changed: false });
+  assert.deepStrictEqual(handler(frontend, payload), { ok: true, changed: true });
+  assert.deepStrictEqual(sent, [{ kind: "theme", payload: { themeName: "dark" } }]);
+});
+
+test("registry broadcast reaches every context; a throwing sender is retired and not counted", () => {
   const registry = createContextRegistry();
   const got = { a: [], b: [] };
   registry.register({ frameKey: "1:1", extensionId: "x", send: (d) => got.a.push(d) });
@@ -95,4 +142,24 @@ test("registry broadcast reaches every context and retires dead ones", () => {
   assert.deepStrictEqual(got.a, [delivery]);
   assert.deepStrictEqual(got.b, [delivery]);
   assert.strictEqual(registry.has("1:3"), false);
+});
+
+test("takeThemeHint validates the hint and leaves the extension's own query byte for byte", () => {
+  assert.strictEqual(THEME_PARAM, "__rozenite_theme");
+  assert.deepStrictEqual(takeThemeHint(""), { theme: null, search: null });
+  assert.deepStrictEqual(takeThemeHint("?a=1"), { theme: null, search: null });
+  assert.deepStrictEqual(takeThemeHint("?__rozenite_theme=dark"), { theme: "dark", search: "" });
+  assert.deepStrictEqual(takeThemeHint("?__rozenite_theme=default"), { theme: "default", search: "" });
+  // order, encoding, `+`, repeats and valueless keys are preserved
+  assert.deepStrictEqual(takeThemeHint("?x=a%20b+c&__rozenite_theme=dark&x=2&flag"), {
+    theme: "dark",
+    search: "?x=a%20b+c&x=2&flag",
+  });
+  // not one of Chrome's two names: stripped, but no theme
+  for (const bad of ["light", "evil", "", "DARK", "dark%20"]) {
+    assert.strictEqual(takeThemeHint(`?__rozenite_theme=${bad}`).theme, null, bad);
+  }
+  assert.deepStrictEqual(takeThemeHint("?__rozenite_theme"), { theme: null, search: "" });
+  // a look-alike key is the extension's own
+  assert.deepStrictEqual(takeThemeHint("?__rozenite_theme_x=dark"), { theme: null, search: null });
 });

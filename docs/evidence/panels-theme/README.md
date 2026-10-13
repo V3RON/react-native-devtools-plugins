@@ -12,8 +12,8 @@ setting (the one Settings -> Preferences -> Theme edits).
 | `1-boot-dark.png` | Frontend booted with `ui-theme = dark`: panel says `themeName = dark (at load)` |
 | `2-switched-to-light.png` | Setting switched to `default`: panel line reads `default (themeChanged)` |
 | `3-switched-back-to-dark.png` | Switched back to `dark` |
-| `4-boot-light.png` | Frontend reloaded with `ui-theme = default`: `themeName = default (at load)` |
-| `5-system-dark.png` / `6-system-light.png` | `ui-theme = systemPreferred`, `prefers-color-scheme` emulated dark then light: the panel follows the system flip |
+| `4-boot-light.png` | Frontend reloaded with `ui-theme = default`: `themeName = default (at load)`. Weak evidence on its own: "default" is also what an extension sees with no host input at all; the boot-dark shot is the one that distinguishes |
+| `5-system-dark.png` / `6-system-light.png` | `ui-theme = systemPreferred`, `prefers-color-scheme` emulated dark then light: the panel follows the system flip. The yellow caption (added by the driver, not product UI) prints the live `ui-theme` value and the emulated media |
 | `log.json` / `log-system.json` | Per step: frontend's `theme-with-dark-background` class, the panel's `themeName`, and the panel's console `[theme]` lines (including the `themeChanged -> <name>` events) |
 
 ## Commands
@@ -29,6 +29,11 @@ DEVTOOLS_CDP_BRIDGE=off \
 DEVTOOLS_FRONTEND_URL="http://127.0.0.1:8081/rozenite/rn_fusebox.html?ws=localhost:9223" \
   xvfb-run -a electron . --remote-debugging-port=9224 &
 ```
+
+Both drivers are committed: `drive.js` (setting switches, reloads: shots 1-4) and
+`drive-system.js` (shots 5-6). Run with the frontend stack above up:
+`NODE_PATH=<repo>/node_modules node docs/evidence/panels-theme/drive.js docs/evidence/panels-theme`
+(it writes its PNGs and `log*.json` into the directory given).
 
 The driver connected to `localhost:9224` over CDP, opened the panel with
 `InspectorView.showPanel("ext.sample-extension.panel.html")`, set the theme with

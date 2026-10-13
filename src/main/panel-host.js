@@ -13,6 +13,7 @@ const fs = require("fs");
 const path = require("path");
 const { scanExtensions } = require("./extensions");
 const { buildExtensionURL } = require("../shared/protocol");
+const { isMainFrameOf } = require("./theme-host");
 
 const BRIDGE_SOURCE = fs.readFileSync(
   path.join(__dirname, "..", "frontend", "panel-bridge.js"),
@@ -75,18 +76,16 @@ const addPanel = ({ extensionId, title, pagePath }) => {
   return true;
 };
 
-/**
- * Whether an IPC event came from the frontend window's own main frame — the only
- * principal allowed to report frontend state (the theme). Extension iframes live in
- * the same webContents but are different frames, so this is by frame, not by sender.
- */
-const isFrontendFrame = (event) =>
-  Boolean(
-    contents &&
-      !contents.isDestroyed() &&
-      event.sender === contents &&
-      event.senderFrame &&
-      event.senderFrame === contents.mainFrame
-  );
+/** Whether an IPC event came from the frontend window's own main frame. */
+const isFrontendFrame = (event) => isMainFrameOf(contents, event);
 
-module.exports = { attach, addPanel, isFrontendFrame };
+/**
+ * Name the frontend window without booting the bridge in it. `attach` does this for the
+ * app; the Electron test harness (a loopback page standing in for the frontend) calls it
+ * directly so THEME_REPORT has a frontend to be accepted from.
+ */
+const setFrontendContents = (webContents) => {
+  contents = webContents;
+};
+
+module.exports = { attach, addPanel, isFrontendFrame, setFrontendContents };

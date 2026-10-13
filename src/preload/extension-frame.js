@@ -28,6 +28,7 @@ const {
   createNetworkBridge,
 } = require("../chrome-shim");
 const { createGrantGate } = require("../shared/permissions");
+const { takeThemeHint } = require("../shared/theme");
 const {
   RUNTIME_GET_MANIFEST,
   RUNTIME_REGISTER,
@@ -322,6 +323,32 @@ const chrome = createChromeNamespace({
     ipcRenderer.invoke(DEVTOOLS_RELOAD, { options }).then((reply) => reply || { ok: false }),
 });
 
+// chrome.devtools.panels.themeName, synchronously. The panel bridge appends the theme it
+// is showing to the frame URL (`?__rozenite_theme=dark`) before it creates the iframe, and
+// this preload runs before any page script, so a classic <head> script already reads the
+// right value — no async IPC can promise that. The hint is validated against Chrome's two
+// names, then REMOVED from the address (the extension's own query and hash are kept byte
+// for byte) so `location` is what the extension expects. Frames the bridge did not create
+// (background contexts, options pages) have no hint and learn the theme from the
+// RUNTIME_REGISTER reply instead.
+{
+  const hint = takeThemeHint(window.location.search);
+  if (hint.search !== null) {
+    if (hint.theme) {
+      chrome._setThemeName(hint.theme);
+    }
+    try {
+      window.history.replaceState(
+        window.history.state,
+        "",
+        window.location.pathname + hint.search + window.location.hash
+      );
+    } catch {
+      // A document that refuses replaceState keeps the hint in its URL; harmless.
+    }
+  }
+}
+
 // Router -> frame deliveries (messages, ports, lifecycle events).
 //
 // Deliveries that arrive during startup are queued and flushed once the page's own
@@ -399,6 +426,9 @@ contextBridge.executeInMainWorld({
     merged.runtime = { ...(window.chrome && window.chrome.runtime), ...bridge.runtime };
     merged.devtools = { ...(window.chrome && window.chrome.devtools), ...bridge.devtools };
     // themeName must stay live (a cloned getter would freeze at expose time).
+    // Known leftover: `window.chromeElectron` is the raw bridge object and still carries
+    // the expose-time snapshot of `themeName` plus `_getThemeName`; it is the shell's own
+    // handle (like `chromeElectron.runtime`), not part of `chrome.*`.
     merged.devtools.panels = { ...merged.devtools.panels };
     Object.defineProperty(merged.devtools.panels, "themeName", {
       get: () => bridge.devtools.panels._getThemeName(),

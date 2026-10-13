@@ -23,7 +23,7 @@ const { createPermissionGate, API_PERMISSIONS } = require("../shared/permissions
 const tabHost = require("./tab-host");
 const notificationHost = require("./notification-host");
 const { getContextRegistry } = require("./context-registry");
-const { createThemeHost } = require("./theme-host");
+const { createThemeHost, createThemeReportHandler } = require("./theme-host");
 const { getRequestQueue } = require("./context-request");
 const saveService = require("./save-service");
 const optionsHost = require("./options-host");
@@ -399,12 +399,10 @@ const registerIpcHandlers = () => {
   // The frontend reporting its theme. Identity is the frame (the frontend's own
   // main frame), never the payload; the value is validated against Chrome's two
   // names inside the theme host before any extension hears it.
-  ipcMain.handle(THEME_REPORT, (event, { themeName } = {}) => {
-    if (!panelHost.isFrontendFrame(event)) {
-      return { ok: false };
-    }
-    return { ok: true, changed: themeHost.report(themeName) };
-  });
+  ipcMain.handle(
+    THEME_REPORT,
+    createThemeReportHandler({ themeHost, isFrontendFrame: panelHost.isFrontendFrame })
+  );
 
   // ── inspected window (docs/features/INSPECTED-WINDOW.md) ──────────────────
   // chrome.devtools.inspectedWindow.eval -> CDP Runtime.evaluate over the
