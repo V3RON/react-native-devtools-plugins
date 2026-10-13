@@ -21,7 +21,7 @@ src/
 ├── preload/         thin transport layer (frontend-host / extension-frame)
 ├── frontend/        code evaluated into the frontend's main world (panel-bridge)
 └── tools/           dev-only tools (fake-cdp, rn-cdp CLI wrapper)
-extensions/          "installed extensions": sample-extension/, graphql/, altair/
+extensions/          "installed extensions": sample-extension/, graphql/, altair/, showcase/
 ```
 
 Layering rule (imports point downward only): `shared` ← `chrome-shim` ← `main/*` ←

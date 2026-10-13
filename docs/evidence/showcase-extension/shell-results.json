@@ -1,0 +1,106 @@
+{
+  "runtime-info": {
+    "state": "ok",
+    "text": "id showcase\n__MSG_extName__ v1.0.0 (MV3)\nrozenite://showcase/panel.html"
+  },
+  "theme": {
+    "state": "ok",
+    "text": "themeName = \"dark\" (themeName) -> page is dark\nlistening via themeChanged.addListener"
+  },
+  "visibility": {
+    "state": "warn",
+    "text": "listeners registered but onShown never fired for this visible panel. shown 0x, hidden 0x, last: -"
+  },
+  "eval": {
+    "state": "warn",
+    "text": "Runtime.evaluate: CDP bridge is not running (external relay mode?)"
+  },
+  "reload": {
+    "state": "idle",
+    "text": "press Reload to reload the inspected target"
+  },
+  "tabs": {
+    "state": "ok",
+    "text": "tabId 91124\nabout:blank\n\ntabs.query({}) -> 1 tab(s)"
+  },
+  "net-live": {
+    "state": "idle",
+    "text": "listening... (press Reload target to generate traffic)"
+  },
+  "net-content": {
+    "state": "idle",
+    "text": "waiting for a request"
+  },
+  "net-har": {
+    "state": "idle",
+    "text": "0 entries so far (press Reload on the target)"
+  },
+  "webrequest": {
+    "state": "idle",
+    "text": "background: 0 before / 0 completed / 0 errors\npanel listener: 0 completed"
+  },
+  "msg-bg": {
+    "state": "ok",
+    "text": "reply from background at 2:33:20 PM"
+  },
+  "msg-dev": {
+    "state": "ok",
+    "text": "reply from devtools-page; its tabId 91124, its themeName \"dark\""
+  },
+  "port": {
+    "state": "ok",
+    "text": "echo {\"n\":1791902000406,\"hello\":\"from the panel\"} from background"
+  },
+  "lifecycle": {
+    "state": "ok",
+    "text": "onInstalled reason=install at 2:06:07 PM\nonStartup fired 7x"
+  },
+  "bridge": {
+    "state": "warn",
+    "text": "no content script in the target (tabs.sendMessage: no content script of \"showcase\" is running in the inspected target, so nothing can receive this message. docs/features/CONTENT-SCRIPTS.md is the opt-in; its current state here is not injected (nothing allowlisted)). In the shell it is opt-in: DEVTOOLS_CONTENT_SCRIPTS=showcase"
+  },
+  "storage-local": {
+    "state": "ok",
+    "text": "showcase:local-probe: 18 -> 19 (round-trip OK)"
+  },
+  "storage-sync": {
+    "state": "ok",
+    "text": "showcase:sync-probe: 18 -> 19 (round-trip OK)"
+  },
+  "storage-session": {
+    "state": "ok",
+    "text": "showcase:session-probe: 0 -> 1 (round-trip OK)"
+  },
+  "storage-changed": {
+    "state": "ok",
+    "text": "5 change event(s)\nlast: local showcase:xframe"
+  },
+  "i18n": {
+    "state": "warn",
+    "text": "chrome.i18n is not available"
+  },
+  "xframe": {
+    "state": "warn",
+    "text": "wrote session+local\nbackground heard: session 0x, local 0x\ndevtools page heard: session 0x, local 0x\nsession readable back: true\n(other contexts did not receive both onChanged events: per-frame storage here)"
+  },
+  "alarms": {
+    "state": "ok",
+    "text": "onAlarm fired 7x, last 2:33:44 PM"
+  },
+  "notifications": {
+    "state": "warn",
+    "text": "created 10x but no id came back: the platform cannot show notifications here"
+  },
+  "downloads": {
+    "state": "ok",
+    "text": "download #1 complete: showcase-results.json"
+  },
+  "permissions": {
+    "state": "ok",
+    "text": "contains(storage)=true, contains(bookmarks)=false\ngetAll: storage, tabs, webRequest, notifications, alarms, downloads"
+  },
+  "options": {
+    "state": "idle",
+    "text": "press Open options"
+  }
+}

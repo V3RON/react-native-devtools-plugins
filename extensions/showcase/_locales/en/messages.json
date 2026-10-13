@@ -1,0 +1,36 @@
+{
+  "extName": {
+    "message": "DevTools Showcase",
+    "description": "Extension name"
+  },
+  "extDescription": {
+    "message": "Kitchen-sink DevTools extension: exercises every API this host supports and reports live status."
+  },
+  "panelTitle": {
+    "message": "Showcase"
+  },
+  "logPanelTitle": {
+    "message": "Showcase Log"
+  },
+  "greeting": {
+    "message": "Hello, $NAME$!",
+    "placeholders": {
+      "name": {
+        "content": "$1",
+        "example": "Ada"
+      }
+    }
+  },
+  "optionsTitle": {
+    "message": "Showcase options"
+  },
+  "localeName": {
+    "message": "English"
+  },
+  "pair": {
+    "message": "item $1 of $2"
+  },
+  "fallbackProbe": {
+    "message": "only defined in en (locale fallback works)"
+  }
+}

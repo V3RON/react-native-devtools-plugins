@@ -1,0 +1,32 @@
+{
+  "extName": {
+    "message": "Pokaz DevTools"
+  },
+  "extDescription": {
+    "message": "Rozszerzenie DevTools testujace wszystkie wspierane API."
+  },
+  "panelTitle": {
+    "message": "Pokaz"
+  },
+  "logPanelTitle": {
+    "message": "Dziennik pokazu"
+  },
+  "greeting": {
+    "message": "Czesc, $NAME$!",
+    "placeholders": {
+      "name": {
+        "content": "$1",
+        "example": "Ada"
+      }
+    }
+  },
+  "optionsTitle": {
+    "message": "Opcje pokazu"
+  },
+  "localeName": {
+    "message": "Polski"
+  },
+  "pair": {
+    "message": "pozycja $1 z $2"
+  }
+}

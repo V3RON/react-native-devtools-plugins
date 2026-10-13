@@ -1,0 +1,36 @@
+[
+  {
+    "name": "DevTools Showcase",
+    "version": "1.0.0",
+    "state": "ENABLED",
+    "runtimeErrors": 0,
+    "manifestErrors": 0,
+    "views": [
+      {
+        "type": "DEVELOPER_TOOLS",
+        "url": "devtools://devtools/bundled/devtools_app.html?remoteBase=https://chrome-devtools-frontend.appspot.com/serve_file/@9f043f63b0e5b728c8d09f3e3ddfc1681a4bd58e/&targetType=tab&can_dock=true",
+        "isIframe": true
+      },
+      {
+        "type": "DEVELOPER_TOOLS",
+        "url": "devtools://devtools/bundled/devtools_app.html?remoteBase=https://chrome-devtools-frontend.appspot.com/serve_file/@9f043f63b0e5b728c8d09f3e3ddfc1681a4bd58e/&targetType=tab&can_dock=true",
+        "isIframe": true
+      },
+      {
+        "type": "DEVELOPER_TOOLS",
+        "url": "devtools://devtools/bundled/devtools_app.html?remoteBase=https://chrome-devtools-frontend.appspot.com/serve_file/@9f043f63b0e5b728c8d09f3e3ddfc1681a4bd58e/&targetType=tab&can_dock=true",
+        "isIframe": true
+      },
+      {
+        "type": "EXTENSION_SERVICE_WORKER_BACKGROUND",
+        "url": "chrome-extension://gjnjiccaaeeipkfghcgameomolkeombm/background.js",
+        "isIframe": false
+      }
+    ],
+    "permissions": [
+      "Read and change all your data on all websites",
+      "Display notifications",
+      "Manage your downloads"
+    ]
+  }
+]

@@ -38,8 +38,8 @@
    extension frame. `panelId` derives from (extensionId, pagePath), so frontend reloads
    replay the registry and fresh `panels.create` calls dedupe against it.
 
-All three bundled extensions (`sample-extension` "Osudio", GraphQL Network Inspector,
-Altair GraphQL) register and render this way. The old `setInjectedScriptForOrigin`
+All the bundled extensions (`sample-extension` "Osudio", GraphQL Network Inspector,
+Altair GraphQL, and the `showcase` kitchen-sink with two panels) register and render this way. The old `setInjectedScriptForOrigin`
 channel (fork-provided devtools script) remains, unused by the stock frontend.
 
 Note: the frontend's `View` ids reject anything outside `[A-Za-z0-9.-]` ("Invalid view

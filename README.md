@@ -59,6 +59,11 @@ Notes:
   - `extensions/graphql/` — GraphQL Network Inspector (unpacked Chrome Web Store build)
   - `extensions/altair/` — Altair GraphQL Client (unpacked Chrome Web Store build; its
     background is an ES module)
+  - `extensions/showcase/` — "kitchen sink" reference + live smoke test: one status card per
+    supported `chrome.*` capability (devtools panels/network/inspectedWindow, messaging, storage,
+    i18n, alarms, notifications, downloads, permissions, tabs, webRequest, options page,
+    content-script bridge). Plain JS, no build step; loads in real Chrome too
+    (extensions/showcase/README.md)
 - `src/tools/fake-cdp.js` — standalone CDP proxy that points the frontend at a real Chrome tab
   instead of an RN app (`npm run fake-cdp`, needs Chrome with `--remote-debugging-port=9222`;
   run the shell with `DEVTOOLS_CDP_BRIDGE=off` so the port is free).
