@@ -70,7 +70,10 @@ const createStorageService = ({
         try {
           loaded = persistence.load() || {};
         } catch (error) {
+          // Never cache an area that was not read: a later write would overwrite a file
+          // this process has not seen. The call fails and the next one reads again.
           log(`could not read ${area} storage of ${extensionId}: ${error.message}`);
+          throw new Error(`storage: could not read ${area} storage (${error.message})`);
         }
       }
       entry = {
@@ -83,11 +86,16 @@ const createStorageService = ({
           persistence && persistence.legacy
             ? { snapshot: persistence.legacy.snapshot, shadow: new Set(persistence.legacy.shadow || []) }
             : null,
-        metaDirty: false,
+        // The meta file could not be written when the area was first read; save() retries
+        // it before it writes any data.
+        metaDirty: Boolean(persistence && persistence.metaPending),
         dirty: false,
         timer: null,
         id,
       };
+      if (entry.metaDirty) {
+        markDirty(entry);
+      }
       areas.set(id, entry);
     }
     return entry;
@@ -102,11 +110,16 @@ const createStorageService = ({
       return;
     }
     try {
-      entry.persistence.save(Object.fromEntries(entry.map));
-      if (entry.metaDirty && entry.legacy && entry.persistence.saveMeta) {
-        entry.persistence.saveMeta({ snapshot: entry.legacy.snapshot, shadow: [...entry.legacy.shadow] });
+      // Meta first: the shadow set (and the "this area was already classified" fact) must be
+      // on disk no later than the data it describes, or a crash between the two writes
+      // could resurrect a removed dotted key / re-classify rewritten data as legacy.
+      if (entry.metaDirty && entry.persistence.saveMeta) {
+        entry.persistence.saveMeta(
+          entry.legacy ? { snapshot: entry.legacy.snapshot, shadow: [...entry.legacy.shadow] } : null
+        );
+        entry.metaDirty = false;
       }
-      entry.metaDirty = false;
+      entry.persistence.save(Object.fromEntries(entry.map));
       entry.dirty = false;
     } catch (error) {
       // Stays dirty: the next write or flush retries.
@@ -339,8 +352,8 @@ const createStorageService = ({
 // `legacy.snapshot` (see the fallback in createStorageService) and the meta file is written
 // at once, so that decision is made exactly once. An empty/new area gets `legacy: null`,
 // also written at once — otherwise its first data would be mistaken for legacy later.
-const electronStorePersistence = ({ cwd } = {}) => {
-  const { default: Store } = require("electron-store");
+const electronStorePersistence = ({ cwd, Store: StoreClass } = {}) => {
+  const Store = StoreClass || require("electron-store").default; // StoreClass: test seam
   return (extensionId, area) => {
     const name = `extension-${extensionId}-${area}`;
     const options = cwd ? { cwd } : {};
@@ -348,6 +361,7 @@ const electronStorePersistence = ({ cwd } = {}) => {
     const metaStore = new Store({ name: `${name}.meta`, ...options });
     const persistence = {
       legacy: null,
+      metaPending: false,
       load: () => {
         const items = store.store;
         const meta = metaStore.store;
@@ -356,7 +370,13 @@ const electronStorePersistence = ({ cwd } = {}) => {
         } else {
           persistence.legacy =
             Object.keys(items).length > 0 ? { snapshot: JSON.parse(JSON.stringify(items)), shadow: [] } : null;
-          metaStore.store = { version: 2, legacy: persistence.legacy };
+          try {
+            metaStore.store = { version: 2, legacy: persistence.legacy };
+          } catch {
+            // Not fatal and not a reason to forget the classification: it stays in memory,
+            // and the service retries the write before any data is written.
+            persistence.metaPending = true;
+          }
         }
         return items;
       },
@@ -364,8 +384,9 @@ const electronStorePersistence = ({ cwd } = {}) => {
         store.store = items;
       },
       saveMeta: (legacy) => {
-        persistence.legacy = legacy;
         metaStore.store = { version: 2, legacy };
+        persistence.legacy = legacy;
+        persistence.metaPending = false;
       },
     };
     return persistence;

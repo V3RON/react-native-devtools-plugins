@@ -463,6 +463,98 @@ test("the real electron-store persistence: old file, snapshot fallback, shadow s
   }
 });
 
+test("a failed meta write on first open loses nothing: data survives, meta is retried before data", async () => {
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const path = require("node:path");
+  const { electronStorePersistence } = require("../src/main/storage-service");
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "rozenite-storage-meta-"));
+  const dataFile = path.join(cwd, "extension-ext.a-local.json");
+  const metaFile = path.join(cwd, "extension-ext.a-local.meta.json");
+  fs.writeFileSync(dataFile, JSON.stringify(OLD_FILE));
+
+  // The REAL electron-store, except that writing a *.meta.json fails (ENOSPC-like) while
+  // `failMeta` is set.
+  let failMeta = true;
+  const RealStore = require("electron-store").default;
+  class FlakyStore extends RealStore {
+    set store(value) {
+      if (failMeta && this.path.endsWith(".meta.json")) {
+        throw Object.assign(new Error("ENOSPC: no space left on device"), { code: "ENOSPC" });
+      }
+      super.store = value;
+    }
+    get store() {
+      return super.store;
+    }
+  }
+  const services = [];
+  try {
+    const launch = () => {
+      const w = world({ openPersistence: electronStorePersistence({ cwd, Store: FlakyStore }) });
+      services.push(w.service);
+      return w.context("ext.a");
+    };
+    const first = launch();
+    assert.deepStrictEqual(await first.storage.local.get("plain"), { plain: 1 }, "the area still reads its data");
+    assert.deepStrictEqual(Object.keys(await first.storage.local.get(null)).sort(), ["plain", "settings"]);
+    assert.deepStrictEqual(await first.storage.local.get("settings.theme"), { "settings.theme": "dark" }, "and is still classified legacy");
+    await first.storage.local.set({ n: 1 });
+
+    // Disk still refuses the meta file: data must NOT be written ahead of it.
+    services.forEach((service) => service.flush());
+    assert.deepStrictEqual(JSON.parse(fs.readFileSync(dataFile, "utf8")), OLD_FILE, "data untouched while meta cannot be written");
+
+    // The disk recovers: meta first, then data.
+    failMeta = false;
+    services.forEach((service) => service.flush());
+    assert.strictEqual(JSON.parse(fs.readFileSync(metaFile, "utf8")).legacy.snapshot.settings.theme, "dark");
+    assert.deepStrictEqual(JSON.parse(fs.readFileSync(dataFile, "utf8")), { ...OLD_FILE, n: 1 });
+
+    const second = launch();
+    assert.deepStrictEqual(await second.storage.local.get(["n", "plain", "settings.theme"]), {
+      n: 1,
+      plain: 1,
+      "settings.theme": "dark",
+    });
+  } finally {
+    failMeta = false;
+    services.forEach((service) => service.flush());
+    fs.rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test("an area whose file could not be read is not cached, so no write can overwrite it", async () => {
+  let failing = true;
+  const saved = [];
+  const timers = manualTimers();
+  const { context, service } = world({
+    ...timers,
+    openPersistence: () => ({
+      load: () => {
+        if (failing) {
+          throw new Error("EIO: read failed");
+        }
+        return { precious: 1 };
+      },
+      save: (items) => saved.push(items),
+    }),
+  });
+  const a = context("ext.a");
+  await assert.rejects(a.storage.local.get(null), /could not read local storage \(EIO: read failed\)/);
+  await assert.rejects(a.storage.local.set({ n: 1 }), /could not read local storage/);
+  service.flush();
+  timers.fire();
+  assert.deepStrictEqual(saved, [], "nothing was ever written over the unread file");
+  assert.deepStrictEqual(a.events, []);
+
+  failing = false;
+  assert.deepStrictEqual(await a.storage.local.get(null), { precious: 1 }, "the next call reads it again");
+  await a.storage.local.set({ n: 1 });
+  service.flush();
+  assert.deepStrictEqual(saved, [{ precious: 1, n: 1 }]);
+});
+
 test("legacy data over the new limits can shrink but not grow", async () => {
   // 20 items of ~7 KB: 140 KB, over sync's 100 KB, as the unlimited old shim allowed.
   const legacy = {};

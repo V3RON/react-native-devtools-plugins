@@ -95,7 +95,7 @@ const page = (script) =>
 suite("session storage is shared per extension and its changes reach every context", { timeout: 240000 }, async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rozenite-storage-"));
   t.after(() => {
-    fs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
   });
 
   const extensionsDir = path.join(root, "extensions");
