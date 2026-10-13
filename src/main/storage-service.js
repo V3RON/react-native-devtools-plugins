@@ -76,9 +76,14 @@ const createStorageService = ({
       entry = {
         map: new Map(Object.entries(loaded)),
         persistence,
-        // Written by the old per-frame shim (see electronStorePersistence): dotted keys are
-        // still readable by name.
-        legacy: Boolean(persistence && persistence.legacy),
+        // Present for an area the old per-frame shim wrote (see electronStorePersistence):
+        // {snapshot: the nested data as it was at upgrade, shadow: dotted names that have
+        // been written or removed since, which the fallback must never resolve again}.
+        legacy:
+          persistence && persistence.legacy
+            ? { snapshot: persistence.legacy.snapshot, shadow: new Set(persistence.legacy.shadow || []) }
+            : null,
+        metaDirty: false,
         dirty: false,
         timer: null,
         id,
@@ -98,6 +103,10 @@ const createStorageService = ({
     }
     try {
       entry.persistence.save(Object.fromEntries(entry.map));
+      if (entry.metaDirty && entry.legacy && entry.persistence.saveMeta) {
+        entry.persistence.saveMeta({ snapshot: entry.legacy.snapshot, shadow: [...entry.legacy.shadow] });
+      }
+      entry.metaDirty = false;
       entry.dirty = false;
     } catch (error) {
       // Stays dirty: the next write or flush retries.
@@ -145,13 +154,28 @@ const createStorageService = ({
     return seq;
   };
 
-  // An old-format file nested `"a.b"` as {a: {b}}. For such an area a key that is not stored
-  // under its own name is looked up as a dotted path, so `get("settings.theme")` still finds
-  // what an extension saved under that name. Reads only: nothing is rewritten, and a key
-  // stored verbatim (a write after the upgrade) always wins.
-  const dottedLookup = (map, key) => {
+  // An old-format file nested `"a.b"` as {a: {b}}, and which nested objects came from dotted
+  // keys cannot be recovered, so nothing is migrated or rewritten. Instead the data as it was
+  // at upgrade time is kept as a frozen snapshot (`legacy.snapshot`), and a get() of a dotted
+  // key that is not stored under its own name is answered from it — but only while that is
+  // still the pre-upgrade truth:
+  //   - the snapshot is never updated, and its top-level key must still hold exactly the
+  //     snapshot's value, so nested data written AFTER the upgrade is not read as paths;
+  //   - a dotted name that has been written or removed since is in `legacy.shadow` (persisted
+  //     beside the snapshot) and is never resolved again, so a removed value cannot come back.
+  // Removing a key the fallback resolves emits onChanged {oldValue} like any removal; the
+  // nested leaf itself stays in its parent object (that object is a key of its own).
+  const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  const fallbackValue = (entry, key) => {
+    const legacy = entry.legacy;
+    if (!legacy || !key.includes(".") || entry.map.has(key) || legacy.shadow.has(key)) {
+      return undefined;
+    }
     const [first, ...rest] = key.split(".");
-    let value = map.get(first);
+    if (!Object.hasOwn(legacy.snapshot, first) || !entry.map.has(first) || !same(entry.map.get(first), legacy.snapshot[first])) {
+      return undefined;
+    }
+    let value = legacy.snapshot[first];
     for (const part of rest) {
       if (value === null || typeof value !== "object" || !Object.hasOwn(value, part)) {
         return undefined;
@@ -160,7 +184,7 @@ const createStorageService = ({
     }
     return value;
   };
-  const legacyView = (map, keys) => {
+  const legacyView = (entry, keys) => {
     const names =
       typeof keys === "string"
         ? [keys]
@@ -169,17 +193,21 @@ const createStorageService = ({
           : keys && typeof keys === "object"
             ? Object.keys(keys)
             : [];
-    let view = map;
+    let view = entry.map;
     for (const name of names) {
-      if (typeof name === "string" && name.includes(".") && !map.has(name)) {
-        const value = dottedLookup(map, name);
-        if (value !== undefined) {
-          view = view === map ? new Map(map) : view;
-          view.set(name, value);
-        }
+      const value = typeof name === "string" ? fallbackValue(entry, name) : undefined;
+      if (value !== undefined) {
+        view = view === entry.map ? new Map(entry.map) : view;
+        view.set(name, value);
       }
     }
     return view;
+  };
+  const shadow = (entry, key) => {
+    if (entry.legacy && key.includes(".") && !entry.legacy.shadow.has(key)) {
+      entry.legacy.shadow.add(key);
+      entry.metaDirty = true;
+    }
   };
 
   const attach = ({ frameKey, extensionId, send, allowed = () => true, trusted = true }) => {
@@ -230,7 +258,7 @@ const createStorageService = ({
       let changes = null;
       switch (op) {
         case "get":
-          value = core.get(entry.legacy ? legacyView(entry.map, arg) : entry.map, arg);
+          value = core.get(entry.legacy ? legacyView(entry, arg) : entry.map, arg);
           break;
         case "getBytesInUse":
           value = core.getBytesInUse(entry.map, arg);
@@ -240,15 +268,41 @@ const createStorageService = ({
           break;
         case "set":
           changes = core.set(entry.map, area, arg);
+          if (entry.legacy) {
+            Object.keys(arg).forEach((key) => shadow(entry, key));
+          }
           break;
-        case "remove":
+        case "remove": {
+          const list = typeof arg === "string" ? [arg] : arg;
+          const resolved = [];
+          if (entry.legacy && Array.isArray(list)) {
+            for (const key of list) {
+              const old = typeof key === "string" ? fallbackValue(entry, key) : undefined;
+              if (old !== undefined) {
+                resolved.push([key, { oldValue: old }]);
+              }
+              if (typeof key === "string") {
+                shadow(entry, key);
+              }
+            }
+          }
           changes = core.remove(entry.map, arg);
+          if (resolved.length) {
+            changes = Object.fromEntries([...resolved, ...Object.entries(changes)]);
+          }
           break;
+        }
         case "clear":
+          if (entry.legacy) {
+            [...entry.map.keys()].forEach((key) => shadow(entry, key));
+          }
           changes = core.clear(entry.map);
           break;
       }
 
+      if (entry.metaDirty) {
+        markDirty(entry);
+      }
       if (!changes || Object.keys(changes).length === 0) {
         return { ok: true, value, seq: 0 };
       }
@@ -271,36 +325,47 @@ const createStorageService = ({
 };
 
 // ── the electron-store persistence src/main/ipc.js installs ─────────────────
-// Same file names the per-frame stores used (`extension-<id>-<area>`), so what an
+// Same file names the per-frame stores used (`extension-<id>-<area>.json`), so what an
 // extension saved before the move is still there. The WHOLE object is written
 // (`store.store = …`) rather than `store.set(items)`: electron-store treats a dot in
 // a key as a path, which would store `{"a.b": 1}` as `{a: {b: 1}}` and read back
 // a different key than the extension wrote.
 //
-// That is exactly what the OLD per-frame shim did, so a file it wrote can hold `a.b` as
-// `{a: {b}}`, and which nested objects came from dotted keys is not recoverable. Choice:
-// do not guess and rewrite. Files carry a format marker; a non-empty file WITHOUT one is
-// legacy, is read as-is (a nested value is still there under its first segment) and is
-// flagged `legacy`, which makes the service resolve not-found dotted keys as paths. The
-// marker records the flag, so it survives the first save and the fallback keeps working
-// for as long as the file lives. A new or empty file is written in the new format and
-// has no fallback.
-const FORMAT_KEY = "__rozenite_storage_format__";
-
+// The data file holds the extension's keys and NOTHING else — no marker in its key
+// namespace. What this module needs to remember lives in a sibling file,
+// `extension-<id>-<area>.meta.json`: {version: 2, legacy: null | {snapshot, shadow}}.
+// The first time an area is opened with no meta file, a non-empty data file is by
+// definition one the old per-frame shim wrote: its content is frozen into
+// `legacy.snapshot` (see the fallback in createStorageService) and the meta file is written
+// at once, so that decision is made exactly once. An empty/new area gets `legacy: null`,
+// also written at once — otherwise its first data would be mistaken for legacy later.
 const electronStorePersistence = ({ cwd } = {}) => {
   const { default: Store } = require("electron-store");
   return (extensionId, area) => {
-    const store = new Store({ name: `extension-${extensionId}-${area}`, ...(cwd ? { cwd } : {}) });
+    const name = `extension-${extensionId}-${area}`;
+    const options = cwd ? { cwd } : {};
+    const store = new Store({ name, ...options });
+    const metaStore = new Store({ name: `${name}.meta`, ...options });
     const persistence = {
-      legacy: false,
+      legacy: null,
       load: () => {
-        const raw = store.store;
-        const marker = raw[FORMAT_KEY];
-        persistence.legacy = marker ? Boolean(marker.legacy) : Object.keys(raw).length > 0;
-        return Object.fromEntries(Object.entries(raw).filter(([key]) => key !== FORMAT_KEY));
+        const items = store.store;
+        const meta = metaStore.store;
+        if (meta.version === 2) {
+          persistence.legacy = meta.legacy || null;
+        } else {
+          persistence.legacy =
+            Object.keys(items).length > 0 ? { snapshot: JSON.parse(JSON.stringify(items)), shadow: [] } : null;
+          metaStore.store = { version: 2, legacy: persistence.legacy };
+        }
+        return items;
       },
       save: (items) => {
-        store.store = { ...items, [FORMAT_KEY]: { version: 2, legacy: persistence.legacy } };
+        store.store = items;
+      },
+      saveMeta: (legacy) => {
+        persistence.legacy = legacy;
+        metaStore.store = { version: 2, legacy };
       },
     };
     return persistence;
@@ -312,5 +377,4 @@ module.exports = {
   electronStorePersistence,
   SESSION_ACCESS_LEVELS,
   NOT_ALLOWED,
-  FORMAT_KEY,
 };

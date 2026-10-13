@@ -88,12 +88,20 @@ What remains different from Chrome:
 
 - **Dotted keys.** The old shim let electron-store treat a dot as a path, so
   `set({"settings.theme": "dark"})` was saved as `{settings: {theme: "dark"}}` and read back by
-  path. Which nested objects came from dotted keys cannot be recovered from the file, so nothing is
-  rewritten. A file with no format marker (`__rozenite_storage_format__`, written on first save) is
-  treated as legacy: it is read as it is, and a key that is not stored under its own name
-  (`get("settings.theme")`) falls back to a dotted-path lookup. The marker records "legacy" so the
-  fallback survives restarts; a key written after the upgrade is stored verbatim and wins. New
-  files have no fallback. Covered by a test on the real `electronStorePersistence`.
+  path. Which nested objects came from dotted keys cannot be recovered from the file, so no
+  automatic migration is attempted (it would have to guess). Instead, the first time an area is
+  opened with no `extension-<id>-<area>.meta.json`, a non-empty data file is taken to be the old
+  shim's: its content is frozen as a snapshot in the meta file (a new/empty area gets
+  `legacy: null`, also written at once). A `get` of a dotted key that is not stored under its own
+  name is answered from that snapshot, with limits that keep it from misleading:
+  the snapshot is never updated and its top-level key must still hold exactly the snapshot value
+  (nested data written after the upgrade is never read as a path); a dotted name that has been
+  written or removed since upgrade goes into a persisted *shadow* set and is never resolved
+  again (a removed value cannot come back); removing a fallback-resolved key fires
+  `onChanged {oldValue}` like any removal. Limits: such keys are not listed by `get(null)` /
+  `getKeys`, `getBytesInUse` ignores them, and `remove("settings.theme")` hides the alias but
+  leaves the leaf inside the `settings` object (that object is a key of its own). The data file
+  holds the extension's keys only; the marker is not stored in the extension's key namespace.
 - **`sync` over the new limits.** The old shim never enforced sync's 100 KB / 8 KB-per-item /
   512-item limits, so an existing area can already be over them. The check compares the state
   AFTER the write: a write that leaves the area no larger than it was (replacing a value with a

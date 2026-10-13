@@ -346,66 +346,119 @@ test("a failing disk is logged and retried, and does not undo or reject the writ
   assert.deepStrictEqual(disk, { k: 1 }, "the next flush retries");
 });
 
-test("a legacy file's dotted keys stay readable by name; verbatim keys win", async () => {
+// What the old per-frame shim left on disk for set({"settings.theme": "dark", plain: 1}).
+const OLD_FILE = { settings: { theme: "dark" }, plain: 1 };
+
+const legacyWorld = () => {
   const d = memoryDisk();
-  // What the old per-frame shim left on disk for set({"settings.theme": "dark", plain: 1}).
-  d.disk.set("ext.a/local", { settings: { theme: "dark" }, plain: 1 });
-  const timers = manualTimers();
-  const { context, service } = world({
-    ...timers,
-    openPersistence: (extensionId, area) => {
-      const p = d.openPersistence(extensionId, area);
-      return { ...p, legacy: true };
-    },
+  d.disk.set("ext.a/local", JSON.parse(JSON.stringify(OLD_FILE)));
+  const meta = {};
+  const w = world({
+    ...manualTimers(),
+    openPersistence: (extensionId, area) => ({
+      ...d.openPersistence(extensionId, area),
+      legacy: { snapshot: JSON.parse(JSON.stringify(OLD_FILE)), shadow: [] },
+      saveMeta: (value) => Object.assign(meta, value),
+    }),
   });
-  const a = context("ext.a");
+  return { ...w, a: w.context("ext.a"), meta };
+};
+
+test("a legacy area answers dotted keys from the pre-upgrade snapshot", async () => {
+  const { a } = legacyWorld();
   assert.deepStrictEqual(await a.storage.local.get("settings.theme"), { "settings.theme": "dark" });
   assert.deepStrictEqual(await a.storage.local.get({ "settings.theme": "x", "settings.none": "d" }), {
     "settings.theme": "dark",
     "settings.none": "d",
   });
   assert.deepStrictEqual(await a.storage.local.get("settings"), { settings: { theme: "dark" } }, "the nested form too");
-  await a.storage.local.set({ "settings.theme": "light" });
-  assert.deepStrictEqual(await a.storage.local.get("settings.theme"), { "settings.theme": "light" });
-  service.flush();
-  assert.deepStrictEqual(Object.keys(d.disk.get("ext.a/local")).sort(), ["plain", "settings", "settings.theme"]);
 });
 
-test("the real electron-store persistence reads an old-format file and keeps dotted keys readable", async () => {
+test("a legacy dotted key that was written or removed is never resolved from the snapshot again", async () => {
+  const { a, service, meta } = legacyWorld();
+  // remove of a fallback-resolved key: an event, and it stays gone.
+  await a.storage.local.remove("settings.theme");
+  assert.deepStrictEqual(a.events.at(-1), { area: "local", changes: { "settings.theme": { oldValue: "dark" } } });
+  assert.deepStrictEqual(await a.storage.local.get("settings.theme"), {});
+  const count = a.events.length;
+  await a.storage.local.remove("settings.theme");
+  await sleep(5);
+  assert.strictEqual(a.events.length, count, "removing it again is no change");
+
+  // set -> remove -> get must not bring the old value back either.
+  await a.storage.local.set({ "settings.theme": "light" });
+  assert.deepStrictEqual(await a.storage.local.get("settings.theme"), { "settings.theme": "light" });
+  await a.storage.local.remove("settings.theme");
+  assert.deepStrictEqual(await a.storage.local.get("settings.theme"), {}, "the pre-upgrade value did not resurrect");
+
+  service.flush();
+  assert.deepStrictEqual(meta.shadow, ["settings.theme"], "the shadow set is persisted next to the snapshot");
+});
+
+test("data written after the upgrade is never read as a path", async () => {
+  const { a } = legacyWorld();
+  await a.storage.local.set({ cfg: { mode: "x" } });
+  assert.deepStrictEqual(await a.storage.local.get("cfg.mode"), {});
+  // Changing the legacy parent object ends the fallback for paths below it.
+  await a.storage.local.set({ settings: { theme: "light", extra: 1 } });
+  assert.deepStrictEqual(await a.storage.local.get("settings.theme"), {});
+  assert.deepStrictEqual(await a.storage.local.get("settings"), { settings: { theme: "light", extra: 1 } });
+});
+
+test("the real electron-store persistence: old file, snapshot fallback, shadow state across restarts", async () => {
   const fs = require("node:fs");
   const os = require("node:os");
   const path = require("node:path");
-  const { electronStorePersistence, FORMAT_KEY } = require("../src/main/storage-service");
+  const { electronStorePersistence } = require("../src/main/storage-service");
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "rozenite-storage-legacy-"));
+  const worlds = [];
+  const launch = (extensionId = "ext.a") => {
+    const w = world({ openPersistence: electronStorePersistence({ cwd }) });
+    worlds.push(w.service);
+    return w.context(extensionId);
+  };
   try {
-    // Written by the old shim: store.set({"settings.theme": "dark", plain: 1}) nested it.
-    fs.writeFileSync(
-      path.join(cwd, "extension-ext.a-local.json"),
-      JSON.stringify({ settings: { theme: "dark" }, plain: 1 })
-    );
-    const open = electronStorePersistence({ cwd });
-    const { context, service } = world({ openPersistence: open });
-    const a = context("ext.a");
-    assert.deepStrictEqual(await a.storage.local.get(["settings.theme", "plain"]), {
+    fs.writeFileSync(path.join(cwd, "extension-ext.a-local.json"), JSON.stringify(OLD_FILE));
+
+    const first = launch();
+    assert.deepStrictEqual(await first.storage.local.get(["settings.theme", "plain"]), {
       "settings.theme": "dark",
       plain: 1,
     });
-    assert.deepStrictEqual(Object.keys(await a.storage.local.get(null)).sort(), ["plain", "settings"], "the marker is not data");
-    await a.storage.local.set({ fresh: 1 });
-    service.flush();
+    assert.deepStrictEqual(Object.keys(await first.storage.local.get(null)).sort(), ["plain", "settings"]);
+    await first.storage.local.remove("settings.theme");
+    await first.storage.local.set({ fresh: 1, cfg: { mode: "x" } });
+    worlds.forEach((service) => service.flush());
     const onDisk = JSON.parse(fs.readFileSync(path.join(cwd, "extension-ext.a-local.json"), "utf8"));
-    assert.deepStrictEqual(onDisk[FORMAT_KEY], { version: 2, legacy: true });
+    assert.deepStrictEqual(Object.keys(onDisk).sort(), ["cfg", "fresh", "plain", "settings"], "the data file holds the extension's keys only");
 
-    // Next launch: the marker keeps the fallback alive.
-    const again = world({ openPersistence: electronStorePersistence({ cwd }) }).context("ext.a");
-    assert.deepStrictEqual(await again.storage.local.get("settings.theme"), { "settings.theme": "dark" });
-    assert.deepStrictEqual(await again.storage.local.get("fresh"), { fresh: 1 });
+    // Restart: the shadow persisted, so the removed key stays removed; post-upgrade data is not a path.
+    const second = launch();
+    assert.deepStrictEqual(await second.storage.local.get("settings.theme"), {}, "removed stays removed after a restart");
+    assert.deepStrictEqual(await second.storage.local.get("cfg.mode"), {});
+    assert.deepStrictEqual(await second.storage.local.get("fresh"), { fresh: 1 });
+    // Another pre-upgrade path (never touched) is still resolvable.
+    fs.writeFileSync(path.join(cwd, "extension-ext.b-local.json"), JSON.stringify({ a: { b: 1, c: 2 } }));
+    const b1 = launch("ext.b");
+    await b1.storage.local.remove("a.b");
+    worlds.forEach((service) => service.flush());
+    const b2 = launch("ext.b");
+    assert.deepStrictEqual(await b2.storage.local.get(["a.b", "a.c"]), { "a.c": 2 });
 
-    // A brand-new area is new-format and has no fallback: dots mean nothing there.
-    const fresh = world({ openPersistence: electronStorePersistence({ cwd }) }).context("ext.new");
+    // A brand-new area has no fallback, even after its first data is on disk.
+    const fresh = launch("ext.new");
     await fresh.storage.local.set({ nested: { x: 1 } });
-    assert.deepStrictEqual(await fresh.storage.local.get("nested.x"), {});
+    worlds.forEach((service) => service.flush());
+    assert.deepStrictEqual(await launch("ext.new").storage.local.get("nested.x"), {});
+
+    // The extension's own key namespace is untouched: any key name survives a restart.
+    await fresh.storage.local.set({ __rozenite_storage_format__: "mine" });
+    worlds.forEach((service) => service.flush());
+    assert.deepStrictEqual(await launch("ext.new").storage.local.get("__rozenite_storage_format__"), {
+      __rozenite_storage_format__: "mine",
+    });
   } finally {
+    worlds.forEach((service) => service.flush());
     fs.rmSync(cwd, { recursive: true, force: true });
   }
 });
