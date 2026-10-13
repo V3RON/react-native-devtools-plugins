@@ -191,9 +191,10 @@ const createSaveService = ({
     }
     // `frameKey` and `owner` are this shell's routing detail, not part of Chrome's
     // DownloadItem.
-    const { frameKey, owner, ...item } = record;
+    const { frameKey, owner, fixedPath, ...item } = record;
     void frameKey;
     void owner;
+    void fixedPath;
     return item;
   };
 
@@ -239,6 +240,9 @@ const createSaveService = ({
   /** Where the bytes go: the dialog when `saveAs`, the downloads dir otherwise. */
   const chooseTarget = async (record, suggested) => {
     const name = safeName(suggested || record.requestedFilename || record.suggestedName);
+    if (record.fixedPath) {
+      return { filePath: record.fixedPath, name: safeName(record.fixedPath.split(/[\\/]/).pop(), name) };
+    }
     if (!record.saveAs) {
       const dir = String(downloadsDir()).replace(/[/\\]$/, "");
       return { filePath: `${dir}/${name}`.replace(/\\/g, "/"), name };
@@ -294,6 +298,7 @@ const createSaveService = ({
       filename,
       saveAs,
       title,
+      filePath,
     } = request || {};
     if (url === undefined && content === undefined) {
       return { ok: false, error: "downloads.download: either url or body/content is required." };
@@ -316,6 +321,10 @@ const createSaveService = ({
       suggestedName: nameFromUrl(url === undefined ? (filename || DEFAULT_NAME) : url),
       requestedFilename: filename === undefined ? null : safeName(filename, ""),
       saveAs: Boolean(saveAs),
+      // A path the CALLER already settled (InspectorFrontendHost.save re-saving a url
+      // it holds a handle for): no dialog, no suggestion. Never taken from an
+      // extension — only src/main/host-files.js passes it.
+      fixedPath: typeof filePath === "string" && filePath ? filePath : null,
       title: typeof title === "string" ? title : "",
       error: "",
       totalBytes: undefined,
@@ -517,7 +526,15 @@ const attachSaveService = (deps = {}) => {
   const { createSaveService: build } = require("./save-service");
 
   instance = build({
-    showSaveDialog: (options) => dialog.showSaveDialog(options),
+    showSaveDialog: (options) => {
+      // Test seam, off unless DEVTOOLS_TEST_SAVE_DIALOG is set (src/main/config.js).
+      const answer = require("./config").testSaveDialog;
+      if (answer) {
+        if (answer === "cancel") return { canceled: true };
+        return { canceled: false, filePath: path.join(answer, path.basename(options.defaultPath)) };
+      }
+      return dialog.showSaveDialog(options);
+    },
     fetchUrl: async (url) => {
       const reply = await nodeFetch(url);
       if (!reply.ok) {

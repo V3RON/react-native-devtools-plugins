@@ -7,6 +7,7 @@
 // frontend-supplied script to `new Function`. `chrome.devtools.*` is implemented
 // shell-side now (docs/features/DEVTOOLS-PANELS.md), so there is nothing to
 // deliver synchronously and no arbitrary-code-evaluation channel left.
+const fs = require("fs");
 const { app, ipcMain } = require("electron");
 const preferences = require("./preferences");
 const windowOps = require("./window");
@@ -23,10 +24,16 @@ const { createPermissionGate, API_PERMISSIONS } = require("../shared/permissions
 const tabHost = require("./tab-host");
 const notificationHost = require("./notification-host");
 const { getContextRegistry } = require("./context-registry");
+const { createThemeHost, createThemeReportHandler } = require("./theme-host");
+const { stripThemeHintFromUrl } = require("../shared/theme");
 const { getRequestQueue } = require("./context-request");
 const saveService = require("./save-service");
 const { createStorageService, electronStorePersistence } = require("./storage-service");
 const optionsHost = require("./options-host");
+const { getHostFiles } = require("./host-files");
+const { getExternalOpener } = require("./external-open");
+const { buildHostConfig } = require("./host-config");
+const { isFrontendFrame } = require("./frontend-frame");
 const config = require("./config");
 const {
   SHOW_CONTEXT_MENU,
@@ -49,6 +56,9 @@ const {
   STORAGE_CALL,
   STORAGE_DELIVER,
   EXT_PANEL_CREATE,
+  EXT_PANEL_VISIBILITY,
+  EXT_PANEL_EVENT,
+  THEME_REPORT,
   DEVTOOLS_EVAL,
   DEVTOOLS_RELOAD,
   NETWORK_SUBSCRIBE,
@@ -64,6 +74,10 @@ const {
   NOTIFICATION_CLEAR,
   NOTIFICATION_PERMISSION,
   HOST_SAVE,
+  HOST_APPEND,
+  HOST_CLOSE_FILE,
+  HOST_OPEN_EXTERNAL,
+  HOST_CONFIG,
   OPTIONS_OPEN,
   DOWNLOAD_START,
   DOWNLOAD_CANCEL,
@@ -123,6 +137,12 @@ const networkService = createNetworkService({
     else if (level === "warn") console.warn(line);
     else console.log(line);
   },
+});
+
+// The frontend's theme, pushed to every registered extension context on change
+// (chrome.devtools.panels.setThemeChangeHandler; docs/features/DEVTOOLS-PANELS.md).
+const themeHost = createThemeHost({
+  broadcast: (delivery) => getContextRegistry().broadcast(delivery),
 });
 
 // frameKey -> WebFrameMain that registered it: every later call claiming a
@@ -207,6 +227,17 @@ const extensionIdOfFrame = (event) => {
     return new URL(event.senderFrame.url).hostname;
   } catch {
     return null;
+  }
+};
+
+/** Whether `pagePath` (query/hash ignored) names an existing file inside the extension. */
+const panelPageExists = (extensionId, pagePath) => {
+  const file = pagePath.split(/[?#]/)[0].replace(/^\/+/, "");
+  const resolved = file && extensionServer.resolveExtensionFile(extensionId, file);
+  try {
+    return Boolean(resolved) && fs.statSync(resolved).isFile();
+  } catch {
+    return false;
   }
 };
 
@@ -334,10 +365,14 @@ const registerIpcHandlers = () => {
     // gets no data (docs/features/EXTENSION-MANAGEMENT.md).
     const granted = grantedPermissions(event);
     grants.set(key, granted);
+    // The frame's address as the EXTENSION knows it: the panel bridge's theme hint
+    // (src/shared/theme.js) is the shell's detail and must not reach MessageSender.url.
+    // Done here, not by relying on the preload having stripped it first (a race).
+    const frameUrl = stripThemeHintFromUrl(frame.url);
     router.registerFrame({
       key,
       extensionId,
-      url: frame.url,
+      url: frameUrl,
       send: makeFrameSender(key, event.sender, frame),
     });
     // chrome.storage change events: every registered context of the extension hears
@@ -355,7 +390,7 @@ const registerIpcHandlers = () => {
     notifyFrameObservers({
       key,
       extensionId,
-      url: frame.url,
+      url: frameUrl,
       send: makeFrameSender(key, event.sender, frame),
     });
     event.sender.once("destroyed", () => unregisterRouterFrame(key));
@@ -366,7 +401,12 @@ const registerIpcHandlers = () => {
     // which DROPS a function-valued property rather than transferring it — so a
     // function here reached the frame as `undefined` and every context ran unscaled,
     // silently. tests/tier2-worker-electron.test.js is what measured that.)
-    return { ok: true, granted, alarmClockScale: config.alarmClockScale };
+    return {
+      ok: true,
+      granted,
+      alarmClockScale: config.alarmClockScale,
+      themeName: themeHost.get(),
+    };
   });
 
   const registeredHandle = (channel, handler) =>
@@ -413,15 +453,42 @@ const registerIpcHandlers = () => {
     } catch {
       return { ok: false };
     }
+    // The page must be a real file of THIS extension: an empty or missing path would
+    // host a tab that can only show a 404, and the old check (does the extension
+    // folder exist) passed for any path.
     if (
       typeof title !== "string" ||
       typeof pagePath !== "string" ||
-      !extensionServer.resolveExtensionFile(extensionId, "")
+      !panelPageExists(extensionId, pagePath)
     ) {
       return { ok: false };
     }
-    return { ok: panelHost.addPanel({ extensionId, title, pagePath }) };
+    // The creating frame owns the Panel object, so it is the one that hears
+    // onShown/onHidden (Chrome gives them to no other context).
+    const key = resolveFrameKey(event);
+    const owner = {
+      send: makeFrameSender(key, event.sender, event.senderFrame, EXT_PANEL_EVENT),
+    };
+    return { ok: panelHost.addPanel({ extensionId, title, pagePath, owner }) };
   });
+
+  // The frontend reports its tab selection for extension panels. Only the frontend's
+  // own main frame may say so: an extension frame cannot make another extension's
+  // panel look shown, and panelId only selects among panels main already hosts.
+  ipcMain.handle(EXT_PANEL_VISIBILITY, (event, { panelId, shown } = {}) => {
+    if (!isFrontendFrame(event)) {
+      return { ok: false };
+    }
+    return { ok: panelHost.setPanelVisible(panelId, shown === true) };
+  });
+
+  // The frontend reporting its theme. Identity is the frame (the frontend's own
+  // main frame), never the payload; the value is validated against Chrome's two
+  // names inside the theme host before any extension hears it.
+  ipcMain.handle(
+    THEME_REPORT,
+    createThemeReportHandler({ themeHost, isFrontendFrame })
+  );
 
   // ── inspected window (docs/features/INSPECTED-WINDOW.md) ──────────────────
   // chrome.devtools.inspectedWindow.eval -> CDP Runtime.evaluate over the
@@ -581,7 +648,7 @@ const registerIpcHandlers = () => {
       // than from anything the frame says about itself.
       granted: tabsCaller(event),
       fromKey: resolveFrameKey(event),
-      frameUrl: event.senderFrame ? event.senderFrame.url : "",
+      frameUrl: event.senderFrame ? stripThemeHintFromUrl(event.senderFrame.url) : "",
       // The production shell started it in src/main/index.js; a harness that never ran
       // that file gets it built here, against the same router, so the answer is always
       // "what this shell really did" rather than "the bridge was never started".
@@ -739,27 +806,36 @@ const registerIpcHandlers = () => {
     return optionsHost.getOptionsHost().openOptionsPage(extensionId);
   });
 
-  // `InspectorFrontendHost.save` — the DevTools frontend's own save. Before this it
-  // built a Blob, hung an `<a download>` off the DevTools document and clicked it,
-  // which works only if the renderer may navigate to a `blob:` URL and tells nobody
-  // whether anything was written. Same service as chrome.downloads, no extension
-  // gating (the frontend is not an extension), and no filename suggestion because
-  // there is no extension to ask.
-  //
-  // Chrome's first argument is a NAME, not a location to fetch (the old hack used it
-  // as `a.download`), and the content arrives with the call — so it goes in as
-  // `filename` + `content` and nothing is fetched.
-  ipcMain.handle(HOST_SAVE, (_event, { url, content, forceSaveAs, isBase64 } = {}) =>
-    saveService
-      .getSaveService()
-      .start({
-        frameKey: null,
-        filename: String(url || "untitled.txt"),
-        content,
-        isBase64: isBase64 === true,
-        saveAs: forceSaveAs === true,
-      })
-      .catch((error) => ({ ok: false, error: (error && error.message) || "the save failed" }))
+  // `InspectorFrontendHost.save/append/close/openInNewTab/getHostConfig` — channels for
+  // the DevTools frontend's own main frame only (src/main/frontend-frame.js: its
+  // WebContents, its main frame, still on the frontend origin). An extension page, a
+  // background window, a popup or a navigated-away frontend that reached these names is
+  // refused: identity is the sender, never anything in the payload.
+  const REFUSED = { ok: false, error: "not the DevTools frontend" };
+  const failed = (error) => ({ ok: false, error: (error && error.message) || "the call failed" });
+
+  // The frontend's file key (`url`) is echoed back verbatim on savedURL /
+  // canceledSaveURL / appendedToURL: its FileManager matches the reply to the pending
+  // promise by that exact string (src/main/host-files.js). The save dialog and the write
+  // are the same service chrome.downloads uses — no extension gating (the frontend is
+  // not an extension) and no filename suggestion (no extension to ask).
+  ipcMain.handle(HOST_SAVE, (event, payload) =>
+    isFrontendFrame(event) ? getHostFiles().save(payload).catch(failed) : REFUSED
+  );
+  ipcMain.handle(HOST_APPEND, (event, payload) =>
+    isFrontendFrame(event) ? getHostFiles().append(payload).catch(failed) : REFUSED
+  );
+  ipcMain.handle(HOST_CLOSE_FILE, (event, payload) =>
+    isFrontendFrame(event) ? getHostFiles().close(payload).catch(failed) : REFUSED
+  );
+
+  // `openInNewTab`: http(s) only (src/main/external-open.js).
+  ipcMain.handle(HOST_OPEN_EXTERNAL, (event, payload) =>
+    isFrontendFrame(event) ? getExternalOpener().open(payload && payload.url) : REFUSED
+  );
+
+  ipcMain.handle(HOST_CONFIG, (event) =>
+    isFrontendFrame(event) ? buildHostConfig(config.hostConfigOverride) : {}
   );
 };
 

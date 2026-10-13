@@ -88,7 +88,16 @@
   `DEVTOOLS_TABS_OPEN=none|external|window` and defaults to `none`, because both shipped
   extensions call `create` from an automated handler (graphql's `onInstalled` opens a
   marketing URL) and launching the user's real browser because a devtools session started is
-  a side effect nobody asked for.
+  a side effect nobody asked for. Even under `external`, only `http:`/`https:` URLs reach
+  `shell.openExternal` (`src/main/external-open.js`, shared with
+  `InspectorFrontendHost.openInNewTab`): a `file:`/`smb:`/custom-scheme URL is refused, since
+  the OS would launch whatever application is registered for it.
+- **Test seams are environment variables, off by default, and ignored by a packaged build.** `DEVTOOLS_TEST_OPEN_LOG`
+  (record instead of opening a browser) and `DEVTOOLS_TEST_SAVE_DIALOG` (auto-answer the save
+  dialog) exist so a headless run can prove `openInNewTab` / `save` end to end
+  (docs/evidence/electron-leftovers). Setting the second makes every save, including
+  `chrome.downloads` with `saveAs`, skip the real dialog — anyone who can set the shell's
+  environment can already do far more, but do not set either in a user-facing launcher.
   The background worker runs ([features/BACKGROUND-WORKER.md](features/BACKGROUND-WORKER.md)),
   so `runtime.onInstalled` and `onStartup` have a producer, and
   `runtime.sendMessage`/Ports between extension frames — including to and from the worker —

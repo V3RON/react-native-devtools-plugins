@@ -189,6 +189,15 @@ const createChromeNamespace = ({
     storage.bindLastError(lastErrorScope);
   }
 
+  const devtoolsShim = createDevtools({
+    extensionId,
+    onPanelCreated,
+    evalInPage,
+    reloadInPage,
+    networkApi: networkBridge.network,
+    logger,
+  });
+
   const chrome = {
     runtime: runtime.namespace,
 
@@ -218,13 +227,7 @@ const createChromeNamespace = ({
     // permission, and the bundled extensions prove the point — Altair declares
     // no `webRequest` yet uses the network capture. Gating these would break
     // them without Chrome's blessing.
-    devtools: createDevtools({
-      extensionId,
-      onPanelCreated,
-      evalInPage,
-      reloadInPage,
-      networkApi: networkBridge.network,
-    }).namespace,
+    devtools: devtoolsShim.namespace,
 
     // [REAL for one tab] `chrome.tabs` answers with the ONE tab this shell has: the
     // inspected RN target, under the same id `devtools.inspectedWindow.tabId`
@@ -392,8 +395,28 @@ const createChromeNamespace = ({
           return;
         }
       }
+      // `theme` pushes are chrome.devtools.panels' own (themeName / setThemeChangeHandler).
+      if (delivery && delivery.kind === "theme") {
+        devtoolsShim.setThemeName(delivery.payload && delivery.payload.themeName);
+        return;
+      }
       handleDelivery(delivery);
     },
+    enumerable: false,
+  });
+
+  // Host -> frame panel visibility (Panel.onShown / onHidden), fed by the preload from
+  // the EXT_PANEL_EVENT channel. Non-enumerable like handleDelivery.
+  Object.defineProperty(chrome, "handlePanelEvent", {
+    value: devtoolsShim.handlePanelEvent,
+    enumerable: false,
+  });
+
+  // The host's current DevTools theme, handed back at registration (non-enumerable
+  // like handleDelivery). Calls the theme change handler only if it differs from what the
+  // frame was already showing.
+  Object.defineProperty(chrome, "_setThemeName", {
+    value: (themeName) => devtoolsShim.setThemeName(themeName),
     enumerable: false,
   });
 

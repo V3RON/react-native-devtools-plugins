@@ -8,7 +8,7 @@ needed. Legend and tiers: [../README.md](../README.md). Last reviewed: 2026-10-0
 | Functionality | Status | Tier | Blocked by |
 | --- | --- | --- | --- |
 | [Extension management & manifest support](EXTENSION-MANAGEMENT.md) | 🟨 scan (pages + backgrounds) + manifest parse + per-extension CSP + permission enforcement + install/version record; no lifecycle UI | 1 | — |
-| [DevTools panels](DEVTOOLS-PANELS.md) (`chrome.devtools.panels`) | 🟨 create works; theme/events/sidebars missing | 1 | dispatch channel |
+| [DevTools panels](DEVTOOLS-PANELS.md) (`chrome.devtools.panels`) | 🟨 create + theme + `Panel.onShown/onHidden` work; sidebars/context menus missing | 1 | dispatch channel (context menus) |
 | [DevTools network](DEVTOOLS-NETWORK.md) (`chrome.devtools.network`) | 🟨 real CDP model (`Network.*`), unverified on device; `onNavigated` diverges | 1 | RN network inspection |
 | [Inspected window](INSPECTED-WINDOW.md) (`chrome.devtools.inspectedWindow`) | 🟨 `eval` + `reload` real via the CDP bridge; resources/selected-node inert | 1 | — |
 | [Runtime messaging](RUNTIME-MESSAGING.md) (`chrome.runtime`, Ports, event contract) | 🟨 surface + sendMessage + Ports + background peer + `onInstalled`/`onStartup` real | 1 | — |
@@ -42,7 +42,7 @@ needed. Legend and tiers: [../README.md](../README.md). Last reviewed: 2026-10-0
 
 | Surface | Status | Doc |
 | --- | --- | --- |
-| `InspectorFrontendHost.*` (frontend ⇄ embedder) | 🟨 ~60 methods stubbed, semantics missing for most | [../api/INSPECTOR-FRONTEND-HOST.md](../api/INSPECTOR-FRONTEND-HOST.md) |
+| `InspectorFrontendHost.*` (frontend ⇄ embedder) | 🟨 ~60 methods stubbed, semantics missing for most; `openInNewTab`, `save`/`append`/`close` (+ `savedURL`/`canceledSaveURL`/`appendedToURL`) and `getHostConfig` are real | [../api/INSPECTOR-FRONTEND-HOST.md](../api/INSPECTOR-FRONTEND-HOST.md) |
 | `chrome.*` (extension API) | 🟡 mostly stub; storage + `devtools.inspectedWindow.eval` are the exceptions | [../api/CHROME-EXTENSION-APIS.md](../api/CHROME-EXTENSION-APIS.md) |
 
 ## Dependency sketch
