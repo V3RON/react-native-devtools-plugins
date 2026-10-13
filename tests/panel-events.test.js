@@ -155,3 +155,28 @@ test("only the frontend's own main frame may report visibility", () => {
     false
   );
 });
+
+// ── showPanel (host -> frontend) ─────────────────────────────────────────────
+test("showPanel only asks the frontend to show a panel this host registered", async () => {
+  const { setFrontendWebContents } = require("../src/main/dispatch");
+  const { HOST_EVENT } = require("../src/shared/ipc");
+  const sent = [];
+  setFrontendWebContents({ isDestroyed: () => false, send: (channel, payload) => sent.push([channel, payload]) });
+
+  register("ext-show", "/p.html");
+  const id = panelIdFor("ext-show", "/p.html");
+  assert.strictEqual(await panelHost.showPanel(id), true);
+  assert.deepStrictEqual(sent, [[HOST_EVENT, { name: "showPanel", args: [id] }]]);
+
+  assert.strictEqual(await panelHost.showPanel("ext.9.nobody.x.html"), false, "unregistered id");
+  assert.strictEqual(await panelHost.showPanel("network"), false, "a built-in tab is not ours to show");
+  assert.strictEqual(await panelHost.showPanel(undefined), false);
+  assert.strictEqual(sent.length, 1, "nothing else was dispatched");
+});
+
+test("the frontend window denies blank window.open but keeps real opens", () => {
+  const { windowOpenHandler } = require("../src/main/window-open-policy");
+  assert.deepStrictEqual(windowOpenHandler({ url: "" }), { action: "deny" });
+  assert.deepStrictEqual(windowOpenHandler({ url: "about:blank" }), { action: "deny" });
+  assert.deepStrictEqual(windowOpenHandler({ url: "https://example.com" }), { action: "allow" });
+});

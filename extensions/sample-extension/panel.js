@@ -11,6 +11,10 @@
 // every extension page with Chrome's MV3 CSP default (`script-src 'self'`)
 // unless the manifest declares its own, and inline scripts do not survive that
 // policy. That is the policy working — see the "manifest CSP is enforced" check.
+// A token set once per document load: Panel.onShown/onHidden's panel page stays alive
+// across tab switches (docs/features/DEVTOOLS-PANELS.md), so it does not change on re-show.
+document.getElementById("loaded-at").textContent =
+  new Date().toLocaleTimeString() + " #" + Math.random().toString(36).slice(2, 6);
 const results = document.getElementById("results");
 const check = async (name, fn) => {
   try {

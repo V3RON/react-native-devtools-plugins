@@ -454,7 +454,7 @@ contextBridge.executeInMainWorld({
     // NAMED after its panel id: `window.open("", name)` resolves an existing named frame
     // without navigating it and returns its WindowProxy, which is fully scriptable from
     // here once the panel has loaded, because both pages are `rozenite://<id>`. The
-    // shell denies every window.open (src/main/window.js), so a name that matches no
+    // shell denies every blank window.open (src/main/window-open-policy.js), so a name that matches no
     // frame gives null instead of a popup. The listeners of one panel are serialized, so
     // onHidden can never overtake an onShown that is still waiting for the panel to load.
     const panels = merged.devtools.panels;

@@ -51,7 +51,7 @@ ipcRenderer.on(HOST_EVENT, (_event, { name, args }) => {
       }
       method.apply(api, eventArgs);
     },
-    arguments: [name, args || []],
+    args: [name, args || []],
   });
 });
 

@@ -308,6 +308,13 @@ app
         response.end("nope");
         return;
       }
+      // A file the page asks for that the fixture does not provide is a 404, not an
+      // unhandled stream error (which would be an uncaught exception in main).
+      if (!fs.existsSync(target) || !fs.statSync(target).isFile()) {
+        response.writeHead(404);
+        response.end("not found");
+        return;
+      }
       response.writeHead(200, {
         "content-type": inner.endsWith(".js") ? "text/javascript" : "text/html",
       });

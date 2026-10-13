@@ -4,7 +4,7 @@
 | --- | --- |
 | **Status** | 🟨 partial — channel live; **frontend→backend messaging is structurally unused** (the CDP bridge owns the socket instead) |
 | **Tier** | 1 (infrastructure; unblocks most of Tier 1/2) |
-| **Blocks** | panel theme, save flow, eye-dropper, device discovery |
+| **Blocks** | save flow, eye-dropper, device discovery |
 
 ## What Chrome does
 
@@ -67,8 +67,9 @@ onto the frontend's own session by message id, so no second debugger appears on 
 app. First consumer: [inspected-window](INSPECTED-WINDOW.md).
 Still missing:
 
-- No producer yet for `showPanel`/`colorThemeChanged`/etc.; they only become meaningful as
-  extension APIs grow. (`chrome.devtools.panels.setThemeChangeHandler` does not need
+- No producer yet for `colorThemeChanged`/etc.; they only become meaningful as
+  extension APIs grow. (`showPanel` HAS a producer now: `panelHost.showPanel(panelId)` in
+  `src/main/panel-host.js`, see [DEVTOOLS-PANELS.md](DEVTOOLS-PANELS.md#showpanel-host---frontend).) (`chrome.devtools.panels.setThemeChangeHandler` does not need
   `colorThemeChanged`: it rides its own frontend-to-host report channel, see
   [DEVTOOLS-PANELS.md](DEVTOOLS-PANELS.md#theme-themename--setthemechangehandler).)
 
@@ -99,4 +100,11 @@ verification against the running fork). The CDP-command round-trip is implemente
 through the bridge instead of `sendMessageToBackend` — `chrome.devtools.inspectedWindow
 .eval` is an extension-issued CDP command with a real reply, asserted live in
 `extensions/sample-extension/panel.html` (needs a device: unrun = unverified).
-`showPanel` still has no producer.
+`showPanel` has a producer: `panelHost.showPanel(panelId)` dispatches it for a panel this
+host registered (id checked against the live registry; host-internal, no extension API), and
+`DEVTOOLS_SHOW_PANEL=<extensionId>[/<pagePath>]` is its first consumer. Verified live in
+[../evidence/panel-events/](../evidence/panel-events/README.md): the shell opens on the
+extension's tab with nothing clicked, and a `showPanel` dispatch from another tab switches
+back and fires `Panel.onShown`. (A bug on `main` made every dispatched event run without its
+arguments — `executeInMainWorld` takes `args`, not `arguments` — fixed in
+`src/preload/frontend-host.js`.)
