@@ -30,6 +30,27 @@
   const legacy = await import("/rozenite/ui/legacy/legacy.js");
   const inspectorView = legacy.InspectorView.InspectorView.instance();
 
+  // Theme -> host -> every extension context (chrome.devtools.panels.themeName /
+  // themeChanged). ThemeSupport is the frontend's own authority: it resolves the
+  // `ui-theme` setting ("default" | "dark" | "systemPreferred") against the
+  // system's prefers-color-scheme and dispatches `themechange` after applying it.
+  // Reported BEFORE the extension frames are created, so they boot with the answer.
+  const themeModule = await import("/rozenite/ui/legacy/theme_support/theme_support.js");
+  const themeSupport = themeModule.ThemeSupport.instance();
+  const reportTheme = () => {
+    const name = themeSupport.themeName() === "dark" ? "dark" : "default";
+    return window.__SHELL_HOST__?.reportTheme(name);
+  };
+  if (!window.__SHELL_THEME_LISTENER__) {
+    // The bridge re-runs on every page load, but a load is a fresh window; this
+    // only guards a manual re-evaluation from stacking listeners.
+    window.__SHELL_THEME_LISTENER__ = true;
+    themeSupport.addEventListener(themeModule.ThemeChangeEvent.eventName, () => {
+      reportTheme();
+    });
+  }
+  await reportTheme();
+
   const devtoolsPageFrames = [];
 
   const addPanel = ({ panelId, title, pageURL }) => {

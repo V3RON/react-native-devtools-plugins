@@ -53,10 +53,26 @@ const createContextRegistry = () => {
     }
   };
 
+  /**
+   * Push one delivery to EVERY reachable context (host state every context shares,
+   * e.g. the DevTools theme). Dead contexts are retired by `deliver`.
+   * @returns {number} how many contexts it reached
+   */
+  const broadcast = (delivery) => {
+    let reached = 0;
+    for (const frameKey of [...contexts.keys()]) {
+      if (deliver(frameKey, delivery)) {
+        reached++;
+      }
+    }
+    return reached;
+  };
+
   return {
     register,
     unregister,
     deliver,
+    broadcast,
     has: (frameKey) => contexts.has(frameKey),
     /** Diagnostics/tests: which contexts are reachable, and of which extension. */
     list: () =>

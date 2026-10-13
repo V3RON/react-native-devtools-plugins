@@ -8,7 +8,7 @@ needed. Legend and tiers: [../README.md](../README.md). Last reviewed: 2026-10-0
 | Functionality | Status | Tier | Blocked by |
 | --- | --- | --- | --- |
 | [Extension management & manifest support](EXTENSION-MANAGEMENT.md) | 🟨 scan (pages + backgrounds) + manifest parse + per-extension CSP + permission enforcement + install/version record; no lifecycle UI | 1 | — |
-| [DevTools panels](DEVTOOLS-PANELS.md) (`chrome.devtools.panels`) | 🟨 create works; theme/events/sidebars missing | 1 | dispatch channel |
+| [DevTools panels](DEVTOOLS-PANELS.md) (`chrome.devtools.panels`) | 🟨 create + theme work; events/sidebars missing | 1 | dispatch channel |
 | [DevTools network](DEVTOOLS-NETWORK.md) (`chrome.devtools.network`) | 🟨 real CDP model (`Network.*`), unverified on device; `onNavigated` diverges | 1 | RN network inspection |
 | [Inspected window](INSPECTED-WINDOW.md) (`chrome.devtools.inspectedWindow`) | 🟨 `eval` + `reload` real via the CDP bridge; resources/selected-node inert | 1 | — |
 | [Runtime messaging](RUNTIME-MESSAGING.md) (`chrome.runtime`, Ports, event contract) | 🟨 surface + sendMessage + Ports + background peer + `onInstalled`/`onStartup` real | 1 | — |

@@ -189,6 +189,14 @@ const createChromeNamespace = ({
     );
   }
 
+  const devtoolsShim = createDevtools({
+    extensionId,
+    onPanelCreated,
+    evalInPage,
+    reloadInPage,
+    networkApi: networkBridge.network,
+  });
+
   const chrome = {
     runtime: runtime.namespace,
 
@@ -218,13 +226,7 @@ const createChromeNamespace = ({
     // permission, and the bundled extensions prove the point — Altair declares
     // no `webRequest` yet uses the network capture. Gating these would break
     // them without Chrome's blessing.
-    devtools: createDevtools({
-      extensionId,
-      onPanelCreated,
-      evalInPage,
-      reloadInPage,
-      networkApi: networkBridge.network,
-    }).namespace,
+    devtools: devtoolsShim.namespace,
 
     // [REAL for one tab] `chrome.tabs` answers with the ONE tab this shell has: the
     // inspected RN target, under the same id `devtools.inspectedWindow.tabId`
@@ -392,8 +394,21 @@ const createChromeNamespace = ({
           return;
         }
       }
+      // `theme` pushes are chrome.devtools.panels' own (themeName / themeChanged).
+      if (delivery && delivery.kind === "theme") {
+        devtoolsShim.setThemeName(delivery.payload && delivery.payload.themeName);
+        return;
+      }
       handleDelivery(delivery);
     },
+    enumerable: false,
+  });
+
+  // The host's current DevTools theme, handed back at registration (non-enumerable
+  // like handleDelivery). Fires themeChanged only if it differs from what the
+  // frame was already showing.
+  Object.defineProperty(chrome, "_setThemeName", {
+    value: (themeName) => devtoolsShim.setThemeName(themeName),
     enumerable: false,
   });
 

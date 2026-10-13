@@ -23,6 +23,7 @@ const { createPermissionGate, API_PERMISSIONS } = require("../shared/permissions
 const tabHost = require("./tab-host");
 const notificationHost = require("./notification-host");
 const { getContextRegistry } = require("./context-registry");
+const { createThemeHost } = require("./theme-host");
 const { getRequestQueue } = require("./context-request");
 const saveService = require("./save-service");
 const optionsHost = require("./options-host");
@@ -46,6 +47,7 @@ const {
   RUNTIME_PORT_CLOSE,
   RUNTIME_DELIVER,
   EXT_PANEL_CREATE,
+  THEME_REPORT,
   DEVTOOLS_EVAL,
   DEVTOOLS_RELOAD,
   NETWORK_SUBSCRIBE,
@@ -107,6 +109,12 @@ const networkService = createNetworkService({
     else if (level === "warn") console.warn(line);
     else console.log(line);
   },
+});
+
+// The frontend's theme, pushed to every registered extension context on change
+// (chrome.devtools.panels.themeChanged; docs/features/DEVTOOLS-PANELS.md).
+const themeHost = createThemeHost({
+  broadcast: (delivery) => getContextRegistry().broadcast(delivery),
 });
 
 // frameKey -> WebFrameMain that registered it: every later call claiming a
@@ -332,7 +340,12 @@ const registerIpcHandlers = () => {
     // which DROPS a function-valued property rather than transferring it — so a
     // function here reached the frame as `undefined` and every context ran unscaled,
     // silently. tests/tier2-worker-electron.test.js is what measured that.)
-    return { ok: true, granted, alarmClockScale: config.alarmClockScale };
+    return {
+      ok: true,
+      granted,
+      alarmClockScale: config.alarmClockScale,
+      themeName: themeHost.get(),
+    };
   });
 
   const registeredHandle = (channel, handler) =>
@@ -381,6 +394,16 @@ const registerIpcHandlers = () => {
       return { ok: false };
     }
     return { ok: panelHost.addPanel({ extensionId, title, pagePath }) };
+  });
+
+  // The frontend reporting its theme. Identity is the frame (the frontend's own
+  // main frame), never the payload; the value is validated against Chrome's two
+  // names inside the theme host before any extension hears it.
+  ipcMain.handle(THEME_REPORT, (event, { themeName } = {}) => {
+    if (!panelHost.isFrontendFrame(event)) {
+      return { ok: false };
+    }
+    return { ok: true, changed: themeHost.report(themeName) };
   });
 
   // ── inspected window (docs/features/INSPECTED-WINDOW.md) ──────────────────

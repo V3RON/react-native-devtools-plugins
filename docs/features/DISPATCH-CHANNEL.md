@@ -67,7 +67,9 @@ onto the frontend's own session by message id, so no second debugger appears on 
 app. First consumer: [inspected-window](INSPECTED-WINDOW.md).
 Still missing:
 
-- No producer yet for `showPanel`/`colorThemeChanged`/etc. — they only become
+- No producer yet for `showPanel`/`colorThemeChanged`/etc. (the extension-facing theme does
+  not need `colorThemeChanged`: it rides its own report channel, see
+  [DEVTOOLS-PANELS.md](DEVTOOLS-PANELS.md#theme-themename--themechanged)). — they only become
   meaningful as extension APIs grow.
 
 ## Plan

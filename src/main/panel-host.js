@@ -75,4 +75,18 @@ const addPanel = ({ extensionId, title, pagePath }) => {
   return true;
 };
 
-module.exports = { attach, addPanel };
+/**
+ * Whether an IPC event came from the frontend window's own main frame — the only
+ * principal allowed to report frontend state (the theme). Extension iframes live in
+ * the same webContents but are different frames, so this is by frame, not by sender.
+ */
+const isFrontendFrame = (event) =>
+  Boolean(
+    contents &&
+      !contents.isDestroyed() &&
+      event.sender === contents &&
+      event.senderFrame &&
+      event.senderFrame === contents.mainFrame
+  );
+
+module.exports = { attach, addPanel, isFrontendFrame };

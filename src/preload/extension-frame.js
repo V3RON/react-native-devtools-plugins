@@ -156,6 +156,9 @@ const registered = ipcRenderer
     const scale = Number(reply.alarmClockScale);
     alarmClockScale = Number.isFinite(scale) && scale > 0 ? scale : 1;
     permissions.manifestLoaded();
+    // The frontend's current theme (chrome.devtools.panels.themeName); later
+    // changes arrive as "theme" deliveries on RUNTIME_DELIVER.
+    chrome._setThemeName(reply.themeName);
     return reply;
   })
   .catch((error) => registrationFailed((error && error.message) || "registration failed"));
@@ -395,6 +398,13 @@ contextBridge.executeInMainWorld({
     const merged = { ...window.chrome, ...bridge };
     merged.runtime = { ...(window.chrome && window.chrome.runtime), ...bridge.runtime };
     merged.devtools = { ...(window.chrome && window.chrome.devtools), ...bridge.devtools };
+    // themeName must stay live (a cloned getter would freeze at expose time).
+    merged.devtools.panels = { ...merged.devtools.panels };
+    Object.defineProperty(merged.devtools.panels, "themeName", {
+      get: () => bridge.devtools.panels._getThemeName(),
+      enumerable: true,
+    });
+    delete merged.devtools.panels._getThemeName; // internal helper stays shim-side
     Object.defineProperty(merged.runtime, "lastError", {
       get: () => bridge.runtime._getLastLastError(),
     });

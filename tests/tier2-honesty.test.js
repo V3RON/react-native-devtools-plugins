@@ -81,6 +81,9 @@ test("every _fire call site in chrome-shim is attributed to a real producer", ()
     "messaging.js:_fire": 8,
     // CDP Network.* events the inspected app really reported.
     "network-bridge.js:_fire": 2,
+    // The frontend's ThemeSupport reported a different theme (main fans it out;
+    // src/main/theme-host.js refuses repeats and unknown names).
+    "devtools.js:_fire": 1,
   };
 
   const counts = {};
