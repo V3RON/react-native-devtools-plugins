@@ -1,0 +1,9 @@
+{
+  "name": "Storage Demo B",
+  "version": "1.0",
+  "manifest_version": 3,
+  "devtools_page": "devtools.html",
+  "background": { "service_worker": "bg.js", "type": "module" },
+  "options_ui": { "page": "options.html", "open_in_tab": true },
+  "permissions": ["storage"]
+}

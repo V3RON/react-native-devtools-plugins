@@ -132,9 +132,14 @@ const attachTabHost = (deps = {}) => {
     bridgeStatus: bridge.status,
     sendCommand: bridge.sendCommand,
     policy: config.tabsOpen,
+    // http(s) only — the allowlist InspectorFrontendHost.openInNewTab uses
+    // (src/main/external-open.js): an extension-supplied `file:`/`smb:` URL must not
+    // reach the OS launcher.
     openExternal: async (url) => {
-      const { shell } = require("electron");
-      await shell.openExternal(url);
+      const reply = await require("./external-open").getExternalOpener().open(url);
+      if (!reply.ok) {
+        throw new Error(reply.error);
+      }
     },
     // The handle rides async IPC back to the frame, so it has to be serializable:
     // the BrowserWindow id, which `closeWindow` below resolves again in main.

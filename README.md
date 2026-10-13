@@ -35,6 +35,9 @@ Notes:
   app through Metro's `/json/list` and answers on the frontend's `ws` port. Knobs:
   `DEVTOOLS_METRO_HOST` / `DEVTOOLS_METRO_PORT`, `DEVTOOLS_APP_FILTER` /
   `DEVTOOLS_DEVICE_FILTER`, `DEVTOOLS_CDP_PORT`.
+- `chrome.i18n` follows Electron's UI locale (`npm start -- --lang=pt-BR`, or the OS language);
+  `DEVTOOLS_UI_LOCALE=ar` overrides it for extensions only. The sample extension ships
+  `_locales` for en, pt_BR, de and ar ([docs/features/STORAGE-AND-I18N.md](docs/features/STORAGE-AND-I18N.md)).
 - Want the relay outside the shell (or a Chrome tab as the target)? Set
   `DEVTOOLS_CDP_BRIDGE=off` and run `npm run rn-cdp` (RN app) or `npm run fake-cdp`
   (Chrome tab) on that port. The shell's frontend URL is `DEVTOOLS_FRONTEND_URL`
@@ -49,7 +52,8 @@ Notes:
   the custom `rozenite://<extension-id>/...` protocol. The shell scans the folder itself —
   no frontend-fork knowledge required:
   - a manifest with `devtools_page` gets a hidden devtools page and its `panels.create`
-    calls become real tabs (docs/features/DEVTOOLS-PANELS.md);
+    calls become real tabs, and `Panel.onShown(window)` / `onHidden` fire as the tab is
+    selected / left (docs/features/DEVTOOLS-PANELS.md);
   - a manifest with `background.service_worker` (or legacy `background.scripts`) also gets an
     **always-on background context** — a hidden window per extension running that script
     against the same `chrome.*` shim, with `runtime.onInstalled`/`onStartup` firing

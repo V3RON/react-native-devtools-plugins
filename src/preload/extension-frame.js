@@ -20,14 +20,14 @@
 // host derives this frame's identity from the frame itself, never from payload.
 
 const { contextBridge, ipcRenderer } = require("electron");
-const { default: Store } = require("electron-store");
 const {
   createChromeNamespace,
   createExtensionStorage,
-  createMemoryBackend,
   createNetworkBridge,
 } = require("../chrome-shim");
 const { createGrantGate } = require("../shared/permissions");
+const { takeThemeHint } = require("../shared/theme");
+const { I18N_BUNDLE_PATH } = require("../shared/protocol");
 const {
   RUNTIME_GET_MANIFEST,
   RUNTIME_REGISTER,
@@ -37,7 +37,10 @@ const {
   RUNTIME_PORT_POST,
   RUNTIME_PORT_CLOSE,
   RUNTIME_DELIVER,
+  STORAGE_CALL,
+  STORAGE_DELIVER,
   EXT_PANEL_CREATE,
+  EXT_PANEL_EVENT,
   DEVTOOLS_EVAL,
   DEVTOOLS_RELOAD,
   NETWORK_SUBSCRIBE,
@@ -77,6 +80,24 @@ ipcRenderer
   .catch(() => {});
 const getManifest = () => manifestCache;
 
+// chrome.i18n: the one place this preload reads something synchronously, and why it is
+// not IPC. `getMessage` is synchronous and extensions call it before an async answer can
+// have landed, while every channel in src/shared/ipc.js is async by house rule. The
+// extension's message bundle is therefore read with a synchronous XMLHttpRequest to this
+// frame's OWN origin — the extension protocol, which already carries the path guard and
+// is where the host builds the bundle (src/main/i18n-host.js). Nothing here picks an
+// extension or a locale: the id is the request's hostname, the locale is the host's.
+// Called lazily by the shim on the first i18n call, once.
+const loadI18nBundle = () => {
+  const request = new XMLHttpRequest();
+  request.open("GET", `${window.location.origin}/${I18N_BUNDLE_PATH}`, false);
+  request.send();
+  if (request.status !== 200) {
+    throw new Error(`the host answered ${request.status}`);
+  }
+  return JSON.parse(request.responseText);
+};
+
 // Declared permissions gate capability (docs/features/EXTENSION-MANAGEMENT.md).
 // The verdict this frame is gated on is the HOST's: RUNTIME_REGISTER read the
 // manifest from disk. Gating on that reply rather than on
@@ -95,22 +116,18 @@ const permissions = createGrantGate(() => grants);
 // headless run can observe a real timer fire inside a worker.
 let alarmClockScale = 1;
 
-// electron-store -> chrome-shim StorageBackend adapter.
-// NOTE: one Store instance per frame per area races on the shared JSON file;
-// swap for a main-process-backed backend (docs/LIMITATIONS.md).
-const storeBackend = (store) => ({
-  getAll: () => store.store,
-  get: (key) => store.get(key),
-  set: (items) => store.set(items),
-  delete: (key) => store.delete(key),
-  clear: () => store.clear(),
-});
-
+// chrome.storage: the state lives in the HOST (src/main/storage-service.js), one store per
+// extension shared by all of its contexts, so this frame only forwards calls and turns the
+// host's STORAGE_DELIVER pushes into onChanged events. Like every other host-backed call it
+// waits for RUNTIME_REGISTER (below): the host derives whose storage this is from the
+// registered frame, never from anything sent here.
 const storage = createExtensionStorage({
-  createBackend: (areaName) =>
-    areaName === "session"
-      ? createMemoryBackend() // deviation: per-frame, not extension-wide
-      : storeBackend(new Store({ name: `extension-${extensionId}-${areaName}` })),
+  call: (area, op, arg) =>
+    registered.then((reply) =>
+      reply.ok
+        ? ipcRenderer.invoke(STORAGE_CALL, { area, op, arg })
+        : { ok: false, error: "storage: this frame is not registered with the host" }
+    ),
 });
 
 // chrome.devtools.network + chrome.webRequest, both fed by the host's CDP network
@@ -156,6 +173,9 @@ const registered = ipcRenderer
     const scale = Number(reply.alarmClockScale);
     alarmClockScale = Number.isFinite(scale) && scale > 0 ? scale : 1;
     permissions.manifestLoaded();
+    // The frontend's current theme (chrome.devtools.panels.themeName); later
+    // changes arrive as "theme" deliveries on RUNTIME_DELIVER.
+    chrome._setThemeName(reply.themeName);
     return reply;
   })
   .catch((error) => registrationFailed((error && error.message) || "registration failed"));
@@ -207,6 +227,7 @@ const chrome = createChromeNamespace({
   storage,
   networkBridge,
   transport,
+  loadI18nBundle,
   getTargetInfo: () =>
     asRegisteredCaller(() => ipcRenderer.invoke(TABS_TARGET_INFO)).then((reply) =>
       // A denial or a lost reply both mean the same thing to the shim: the host did
@@ -222,7 +243,18 @@ const chrome = createChromeNamespace({
         windowId: details.windowId,
         active: details.active,
       })
-    ).then((reply) => (reply && reply.ok ? { via: reply.via ?? null, handle: reply.handle } : { via: null })),
+    ).then((reply) => {
+      if (reply && reply.ok) {
+        return { via: reply.via ?? null, handle: reply.handle };
+      }
+      // Nothing opened: the tab still resolves with `openedVia: null` (Chrome's `create`
+      // has no refusal to model), but WHY — a scheme outside the http(s) allowlist, an
+      // opener that failed — is said here rather than dropped.
+      if (reply && reply.error) {
+        console.warn(`[chrome.tabs] tabs.create opened nothing: ${reply.error}`);
+      }
+      return { via: null };
+    }),
   closeTabById: (handle) =>
     asRegisteredCaller(() => ipcRenderer.invoke(TABS_CLOSE, { handle })).then(
       (closed) => Boolean(closed)
@@ -319,6 +351,32 @@ const chrome = createChromeNamespace({
     ipcRenderer.invoke(DEVTOOLS_RELOAD, { options }).then((reply) => reply || { ok: false }),
 });
 
+// chrome.devtools.panels.themeName, synchronously. The panel bridge appends the theme it
+// is showing to the frame URL (`?__rozenite_theme=dark`) before it creates the iframe, and
+// this preload runs before any page script, so a classic <head> script already reads the
+// right value — no async IPC can promise that. The hint is validated against Chrome's two
+// names, then REMOVED from the address (the extension's own query and hash are kept byte
+// for byte) so `location` is what the extension expects. Frames the bridge did not create
+// (background contexts, options pages) have no hint and learn the theme from the
+// RUNTIME_REGISTER reply instead.
+{
+  const hint = takeThemeHint(window.location.search);
+  if (hint.search !== null) {
+    if (hint.theme) {
+      chrome._setThemeName(hint.theme);
+    }
+    try {
+      window.history.replaceState(
+        window.history.state,
+        "",
+        window.location.pathname + hint.search + window.location.hash
+      );
+    } catch {
+      // A document that refuses replaceState keeps the hint in its URL; harmless.
+    }
+  }
+}
+
 // Router -> frame deliveries (messages, ports, lifecycle events).
 //
 // Deliveries that arrive during startup are queued and flushed once the page's own
@@ -366,6 +424,12 @@ const startDeliveries = (channel, handle) => {
 
 startDeliveries(RUNTIME_DELIVER, (delivery) => chrome.handleDelivery(delivery));
 
+// Storage changes from ANY context of this extension. Not queued behind page load like the
+// runtime deliveries: a write's callback waits for its own event (chrome-shim/storage.js),
+// and a module worker's top-level await must not be able to wait on DOMContentLoaded.
+// An event that fires before the page has added a listener reaches nobody, as in Chrome.
+ipcRenderer.on(STORAGE_DELIVER, (_event, delivery) => storage.handleDelivery(delivery));
+
 // An alarm is a timer, and this context owns it: when the document goes away, nothing
 // may fire any more. Chrome's worker would be evicted and its alarms persisted; this
 // shell's worker is always-on, so the teardown is the one place the two models meet,
@@ -384,6 +448,13 @@ ipcRenderer.on(NETWORK_DELIVER, (_event, delivery) =>
   networkBridge.handleDelivery(delivery && delivery.payload ? delivery.payload : delivery)
 );
 
+// Panel.onShown / onHidden from the host (the frame that created the panel is the only
+// one sent them). The shim fires the Panel's events; the window argument onShown
+// carries is attached in the main world below.
+ipcRenderer.on(EXT_PANEL_EVENT, (_event, delivery) =>
+  chrome.handlePanelEvent(delivery && delivery.payload)
+);
+
 // chrome.* namespace. The merge runs in the main world: deep-merge runtime and
 // devtools onto anything already present and re-establish `lastError` as a LIVE
 // getter — contextBridge cloning evaluates getters only once
@@ -395,10 +466,117 @@ contextBridge.executeInMainWorld({
     const merged = { ...window.chrome, ...bridge };
     merged.runtime = { ...(window.chrome && window.chrome.runtime), ...bridge.runtime };
     merged.devtools = { ...(window.chrome && window.chrome.devtools), ...bridge.devtools };
+    // themeName must stay live (a cloned getter would freeze at expose time).
+    // Known leftover: `window.chromeElectron` is the raw bridge object (expose-time
+    // `themeName` snapshot, `_getThemeName`, `_panelIdFor`, `_getLastLastError`, the
+    // unwrapped `panels.create`). contextBridge defines it non-configurable, so it CANNOT
+    // be deleted (measured: `delete` is a no-op and it stays an object); the page-visible
+    // `chrome.*` built below is clean. It is the same-origin extension's own handle.
+    merged.devtools.panels = { ...merged.devtools.panels };
+    Object.defineProperty(merged.devtools.panels, "themeName", {
+      get: () => bridge.devtools.panels._getThemeName(),
+      enumerable: true,
+    });
+    delete merged.devtools.panels._getThemeName; // internal helper stays shim-side
     Object.defineProperty(merged.runtime, "lastError", {
       get: () => bridge.runtime._getLastLastError(),
     });
     delete merged.runtime._getLastLastError; // internal helper stays shim-side
+
+    // Panel.onShown(window): Chrome passes the panel page's window, and a Window cannot
+    // cross the contextBridge, so the main world resolves it. The panel iframe lives in
+    // a shadow tree of the frontend (so it is not among window.parent.frames) but is
+    // NAMED after its panel id: `window.open("", name)` resolves an existing named frame
+    // without navigating it and returns its WindowProxy, which is fully scriptable from
+    // here once the panel has loaded, because both pages are `rozenite://<id>`. The
+    // shell denies every window.open (src/main/window-open-policy.js), so a name that matches no
+    // frame gives null instead of a popup. The listeners of one panel are serialized, so
+    // onHidden can never overtake an onShown that is still waiting for the panel to load.
+    const panels = merged.devtools.panels;
+    const panelIdFor = bridge.devtools.panels._panelIdFor; // internal helper
+    delete panels._panelIdFor;
+    if (typeof panels.create === "function" && typeof panelIdFor === "function") {
+      const hrefOf = (win) => {
+        try {
+          return String(win.location.href);
+        } catch {
+          return null; // cross-origin: still the frontend's initial about:blank
+        }
+      };
+      const awaitPanelWindow = async (panelId) => {
+        let win = null;
+        try {
+          win = window.open("", panelId);
+        } catch {
+          // denied or unreachable: no window to hand over
+        }
+        // Wait (bounded, ~3 s) for the panel's first navigation to commit, so the window
+        // is usable the moment the listener gets it.
+        for (let attempt = 0; win && attempt < 120; attempt++) {
+          const href = hrefOf(win);
+          if (href && href.startsWith("rozenite://")) {
+            break;
+          }
+          await new Promise((resolve) => setTimeout(resolve, 25));
+        }
+        return win; // null = divergence: Chrome always has a window to hand over
+      };
+      const decorate = (panel, panelId) => {
+        if (!panel || !panel.onShown || !panel.onHidden) {
+          return panel;
+        }
+        let queue = Promise.resolve();
+        const wrapEvent = (event, withWindow) => {
+          const listeners = [];
+          event.addListener(() => {
+            queue = queue.then(async () => {
+              const win = withWindow ? await awaitPanelWindow(panelId) : undefined;
+              for (const listener of [...listeners]) {
+                try {
+                  listener(...(withWindow ? [win] : []));
+                } catch (error) {
+                  console.error(error);
+                }
+              }
+            });
+          });
+          return {
+            addListener(fn) {
+              if (typeof fn !== "function") {
+                throw new TypeError("Listener must be a function");
+              }
+              if (!listeners.includes(fn)) {
+                listeners.push(fn);
+              }
+            },
+            removeListener(fn) {
+              const index = listeners.indexOf(fn);
+              if (index !== -1) {
+                listeners.splice(index, 1);
+              }
+            },
+            hasListener: (fn) => (fn === undefined ? listeners.length > 0 : listeners.includes(fn)),
+            hasListeners: () => listeners.length > 0,
+          };
+        };
+        return {
+          ...panel,
+          onShown: wrapEvent(panel.onShown, true),
+          onHidden: wrapEvent(panel.onHidden, false),
+        };
+      };
+      // Assigned onto the existing object, NOT a spread copy: `themeName` above is a
+      // live getter and a copy would freeze it.
+      const create = panels.create;
+      panels.create = (title, iconPath, pagePath, cb) => {
+        const panelId = panelIdFor(pagePath);
+        if (typeof cb === "function") {
+          return create(title, iconPath, pagePath, (panel) => cb(decorate(panel, panelId)));
+        }
+        return create(title, iconPath, pagePath).then((panel) => decorate(panel, panelId));
+      };
+    }
+
     window.chrome = merged;
   },
 });

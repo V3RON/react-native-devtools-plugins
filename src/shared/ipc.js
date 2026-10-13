@@ -8,6 +8,10 @@
 // `new Function` that evaluated them: `chrome.devtools.*` is implemented
 // shell-side (src/chrome-shim/devtools.js), so the fork's injected-script
 // channel has no consumer (docs/features/DEVTOOLS-PANELS.md).
+//
+// The one synchronous read a frame makes is NOT an IPC channel: chrome.i18n's message
+// bundle is fetched with a synchronous XHR to the frame's own extension origin
+// (docs/features/STORAGE-AND-I18N.md), because getMessage is synchronous in Chrome.
 
 module.exports = {
   // ── dispatch channel (docs/features/DISPATCH-CHANNEL.md) ────────────────
@@ -32,6 +36,15 @@ module.exports = {
    *  click a synthetic `<a download>` at a `blob:` URL, which told nobody whether
    *  anything was written; now it is the same service `chrome.downloads` uses. */
   HOST_SAVE: "host-save",
+  /** ({url, content}) -> `InspectorFrontendHost.append` to the file a prior save of
+   *  `url` chose; replies via `appendedToURL` on the dispatch channel. */
+  HOST_APPEND: "host-append",
+  /** ({url}) -> `InspectorFrontendHost.close`: forget the handle a save of `url` made. */
+  HOST_CLOSE_FILE: "host-close-file",
+  /** ({url}) -> `InspectorFrontendHost.openInNewTab` through the scheme allowlist. */
+  HOST_OPEN_EXTERNAL: "host-open-external",
+  /** () -> the host config object `InspectorFrontendHost.getHostConfig` returns. */
+  HOST_CONFIG: "host-config",
 
   // ── chrome.runtime (docs/features/RUNTIME-MESSAGING.md) ──────────────────
   /** () -> manifest of the calling frame's extension (id from frame URL). */
@@ -52,9 +65,33 @@ module.exports = {
   /** main -> frame push: {kind: lifecycle|message|connect|port-message|port-disconnect}. */
   RUNTIME_DELIVER: "runtime-deliver",
 
+  // ── chrome.storage (docs/features/STORAGE-AND-I18N.md) ───────────────────────
+  /** ({area, op, arg}) -> one StorageArea call, executed against the HOST's store for
+   *  the calling frame's extension (src/main/storage-service.js). Resolves
+   *  {ok, value, seq} or {ok: false, error}; never throws across IPC. */
+  STORAGE_CALL: "storage-call",
+  /** main -> frame push: {kind: "storage-changed", payload: {seq, area, changes}} — one
+   *  change that happened in ANY context of this frame's extension. Its own channel and
+   *  never queued behind page load, so a write's reply can wait for its own event
+   *  without waiting for DOMContentLoaded. */
+  STORAGE_DELIVER: "storage-deliver",
+
   // ── shell-driven extension hosting (docs/features/DEVTOOLS-PANELS.md) ────
   /** ({title, pagePath}) from a devtools frame -> registers a frontend panel. */
   EXT_PANEL_CREATE: "ext-panel-create",
+  /** ({panelId, shown}) from the FRONTEND's main frame when the tab for an extension
+   *  panel is selected / deselected. Accepted from that one frame only (main checks
+   *  the sender against the frontend webContents), never from an extension frame. */
+  EXT_PANEL_VISIBILITY: "ext-panel-visibility",
+  /** main -> devtools-page frame push: {kind: "panel", payload: {pagePath, event}} with
+   *  event "shown" | "hidden". Sent only to the frame that created the panel. */
+  EXT_PANEL_EVENT: "ext-panel-event",
+
+  /** ({themeName}) from the FRONTEND's main frame -> the theme the frontend is
+   *  showing ("default" | "dark"); main fans changes out to extension contexts as
+   *  RUNTIME_DELIVER {kind: "theme"}. Accepted only from the frontend window's own
+   *  main frame (src/main/frontend-frame.js isFrontendFrame), never from an extension. */
+  THEME_REPORT: "theme-report",
 
   // ── inspected window (docs/features/INSPECTED-WINDOW.md) ──────────────────
   /** ({expression, options}) from an extension frame -> Chrome's

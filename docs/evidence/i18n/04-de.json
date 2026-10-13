@@ -1,0 +1,45 @@
+{
+  "name": "04-de",
+  "lang": "de",
+  "envLocale": null,
+  "tabs": [
+    "Rozenite 💎",
+    "Welcome",
+    "Console",
+    "Sources",
+    "Network",
+    "Performance",
+    "Memory",
+    "Components ⚛",
+    "Profiler ⚛",
+    "GraphQL Network",
+    "Altair GraphQL",
+    "Osudio-Panel",
+    "Console"
+  ],
+  "panelTabTitle": "Osudio-Panel",
+  "panelTarget": "rozenite://sample-extension/panel.html",
+  "panel": {
+    "heading": "Einfaches DevTools-Panel",
+    "demo": [
+      "Sprache der Oberfläche: de (de)",
+      "Textrichtung: ltr",
+      "greeting: Hallo, Ada! Du hast 3 neue Nachrichten.",
+      "price: Costs $5 per month",
+      "fallback: (this line exists only in the default locale, en)"
+    ],
+    "direction": "ltr",
+    "getUILanguage": "de",
+    "acceptLanguages": [
+      "de",
+      "en-US",
+      "en"
+    ],
+    "checks": [
+      "PASS chrome.i18n resolves messages synchronously with Chrome's semantics"
+    ]
+  },
+  "panelTabTitleFromGetMessage": "Osudio-Panel",
+  "issues": [],
+  "console": []
+}

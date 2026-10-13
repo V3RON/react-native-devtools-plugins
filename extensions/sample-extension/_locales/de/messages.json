@@ -1,0 +1,14 @@
+{
+  "extName": { "message": "Beispiel-Erweiterungen" },
+  "panelTitle": { "message": "Osudio-Panel" },
+  "heading": { "message": "Einfaches DevTools-Panel" },
+  "greeting": {
+    "message": "Hallo, $USER$! Du hast $COUNT$ neue Nachrichten.",
+    "placeholders": {
+      "user": { "content": "$1" },
+      "count": { "content": "$2" }
+    }
+  },
+  "uiLanguageLabel": { "message": "Sprache der Oberfläche" },
+  "directionLabel": { "message": "Textrichtung" }
+}

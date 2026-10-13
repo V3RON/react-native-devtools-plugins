@@ -155,8 +155,8 @@ Two of the above could not have worked until the verification found them:
 | API | State here |
 | --- | --- |
 | `runtime` (`id`/`getURL`/`getManifest`/`onMessage`/`connect`/`onInstalled`/`onStartup`) | real |
-| `storage.local` / `storage.sync` | real, persistent |
-| `storage.session` | **per-frame, not extension-wide** — see [STORAGE-AND-I18N.md](STORAGE-AND-I18N.md) for the consequence this has for Altair |
+| `storage.local` / `storage.sync` | real, persistent, shared with the extension's other contexts (`onChanged` reaches the worker) |
+| `storage.session` | real, extension-wide, in memory — see [STORAGE-AND-I18N.md](STORAGE-AND-I18N.md) |
 | `webRequest` | observe-only, permission-gated ([WEBREQUEST.md](WEBREQUEST.md)) |
 | `tabs` | **inert**: `create()` resolves `undefined` and opens nothing (issue #4), permission-gated |
 | `action`, `notifications` | **`[STUB]` registrable shells** (issue #4): no button, no badge, no popup; `notifications.create` shows nothing and calls back with no id; neither event ever fires |
@@ -218,4 +218,3 @@ Still open, tracked elsewhere:
 - `tabs.create` that opens something, real `notifications`, `alarms` → issue #4 /
   [SMALL-SHIMS.md](SMALL-SHIMS.md);
 - true MV3 suspended lifecycle (optional refinement, not the DoD);
-- extension-wide `storage.session` ([STORAGE-AND-I18N.md](STORAGE-AND-I18N.md)).
