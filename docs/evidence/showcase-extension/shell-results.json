@@ -1,23 +1,23 @@
 {
   "runtime-info": {
-    "state": "warn",
-    "text": "id showcase\n__MSG_extName__ v1.0.0 (MV3)\nrozenite://showcase/panel.html\n(manifest name is still a __MSG_ key: this host does not resolve manifest i18n)"
+    "state": "ok",
+    "text": "id showcase\nDevTools Showcase v1.0.0 (MV3)\nrozenite://showcase/panel.html"
   },
   "theme": {
-    "state": "warn",
-    "text": "themeName = \"dark\" (page is dark); setThemeChangeHandler is not available, so changes cannot be followed"
+    "state": "ok",
+    "text": "theme changed to \"default\" (observed 2x): page is now light"
   },
   "visibility": {
-    "state": "warn",
-    "text": "listeners registered but onShown never fired for this visible panel. shown 0x, hidden 0x, last: -"
+    "state": "ok",
+    "text": "shown 2x, hidden 1x, last: shown (onShown got a window)"
   },
   "eval": {
     "state": "warn",
     "text": "Runtime.evaluate: CDP bridge is not running (external relay mode?)"
   },
   "reload": {
-    "state": "idle",
-    "text": "press Reload to reload the inspected target"
+    "state": "warn",
+    "text": "reload() sent, but this host has no eval to confirm it and no onNavigated fired"
   },
   "tabs": {
     "state": "ok",
@@ -45,15 +45,15 @@
   },
   "msg-dev": {
     "state": "ok",
-    "text": "reply from devtools-page; its tabId 91124, its themeName \"dark\""
+    "text": "reply from devtools-page; its tabId 91124, its themeName \"default\""
   },
   "port": {
     "state": "ok",
-    "text": "echo {\"n\":1791902765047,\"hello\":\"from the panel\"} from background"
+    "text": "echo {\"n\":1791905147953,\"hello\":\"from the panel\"} from background"
   },
   "lifecycle": {
     "state": "ok",
-    "text": "onInstalled reason=install at 2:06:07 PM\nonStartup fired 8x"
+    "text": "onInstalled reason=install at 2:06:07 PM\nonStartup fired 10x"
   },
   "bridge": {
     "state": "warn",
@@ -61,11 +61,11 @@
   },
   "storage-local": {
     "state": "ok",
-    "text": "showcase:local-probe: 20 -> 21 (round-trip OK)"
+    "text": "showcase:local-probe: 22 -> 23 (round-trip OK)"
   },
   "storage-sync": {
     "state": "ok",
-    "text": "showcase:sync-probe: 20 -> 21 (round-trip OK)"
+    "text": "showcase:sync-probe: 22 -> 23 (round-trip OK)"
   },
   "storage-session": {
     "state": "ok",
@@ -73,19 +73,19 @@
   },
   "storage-changed": {
     "state": "ok",
-    "text": "5 change event(s)\nlast: local showcase:xframe"
+    "text": "20 change event(s)\nlast: local showcase:alarms"
   },
   "i18n": {
-    "state": "warn",
-    "text": "chrome.i18n is not available"
+    "state": "ok",
+    "text": "DevTools Showcase / locale name: English / UI language en-US\nplaceholder: Hello, Ada!  |  $1 $2: item 2 of 5\nfallback (default_locale): only defined in en (locale fallback works)\n@@ui_locale=en_US @@extension_id=showcase @@bidi_dir=ltr\ngetAcceptLanguages: en-US,en"
   },
   "xframe": {
-    "state": "warn",
-    "text": "wrote session+local\nbackground heard: no reply\ndevtools page heard: session 0x, local 0x\nsession readable back: true\n(other contexts did not receive both onChanged events: per-frame storage here)"
+    "state": "ok",
+    "text": "wrote session+local\nbackground heard: session 1x, local 1x\ndevtools page heard: session 1x, local 1x\nsession readable back: true"
   },
   "alarms": {
     "state": "ok",
-    "text": "armed 2:45:59 PM, onAlarm fired 2:46:29 PM (one-shot, now cleared)"
+    "text": "armed 3:25:48 PM, onAlarm fired 3:26:18 PM (one-shot, now cleared)"
   },
   "notifications": {
     "state": "warn",

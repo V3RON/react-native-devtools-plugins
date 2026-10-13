@@ -85,6 +85,7 @@ if (chrome.storage && chrome.storage.onChanged) {
     if (changes["showcase:xframe"]) {
       xf[area] = (xf[area] || 0) + 1;
       xf.last = changes["showcase:xframe"].newValue;
+      localStore((store) => store.set({ "showcase:xframe-seen:devtools": { ...xf } }));
     }
   });
 }

@@ -558,11 +558,12 @@ const runXframe = () =>
     const stamp = { n: Date.now(), from: "panel" };
     await storeSet("session", { "showcase:xframe": stamp });
     await storeSet("local", { "showcase:xframe": stamp });
-    await sleep(600);
-    const bg = await sendTo("background", "xframe-report", undefined, { idempotent: true }).catch(() => null);
-    const dev = await sendTo("devtools", "xframe-report", undefined, { idempotent: true }).catch(() => null);
-    const fmt = (r) => (r ? `session ${r.session}x, local ${r.local}x` : "no reply");
-    const seen = (r) => !!r && r.session > 0 && r.local > 0;
+    await sleep(900);
+    // Each context writes what it heard to storage (see background.js / devtools.js).
+    const bg = await storeGet("local", "showcase:xframe-seen:background").catch(() => null);
+    const dev = await storeGet("local", "showcase:xframe-seen:devtools").catch(() => null);
+    const fmt = (r) => (r ? `session ${r.session}x, local ${r.local}x` : "nothing heard");
+    const seen = (r) => !!r && r.session > 0 && r.local > 0 && !!r.last && r.last.n === stamp.n; // heard THIS write
     const sessionBack = await storeGet("session", "showcase:xframe");
     const text = `wrote session+local\nbackground heard: ${fmt(bg)}\ndevtools page heard: ${fmt(dev)}\nsession readable back: ${!!sessionBack}`;
     if (seen(bg) && seen(dev)) return text;

@@ -167,6 +167,9 @@ if (api.storage && api.storage.onChanged) {
       xf[area] = (xf[area] || 0) + 1;
       xf.last = changes["showcase:xframe"].newValue;
       log("background", `storage.onChanged ${area} showcase:xframe`);
+      // Report through storage, not a reply: the panel reads it back, and this does not
+      // depend on how a host settles replies when several pages hear one message.
+      storeSet("showcase:xframe-seen:background", { ...xf });
     }
   });
 }

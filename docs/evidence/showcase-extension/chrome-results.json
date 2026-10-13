@@ -13,19 +13,19 @@
   },
   "eval": {
     "state": "ok",
-    "text": "eval ->\n{\"href\":\"http://127.0.0.1:9253/\",\"title\":\"Showcase target\",\"demo\":\"hello from the inspected page\",\"now\":\"2026-10-13T14:51:33.620Z\"}"
+    "text": "eval ->\n{\"href\":\"http://127.0.0.1:9253/\",\"title\":\"Showcase target\",\"demo\":\"hello from the inspected page\",\"now\":\"2026-10-13T15:30:23.599Z\"}"
   },
   "reload": {
     "state": "ok",
-    "text": "reloaded: the page's performance.timeOrigin changed (1791903072078 to 1791903088617.2)"
+    "text": "reloaded: the page's performance.timeOrigin changed (1791905394401.5 to 1791905418596.5)"
   },
   "tabs": {
     "state": "ok",
-    "text": "tabId 561048586\nhttp://127.0.0.1:9253/\nShowcase target\ntabs.query({}) -> 1 tab(s)"
+    "text": "tabId 1992025274\nhttp://127.0.0.1:9253/\nShowcase target\ntabs.query({}) -> 1 tab(s)"
   },
   "net-live": {
     "state": "ok",
-    "text": "5 seen\nlatest: GET http://127.0.0.1:9253/favicon.ico -> 404 (29 ms)"
+    "text": "5 seen\nlatest: GET http://127.0.0.1:9253/favicon.ico -> 404 (17 ms)"
   },
   "net-content": {
     "state": "ok",
@@ -41,19 +41,19 @@
   },
   "msg-bg": {
     "state": "ok",
-    "text": "reply from background at 2:51:25 PM"
+    "text": "reply from background at 3:30:15 PM"
   },
   "msg-dev": {
     "state": "ok",
-    "text": "reply from devtools-page; its tabId 561048586, its themeName \"default\""
+    "text": "reply from devtools-page; its tabId 1992025274, its themeName \"default\""
   },
   "port": {
     "state": "ok",
-    "text": "echo {\"n\":1791903085475,\"hello\":\"from the panel\"} from background"
+    "text": "echo {\"n\":1791905415440,\"hello\":\"from the panel\"} from background"
   },
   "lifecycle": {
     "state": "ok",
-    "text": "onInstalled reason=install at 2:51:12 PM\nonStartup fired 0x"
+    "text": "onInstalled reason=install at 3:29:54 PM\nonStartup fired 0x"
   },
   "bridge": {
     "state": "ok",
@@ -73,7 +73,7 @@
   },
   "storage-changed": {
     "state": "ok",
-    "text": "17 change event(s)\nlast: local showcase:alarms"
+    "text": "21 change event(s)\nlast: local showcase:alarms"
   },
   "i18n": {
     "state": "ok",
@@ -85,11 +85,11 @@
   },
   "alarms": {
     "state": "ok",
-    "text": "armed 2:51:33 PM, onAlarm fired 2:52:03 PM (one-shot, now cleared)"
+    "text": "armed 3:30:23 PM, onAlarm fired 3:30:53 PM (one-shot, now cleared)"
   },
   "notifications": {
     "state": "ok",
-    "text": "created at 2:51:33 PM, id 4309cf11-4113-4112-a1b0-2edc98ccfaa6; clicked 0x, closed 1x"
+    "text": "created at 3:30:23 PM, id 2092e414-a6dd-47ca-b056-4419d95f5ca2; clicked 0x, closed 1x"
   },
   "downloads": {
     "state": "ok",

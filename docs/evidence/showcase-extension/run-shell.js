@@ -46,6 +46,17 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   p = await livePanel();
   await sleep(33000); // first alarm tick
 
+  // Flip the frontend theme so the panel OBSERVES a change (light, then back to dark).
+  const setTheme = (v) =>
+    evaluate(c, `(async()=>{const m=await import('/rozenite/core/common/common.js');m.Settings.Settings.instance().moduleSetting('ui-theme').set(${JSON.stringify(v)})})()`);
+  const theme0 = await evaluate(p, `document.documentElement.dataset.theme`);
+  await setTheme(theme0 === "dark" ? "default" : "dark");
+  await sleep(2500);
+  console.log("theme after flip:", await evaluate(p, `document.documentElement.dataset.theme`));
+  await screenshot(c, path.join(OUT, `${PREFIX}-4-flipped-theme.png`));
+  await setTheme(theme0 === "dark" ? "dark" : "default");
+  await sleep(2500);
+
   await screenshot(c, path.join(OUT, `${PREFIX}-1-showcase-panel.png`));
   await evaluate(p, `window.scrollTo(0, document.body.scrollHeight)`);
   await sleep(600);
