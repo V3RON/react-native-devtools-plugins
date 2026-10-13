@@ -1,0 +1,20 @@
+ leftovers: hello from the inspected page #12
+ leftovers: a warning line #12
+tick @ 127.0.0.1/:9
+setInterval
+(anonymous) @ 127.0.0.1/:16
+ leftovers: fetched {"ok":true,"n":42}
+ leftovers: hello from the inspected page #13
+ leftovers: fetched {"ok":true,"n":42}
+ leftovers: hello from the inspected page #14
+ leftovers: fetched {"ok":true,"n":42}
+ leftovers: hello from the inspected page #15
+ leftovers: a warning line #15
+tick @ 127.0.0.1/:9
+setInterval
+(anonymous) @ 127.0.0.1/:16
+ leftovers: an error line #15
+tick @ 127.0.0.1/:10
+setInterval
+(anonymous) @ 127.0.0.1/:16
+ leftovers: fetched {"ok":true,"n":42}
