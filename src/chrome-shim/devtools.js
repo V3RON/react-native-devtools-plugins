@@ -78,9 +78,38 @@ const createDevtools = ({
     _pagePath: pagePath,
   });
 
+  // Chrome's values: "default" (light) or "dark". Starts at the frontend's own
+  // pre-detection default; the host's answer arrives via setThemeName()
+  // (RUNTIME_REGISTER reply, then "theme" deliveries) — docs/features/DEVTOOLS-PANELS.md.
+  let themeName = "default";
+  // Chrome has NO `themeChanged` event: the API is `setThemeChangeHandler(callback)` — one
+  // handler, replaced by each call, cleared by a non-function. The frontend's own
+  // extension API (models/extensions) calls it only when the host's theme CHANGES (never on
+  // registration), with the new name, after updating `panels.themeName`.
+  let themeHandler = null;
+  const setThemeName = (next) => {
+    if ((next !== "default" && next !== "dark") || next === themeName) {
+      return false;
+    }
+    themeName = next;
+    if (themeHandler) {
+      try {
+        themeHandler.call(null, next);
+      } catch (error) {
+        logger.error("[devtools.panels.setThemeChangeHandler] handler threw:", error);
+      }
+    }
+    return true;
+  };
+
   const panels = {
-    themeName: "dark", // deviation: static; frontend theme not wired yet
-    themeChanged: createEvent(),
+    setThemeChangeHandler(callback) {
+      themeHandler = typeof callback === "function" ? callback : null;
+    },
+    // contextBridge clones a getter ONCE, so the preload re-establishes
+    // `themeName` as a live getter in the page world over this helper (same
+    // trick as runtime.lastError) and deletes it from the exposed object.
+    _getThemeName: () => themeName,
     create(title, iconPath, pagePath, cb) {
       const panel = createPanel(title, pagePath);
       onPanelCreated({ title, pagePath });
@@ -133,6 +162,9 @@ const createDevtools = ({
     // [STUB] jump-to-source; rides the future Sources integration.
     openResource: (resource, lineNumber, cb) => callAsync(cb),
   };
+
+  // A live property, as in Chrome (the pure shim; see _getThemeName above).
+  Object.defineProperty(panels, "themeName", { get: () => themeName, enumerable: true });
 
   const inspectedWindow = {
     tabId: tabIdFor(extensionId),
@@ -240,6 +272,7 @@ const createDevtools = ({
   const network = { ...NO_NETWORK, ...(networkApi || {}) };
 
   return {
+    setThemeName,
     namespace: {
       inspectedWindow,
       panels,

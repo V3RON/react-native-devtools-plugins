@@ -31,6 +31,7 @@ const {
   WINDOW_BRING_TO_FRONT,
   WINDOW_CLOSE,
   HOST_SAVE,
+  THEME_REPORT,
   HOST_APPEND,
   HOST_CLOSE_FILE,
   HOST_OPEN_EXTERNAL,
@@ -318,6 +319,14 @@ const InspectorFrontendHost = {
     if (callback) callback({ canShowSurvey: false });
   },
 };
+
+// The panel bridge (src/frontend/panel-bridge.js) reports the theme the frontend is
+// showing through this one-purpose function. It is not part of InspectorFrontendHost
+// (a stock-frontend surface); main accepts it only from this window's main frame.
+contextBridge.exposeInMainWorld("__SHELL_HOST__", {
+  reportTheme: (themeName) =>
+    ipcRenderer.invoke(THEME_REPORT, { themeName }).catch(() => {}),
+});
 
 // context-bridge bridge: exposeInMainWorld proxies functions; the frontend
 // wants a plain window.InspectorFrontendHost object instead.

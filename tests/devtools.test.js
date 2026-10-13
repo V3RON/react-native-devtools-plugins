@@ -279,8 +279,8 @@ test("out-of-scope APIs exist as inert shapes (stubbing rule)", async () => {
   });
 
   // theme + misc namespaces exist without throwing
-  assert.strictEqual(devtools.panels.themeName, "dark");
-  devtools.panels.themeChanged.addListener(() => {});
+  assert.strictEqual(devtools.panels.themeName, "default");
+  devtools.panels.setThemeChangeHandler(() => {});
   devtools.commands.onCommand.addListener(() => {});
   assert.doesNotThrow(() => devtools.panels.openResource("a.js", 1));
   assert.ok(devtools.inspectedWindow.tabId > 0);

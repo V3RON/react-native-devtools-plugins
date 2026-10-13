@@ -33,6 +33,23 @@ const assert = (cond, msg) => {
 };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// ── chrome.devtools.panels.themeName / setThemeChangeHandler ───────────────────────
+// Rendered live: switch Settings -> Preferences -> Theme in DevTools (or flip the
+// system theme while it is "System preference") and this line follows.
+const themeLine = document.getElementById("theme");
+const showTheme = (via) => {
+  const name = chrome.devtools.panels.themeName;
+  themeLine.textContent = `themeName = ${name} (${via})`;
+  document.body.style.background = name === "dark" ? "#202124" : "#ffffff";
+  document.body.style.color = name === "dark" ? "#e8eaed" : "#202124";
+  console.log(`[theme] themeName=${name} (${via})`);
+};
+showTheme("at load");
+chrome.devtools.panels.setThemeChangeHandler((name) => {
+  console.log(`[theme] setThemeChangeHandler -> ${name}`);
+  showTheme("setThemeChangeHandler");
+});
+
 (async () => {
   // ── the frame this panel runs in (docs/LIMITATIONS.md §Security) ─────────
   // These are the properties the shell promises an extension folder does NOT

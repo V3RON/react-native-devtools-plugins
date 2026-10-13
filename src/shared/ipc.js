@@ -65,6 +65,12 @@ module.exports = {
   /** ({title, pagePath}) from a devtools frame -> registers a frontend panel. */
   EXT_PANEL_CREATE: "ext-panel-create",
 
+  /** ({themeName}) from the FRONTEND's main frame -> the theme the frontend is
+   *  showing ("default" | "dark"); main fans changes out to extension contexts as
+   *  RUNTIME_DELIVER {kind: "theme"}. Accepted only from the frontend window's own
+   *  main frame (src/main/frontend-frame.js isFrontendFrame), never from an extension. */
+  THEME_REPORT: "theme-report",
+
   // ── inspected window (docs/features/INSPECTED-WINDOW.md) ──────────────────
   /** ({expression, options}) from an extension frame -> Chrome's
    *  [value, exceptionInfo] pair, answered from the CDP bridge. */

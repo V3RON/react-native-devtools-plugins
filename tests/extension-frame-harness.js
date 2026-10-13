@@ -41,6 +41,10 @@ const waitFor = arg("wait-for");
 const SETTLE_MS = Number(arg("settle") || 900);
 // Start the production background host too (src/main/background-host.js). Off by
 // default so every pre-existing run of this harness is unchanged.
+// Name the loopback page as THE frontend window (src/main/panel-host.js), so its
+// main frame may send THEME_REPORT. Off by default: nothing else here has a frontend.
+const registerDelayMs = Number(arg("register-delay-ms") || "0");
+const frontendIsHost = ["on", "true", "1"].includes(arg("frontend-host"));
 const withBackgroundHost = ["on", "true", "1"].includes(arg("background-host"));
 // Which extension id's CSP to report in the `harness` line.
 const reportedExtensionId = arg("extension-id") || "probe.local";
@@ -114,6 +118,18 @@ app
     // src/main/index.js does for electron-store's renderer adapter.
     Store.initRenderer();
     registerIpcHandlers();
+    if (registerDelayMs > 0) {
+      // Test-only: hold every RUNTIME_REGISTER reply back, so a page script that runs in
+      // that window provably cannot have learned anything from it (tests/theme-electron.test.js).
+      const { ipcMain } = require("electron");
+      const { RUNTIME_REGISTER } = require("../src/shared/ipc");
+      const original = ipcMain._invokeHandlers.get(RUNTIME_REGISTER);
+      ipcMain.removeHandler(RUNTIME_REGISTER);
+      ipcMain.handle(RUNTIME_REGISTER, async (event, ...rest) => {
+        await new Promise((resolve) => setTimeout(resolve, registerDelayMs));
+        return original(event, ...rest);
+      });
+    }
 
     // chrome.notifications: a RECORDING notifier, so this suite never raises a real
     // system notification (the rule the whole harness runs under). It behaves like
@@ -300,6 +316,12 @@ app
       height: 700,
       webPreferences: frontendPreferences({ preloadPath: config.preloadPath }),
     });
+    if (frontendIsHost) {
+      // The shared rule also checks the main frame is still on the frontend ORIGIN
+      // (src/main/frontend-frame.js), so the configured frontend URL is this loopback page's.
+      config.frontendURL = `http://127.0.0.1:${port}/`;
+      require("../src/main/frontend-frame").setFrontendContents(win.webContents);
+    }
 
     const note = (entry) => write(entry);
 

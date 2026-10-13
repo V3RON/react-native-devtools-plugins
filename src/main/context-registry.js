@@ -53,10 +53,29 @@ const createContextRegistry = () => {
     }
   };
 
+  /**
+   * Push one delivery to EVERY reachable context (host state every context shares,
+   * e.g. the DevTools theme).
+   * @returns {number} how many contexts `send` returned from without throwing. Not an
+   *          acknowledgement: production senders (makeFrameSender in src/main/ipc.js)
+   *          swallow a detached frame themselves and retire it, so the count can
+   *          include a context that was already going away.
+   */
+  const broadcast = (delivery) => {
+    let reached = 0;
+    for (const frameKey of [...contexts.keys()]) {
+      if (deliver(frameKey, delivery)) {
+        reached++;
+      }
+    }
+    return reached;
+  };
+
   return {
     register,
     unregister,
     deliver,
+    broadcast,
     has: (frameKey) => contexts.has(frameKey),
     /** Diagnostics/tests: which contexts are reachable, and of which extension. */
     list: () =>
