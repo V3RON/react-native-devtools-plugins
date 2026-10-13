@@ -87,8 +87,39 @@ const contentScriptAllowlist = () =>
 //                                      allowlist runs first, so only allowed URLs land.
 //   DEVTOOLS_TEST_SAVE_DIALOG=<dir>    the save dialog auto-answers with <dir>/<default
 //                                      name>; the literal `cancel` answers "cancelled".
-const testOpenLog = (process.env.DEVTOOLS_TEST_OPEN_LOG || "").trim() || null;
-const testSaveDialog = (process.env.DEVTOOLS_TEST_SAVE_DIALOG || "").trim() || null;
+//
+// Honoured only from an UNPACKAGED app (`app.isPackaged` false; plain Node, i.e. the unit
+// tests, counts as unpackaged): a shipped build ignores them and says so. Whenever one is
+// active the shell logs a loud warning at startup, because DEVTOOLS_TEST_SAVE_DIALOG
+// replaces EVERY save dialog, `chrome.downloads` with `saveAs` included. A relative
+// directory resolves against the process's working directory.
+const isPackaged = () => {
+  try {
+    const { app } = require("electron");
+    return Boolean(app && app.isPackaged);
+  } catch {
+    return false;
+  }
+};
+const testSeam = (name, resolve = (value) => value) => {
+  const value = (process.env[name] || "").trim();
+  if (!value) {
+    return null;
+  }
+  if (isPackaged()) {
+    console.warn(`[config] ${name} is ignored: this is a packaged build.`);
+    return null;
+  }
+  console.warn(
+    `[config] TEST SEAM ACTIVE: ${name}=${value} — do not set this in a user-facing launch ` +
+      "(docs/api/INSPECTOR-FRONTEND-HOST.md)."
+  );
+  return resolve(value);
+};
+const testOpenLog = testSeam("DEVTOOLS_TEST_OPEN_LOG", (value) => path.resolve(value));
+const testSaveDialog = testSeam("DEVTOOLS_TEST_SAVE_DIALOG", (value) =>
+  value === "cancel" ? value : path.resolve(value)
+);
 
 // JSON object merged over the frontend's host config (src/main/host-config.js), so a
 // deployment can turn a feature the shell disables back on (and a test can prove the

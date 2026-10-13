@@ -149,8 +149,8 @@ const showFile = async (file, shot) => {
       results.consoleEvents = JSON.parse(await c.evaluate("JSON.stringify(window.__events)"));
       results.consoleCalls = JSON.parse(await c.evaluate("JSON.stringify(window.__calls)"));
       if (file) {
-        fs.copyFileSync(path.join(saved, file), path.join(evidence, "console-save-as.log"));
-        await showFile(path.join(evidence, "console-save-as.log"), path.join(evidence, "03-saved-console-log.png"));
+        fs.copyFileSync(path.join(saved, file), path.join(evidence, "console-save-as.txt"));
+        await showFile(path.join(evidence, "console-save-as.txt"), path.join(evidence, "03-saved-console-log.png"));
       }
 
       // Network "Save all as HAR": the frontend's FileManager.save with forceSaveAs.

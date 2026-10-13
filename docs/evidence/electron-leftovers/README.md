@@ -43,9 +43,9 @@ is what the driver observed (paths shortened to `<outDir>`).
 | --- | --- |
 | `01-default-host-config.png` | default host config: the drawer has only the **Console** tab (no "AI assistance"). Taken with the page's live console output. |
 | `02-network-panel.png` | Network panel with the inspected page's real requests, the state from which the HAR is exported. |
-| `03-saved-console-log.png` | the file Console **Save as…** wrote to disk (right-click a message, click "Save as…"), rendered from `console-save-as.log` — the page's real log lines, written by `save('<host>-<ts>.log','')` then `append(…)` then `close`. |
+| `03-saved-console-log.png` | the file Console **Save as…** wrote to disk (right-click a message, click "Save as…"), rendered from `console-save-as.txt` — the page's real log lines, written by `save('<host>-<ts>.log','')` then `append(…)` then `close`. |
 | `04-ai-config-override.png` | run C: same shell, `DEVTOOLS_HOST_CONFIG` turns AIDA on and the **AI assistance** drawer tab appears (compare `01`). |
-| `console-save-as.log` | the saved console text (21 lines). |
+| `console-save-as.txt` | the saved console text (21 lines). |
 | `network-save-as.har` | the HAR written by the toolbar's "Export HAR (sanitized)…": valid JSON, 6 entries (`GET http://127.0.0.1:9295/`, `…/data.json?n=1`, …). |
 | `results.json` | machine-readable observations, below. |
 
@@ -65,6 +65,10 @@ is what the driver observed (paths shortened to `<outDir>`).
 - `hostConfig` (default) and `overrideAida`: what `getHostConfig` returned in runs A and C.
 - `drawerTabsDefault` vs `drawerTabsOverride`: every `[role=tab]` in the frontend; only run C has
   "AI assistance".
+
+Unrelated to this change: the "Failed to wait for initialization: it took too long" error behind the
+drawer in the screenshots is the Rozenite panel failing to find an RN device in this fake-CDP setup.
+`console-save-as.txt` is `.txt` only because `*.log` is gitignored; the shell wrote a `.log`.
 
 ## Not covered
 

@@ -3,7 +3,8 @@
 // `openExternal` launches whatever application is registered for a URL's scheme —
 // `file:`, `smb:`, `ms-msdt:` and friends included — so a string that arrives from a
 // page (a DevTools link, a console message, a panel) must never reach it unfiltered.
-// The allowlist is http(s) only: the two schemes a "new tab" can honestly mean. It is
+// The allowlist is http(s) only (and without embedded credentials): the two schemes a
+// "new tab" can honestly mean. It is
 // shared by `InspectorFrontendHost.openInNewTab` and the `chrome.tabs.create`
 // `external` policy (src/main/tab-host.js).
 //
@@ -27,6 +28,12 @@ const openableUrl = (url) => {
     return null;
   }
   if (!ALLOWED_PROTOCOLS.includes(parsed.protocol) || !parsed.hostname) {
+    return null;
+  }
+  // `https://trusted.example@evil.example/` and `http://user:pw@host/`: credentials in a
+  // URL are how a link is made to look like a different site, and nothing in DevTools
+  // needs them.
+  if (parsed.username || parsed.password) {
     return null;
   }
   return parsed.href;

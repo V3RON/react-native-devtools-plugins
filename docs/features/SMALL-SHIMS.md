@@ -93,7 +93,8 @@ never clicked was created — is a side effect no extension asked this host for,
 user cannot take it back. Whichever policy is set, the Tab descriptor says what really
 happened, so nothing is claimed that did not occur. Under `external` only `http(s)` URLs are
 handed to the OS (`src/main/external-open.js`, the allowlist `InspectorFrontendHost.openInNewTab`
-shares); anything else rejects the `create` with the reason.
+shares); anything else opens nothing: `create` still resolves with `openedVia: null` (Chrome has
+no refusal to model) and the calling frame logs `[chrome.tabs] tabs.create opened nothing: <reason>`.
 
 **`tabs.sendMessage` goes to the app, and only to a script that was opted in.** Its receiver
 is this extension's own content script inside the inspected target

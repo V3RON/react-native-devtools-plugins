@@ -17,6 +17,11 @@
 // name an arbitrary file to grow. The dialog and the write are the shell's one save
 // path (src/main/save-service.js); events go out on the dispatch channel.
 //
+// Known sharp edge: a re-save to a remembered path overwrites that file in place, so if
+// the write then fails the save service removes the (already truncated) file — the
+// earlier contents are gone, and `canceledSaveURL` is raised. Writing to a temp file and
+// renaming would avoid it; it has not been done.
+//
 // Operations on one url run in order (a console log is saved, then appended to in
 // chunks, and an append must not overtake the save that gives it a path).
 

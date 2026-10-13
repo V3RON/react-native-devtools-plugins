@@ -222,7 +222,18 @@ const chrome = createChromeNamespace({
         windowId: details.windowId,
         active: details.active,
       })
-    ).then((reply) => (reply && reply.ok ? { via: reply.via ?? null, handle: reply.handle } : { via: null })),
+    ).then((reply) => {
+      if (reply && reply.ok) {
+        return { via: reply.via ?? null, handle: reply.handle };
+      }
+      // Nothing opened: the tab still resolves with `openedVia: null` (Chrome's `create`
+      // has no refusal to model), but WHY — a scheme outside the http(s) allowlist, an
+      // opener that failed — is said here rather than dropped.
+      if (reply && reply.error) {
+        console.warn(`[chrome.tabs] tabs.create opened nothing: ${reply.error}`);
+      }
+      return { via: null };
+    }),
   closeTabById: (handle) =>
     asRegisteredCaller(() => ipcRenderer.invoke(TABS_CLOSE, { handle })).then(
       (closed) => Boolean(closed)

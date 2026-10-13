@@ -3,9 +3,11 @@
 //
 // The frontend does `Object.assign(Runtime.hostConfig, answer)` once at startup, so every
 // key here is a decision about a feature gate the frontend reads. This build of the
-// frontend (@react-native/debugger-frontend) reads exactly the keys below; it has no
-// `experiments` or `disableAutosave` key, so none is emitted — the config the frontend
-// understands is the only config worth sending. Each default is the honest answer for
+// frontend (@react-native/debugger-frontend) has no `experiments` or `disableAutosave`
+// key, so none is emitted. Beyond the keys below the bundle also reads
+// `devToolsAnimationStylesInStylesTab` and `devToolsCssValueTracing`: ordinary Elements
+// features that need nothing this shell lacks, so they are deliberately left unset (the
+// frontend's own defaults apply) rather than decided here. Each default is the honest answer for
 // THIS embedder, not a way to hide something that would work:
 //
 //   aidaAvailability / devToolsConsoleInsights / devToolsFreestyler /

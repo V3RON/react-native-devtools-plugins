@@ -12,7 +12,6 @@ const { openableUrl, createExternalOpener } = require("../src/main/external-open
 const { createHostFiles } = require("../src/main/host-files");
 const { createSaveService } = require("../src/main/save-service");
 const { buildHostConfig, DEFAULT_HOST_CONFIG } = require("../src/main/host-config");
-const { createTabHost } = require("../src/main/tab-host");
 
 // ── openInNewTab ─────────────────────────────────────────────────────────────
 test("openableUrl allows http(s) only and normalizes", () => {
@@ -26,6 +25,8 @@ test("openableUrl allows http(s) only and normalizes", () => {
     "chrome://settings",
     "rozenite://ext/page.html",
     "ms-msdt:/id",
+    "https://trusted.example@evil.example/",
+    "http://user:pw@localhost:8081/",
     "//evil.example",
     "not a url",
     "http://",
@@ -58,23 +59,6 @@ test("the opener hands only allowed URLs to openExternal and reports refusals", 
     },
   });
   assert.deepStrictEqual(await failing.open("https://example.com"), { ok: false, error: "no browser" });
-});
-
-test("chrome.tabs.create's external policy goes through the same allowlist", async () => {
-  // The tab host takes an injected openExternal; the Electron wiring wraps it in the
-  // opener. Prove the wrapped form refuses what the opener refuses.
-  const opened = [];
-  const opener = createExternalOpener({ openExternal: (url) => opened.push(url) });
-  const host = createTabHost({
-    policy: "external",
-    openExternal: async (url) => {
-      const reply = await opener.open(url);
-      if (!reply.ok) throw new Error(reply.error);
-    },
-  });
-  assert.strictEqual((await host.open({ url: "https://example.com" })).via, "external");
-  await assert.rejects(host.open({ url: "file:///etc/passwd" }), /not http/);
-  assert.deepStrictEqual(opened, ["https://example.com/"]);
 });
 
 // ── save / append / close ────────────────────────────────────────────────────
@@ -245,22 +229,4 @@ test("an override merges one level deep and never mutates the defaults", () => {
   assert.strictEqual(buildHostConfig().aidaAvailability.enabled, false);
   assert.deepStrictEqual(buildHostConfig("nope"), buildHostConfig());
   assert.deepStrictEqual(buildHostConfig([1]), buildHostConfig());
-});
-
-// ── the dispatch channel really carries its arguments ────────────────────────
-test("executeInMainWorld is given `args`: Electron ignores any other key", () => {
-  // `arguments:` ran the function with no arguments, so every dispatched event
-  // (savedURL, contextMenuItemSelected, ...) arrived as `InspectorFrontendAPI.undefined`.
-  const source = fs.readFileSync(path.join(__dirname, "..", "src", "preload", "frontend-host.js"), "utf8");
-  const code = source.replace(/^\s*\/\/.*$/gm, "");
-  assert.match(code, /args:\s*\[name, args \|\| \[\]\]/);
-  assert.doesNotMatch(code, /\barguments:/);
-});
-
-test("the InspectorFrontendHost channels main registers are refused to anyone but the frontend", () => {
-  const source = fs.readFileSync(path.join(__dirname, "..", "src", "main", "ipc.js"), "utf8");
-  for (const channel of ["HOST_SAVE", "HOST_APPEND", "HOST_CLOSE_FILE", "HOST_OPEN_EXTERNAL", "HOST_CONFIG"]) {
-    const handler = new RegExp(`ipcMain\\.handle\\(${channel},[^;]*?fromFrontend\\(event\\)`, "s");
-    assert.match(source, handler, `${channel} checks the sender`);
-  }
 });

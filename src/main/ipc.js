@@ -29,6 +29,7 @@ const optionsHost = require("./options-host");
 const { getHostFiles } = require("./host-files");
 const { getExternalOpener } = require("./external-open");
 const { buildHostConfig } = require("./host-config");
+const { isFrontendFrame } = require("./frontend-frame");
 const config = require("./config");
 const {
   SHOW_CONTEXT_MENU,
@@ -707,18 +708,10 @@ const registerIpcHandlers = () => {
   });
 
   // `InspectorFrontendHost.save/append/close/openInNewTab/getHostConfig` — channels for
-  // the DevTools frontend's own main frame only. An extension page, a background window
-  // or a popup that somehow reached these names is refused: identity is the sender,
-  // never anything in the payload.
-  const fromFrontend = (event) => {
-    const win = windowOps.getCurrentWindow();
-    return Boolean(
-      win &&
-        !win.isDestroyed() &&
-        event.sender === win.webContents &&
-        event.senderFrame === event.sender.mainFrame
-    );
-  };
+  // the DevTools frontend's own main frame only (src/main/frontend-frame.js: its
+  // WebContents, its main frame, still on the frontend origin). An extension page, a
+  // background window, a popup or a navigated-away frontend that reached these names is
+  // refused: identity is the sender, never anything in the payload.
   const REFUSED = { ok: false, error: "not the DevTools frontend" };
   const failed = (error) => ({ ok: false, error: (error && error.message) || "the call failed" });
 
@@ -728,22 +721,22 @@ const registerIpcHandlers = () => {
   // are the same service chrome.downloads uses — no extension gating (the frontend is
   // not an extension) and no filename suggestion (no extension to ask).
   ipcMain.handle(HOST_SAVE, (event, payload) =>
-    fromFrontend(event) ? getHostFiles().save(payload).catch(failed) : REFUSED
+    isFrontendFrame(event) ? getHostFiles().save(payload).catch(failed) : REFUSED
   );
   ipcMain.handle(HOST_APPEND, (event, payload) =>
-    fromFrontend(event) ? getHostFiles().append(payload).catch(failed) : REFUSED
+    isFrontendFrame(event) ? getHostFiles().append(payload).catch(failed) : REFUSED
   );
   ipcMain.handle(HOST_CLOSE_FILE, (event, payload) =>
-    fromFrontend(event) ? getHostFiles().close(payload).catch(failed) : REFUSED
+    isFrontendFrame(event) ? getHostFiles().close(payload).catch(failed) : REFUSED
   );
 
   // `openInNewTab`: http(s) only (src/main/external-open.js).
   ipcMain.handle(HOST_OPEN_EXTERNAL, (event, payload) =>
-    fromFrontend(event) ? getExternalOpener().open(payload && payload.url) : REFUSED
+    isFrontendFrame(event) ? getExternalOpener().open(payload && payload.url) : REFUSED
   );
 
   ipcMain.handle(HOST_CONFIG, (event) =>
-    fromFrontend(event) ? buildHostConfig(config.hostConfigOverride) : {}
+    isFrontendFrame(event) ? buildHostConfig(config.hostConfigOverride) : {}
   );
 };
 

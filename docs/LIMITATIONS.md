@@ -92,7 +92,7 @@
   `shell.openExternal` (`src/main/external-open.js`, shared with
   `InspectorFrontendHost.openInNewTab`): a `file:`/`smb:`/custom-scheme URL is refused, since
   the OS would launch whatever application is registered for it.
-- **Test seams are environment variables, off by default.** `DEVTOOLS_TEST_OPEN_LOG`
+- **Test seams are environment variables, off by default, and ignored by a packaged build.** `DEVTOOLS_TEST_OPEN_LOG`
   (record instead of opening a browser) and `DEVTOOLS_TEST_SAVE_DIALOG` (auto-answer the save
   dialog) exist so a headless run can prove `openInNewTab` / `save` end to end
   (docs/evidence/electron-leftovers). Setting the second makes every save, including
