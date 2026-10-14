@@ -104,7 +104,9 @@
   a side effect nobody asked for. Even under `external`, only `http:`/`https:` URLs reach
   `shell.openExternal` (`src/main/external-open.js`, shared with
   `InspectorFrontendHost.openInNewTab`): a `file:`/`smb:`/custom-scheme URL is refused, since
-  the OS would launch whatever application is registered for it.
+  the OS would launch whatever application is registered for it. `window` filters through the
+  same check before it creates a window, plus this shell's own `rozenite://<id>/` pages — so
+  `create` is not a route to the `file://` origin either.
 - **Test seams are environment variables, off by default, and ignored by a packaged build.** `DEVTOOLS_TEST_OPEN_LOG`
   (record instead of opening a browser) and `DEVTOOLS_TEST_SAVE_DIALOG` (auto-answer the save
   dialog) exist so a headless run can prove `openInNewTab` / `save` end to end

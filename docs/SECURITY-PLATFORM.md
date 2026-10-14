@@ -49,6 +49,25 @@ they are equally cheap:
 | F4 | An extension's own top-level window (background worker, options page) has no navigation guard and no window-open handler. A navigated-away document receives the **frontend** preload (`src/preload/index.js:16-20`). Its `PREF_*`, `WINDOW_*` and `SHOW_CONTEXT_MENU` are not gated in main (`src/main/ipc.js:286-306`). | (a) | [measured] in a standalone probe that mirrors the preload dispatch; the production path is [code] | ~15 lines |
 | F5 | `chrome.devtools.*` is installed in **every** extension context (`src/chrome-shim/index.js:224-236`). Main gates `DEVTOOLS_EVAL` / `DEVTOOLS_RELOAD` / `NETWORK_GET_BODY` only on "is a registered frame" (`src/main/ipc.js:498-590`). So an always-on worker, an options page, or an extension with no `devtools_page` can evaluate JS in the app and read response bodies. Chrome limits these APIs to DevTools contexts [docs]. | app / network data | [code] | ~15 lines |
 
+**F6 — `tabs.create` under `DEVTOOLS_TABS_OPEN=window` loaded any scheme, and is fixed.**
+Crosses line (b) like F1 and F2, but needs the non-default policy, so it is listed apart from
+both tables above. The `window` branch of `tab-host.js` called `win.loadURL(url)` with no
+scheme filter while its sibling `external` branch filtered through `openableUrl`, so
+`create({url: "file:///Users/me/Downloads/x.html"})` put a page under the `file://` origin in
+a shell window — chained with a download that leaves a file in `~/Downloads` and
+`downloads.search`'s absolute path, that is a read of anything that origin can fetch. The
+chain itself is [inferred]; the missing filter was [code].
+
+Fixed at the policy boundary: `openableWindowUrl` (`src/main/tab-host.js`) applies the same
+`openableUrl` the external branch applies, before a window is created, and additionally allows
+`rozenite://<id>/…` — this shell's own protocol, which is what `create` of a relative path
+resolves to, so an extension opening its own page still works. A refused URL throws the same
+message either policy gives, so the frame's shim reports one shape for "nothing opened"
+regardless of which policy is set. Asserted in `tests/tabs.test.js` and, through the real
+`attachTabHost` wiring, in `tests/frontend-host-electron.test.js`. What this does **not** do is
+guard the window it opens — no navigation guard, no `setWindowOpenHandler` — which is F4's
+`L4` row, not this fix.
+
 ### 1.2 What is NOT there (also the answer)
 
 - **No route from extension page code to Node.** The page world has no `require` / `process` /
@@ -184,7 +203,7 @@ host then acts on.
 | `EXT_PANEL_CREATE` | principal; page must be a file of *this* extension (`ipc.js:446-473`) | page path inside own folder | Sound (but see F1 for "inside") |
 | `DEVTOOLS_EVAL`, `DEVTOOLS_RELOAD` | principal **only** | expression / `injectedScript` (consented capability) | **F5**: no DevTools-context or `devtools_page` check |
 | `NETWORK_SUBSCRIBE/GET_HAR/GET_STATUS/GET_BODY` | principal; `webRequest`-only kinds filtered (`delivery-scope.js`) | `requestId` | **F5** for bodies and HAR from non-DevTools contexts |
-| `TABS_TARGET_INFO/OPEN/CLOSE/SEND_TO_APP` | principal + `tabs` | URL (policy `none` by default; `external` = http(s) allowlist); window handle | Sound. Under `DEVTOOLS_TABS_OPEN=window` the URL is not scheme-filtered and the window has no guards (`tab-host.js:146-150`); it gets Electron's default sandboxed, preload-less prefs [inferred] |
+| `TABS_TARGET_INFO/OPEN/CLOSE/SEND_TO_APP` | principal + `tabs` | URL (policy `none` by default; `external` = http(s) allowlist; `window` = the same allowlist plus this shell's own `rozenite://<id>/`); window handle | Sound. Both open policies decide with `openableUrl` before anything opens, so `file:` and unknown schemes are refused under either (F6) [test: `tests/tabs.test.js`, `tests/frontend-host-electron.test.js`]. The window `window` creates still has no guards and gets Electron's default sandboxed, preload-less prefs — that half is F4/L4 [inferred] |
 | `NOTIFICATION_*` | principal + `notifications` | id (owner from frame) | Sound |
 | `DOWNLOAD_*` | principal + `downloads`; owner from frame | `url`, `filename` | **F2**; ledger scoped per extension |
 | `OPTIONS_OPEN` | frame URL host; page contained | nothing | Sound; the opened window lacks guards (F4) |
