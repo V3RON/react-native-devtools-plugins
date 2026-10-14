@@ -21,66 +21,118 @@
 //
 // Nothing here is production code — it is the peer the production CDP bridge
 // (src/main/cdp-bridge.js) talks to, and it binds 127.0.0.1 only.
+//
+// This file is also the single home of the CDP lifecycle SHAPE
+// (`cdpRequestLifecycle` below), which tests/network-end-to-end.test.js builds its
+// own fake app's traffic from. Two suites needed the same five notifications, and a
+// second copy is how the two drift into describing different backends.
 const http = require("http");
 const WebSocket = require("ws");
 
-/** The notifications one successful XHR produces, with the ids of one cycle. */
-const lifecycleFor = (requestId, index) => [
-  {
-    method: "Network.requestWillBeSent",
-    params: {
-      requestId,
-      loaderId: `loader-${index}`,
-      documentURL: "rn://delivery-fake-app",
-      timestamp: 1000 + index,
-      wallTime: 1700000000 + index,
-      type: "XHR",
-      request: {
-        url: `https://delivery-scope.test/live-${index}`,
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        postData: `{"cycle":${index}}`,
-        hasPostData: true,
+/**
+ * The five CDP notifications one successful XHR produces, in the order an RN app
+ * sends them (react/networking/NetworkReporter.cpp:57 reports a request together
+ * with its headers, so `requestWillBeSent` and `requestWillBeSentExtraInfo` arrive
+ * as one pair).
+ *
+ * Only the SHAPE lives here. Every number — the ids, the urls, the timestamps, the
+ * byte counts — is a parameter, because in both suites that number is the thing
+ * under test: `tests/network-end-to-end.test.js` asserts HAR timings and sizes read
+ * back from them, and `tests/delivery-scope.test.js` asserts the frame received the
+ * url the app announced. A default value here would be a value nobody chose.
+ *
+ * @param {object} spec
+ * @param {string} spec.requestId
+ * @param {string} [spec.loaderId]            defaults to the requestId
+ * @param {string} spec.documentURL
+ * @param {string} spec.url                   request and response url, as RN reports them
+ * @param {string} spec.postData
+ * @param {string} spec.userAgent             the wire header, sent with the extra info
+ * @param {{started: number, wallTime: number, response: number, data: number, finished: number}} spec.timings
+ *        CDP's monotonic seconds, plus the epoch wall time of the request
+ * @param {{dataLength: number, encodedDataLength: number}} spec.bytes
+ * @returns {object[]} the notifications, in wire order
+ */
+const cdpRequestLifecycle = ({
+  requestId,
+  loaderId = requestId,
+  documentURL,
+  url,
+  postData,
+  userAgent,
+  timings,
+  bytes,
+}) => {
+  const requestHeaders = { "content-type": "application/json" };
+  return [
+    {
+      method: "Network.requestWillBeSent",
+      params: {
+        requestId,
+        loaderId,
+        documentURL,
+        timestamp: timings.started,
+        wallTime: timings.wallTime,
+        type: "XHR",
+        request: {
+          url,
+          method: "POST",
+          headers: requestHeaders,
+          postData,
+          hasPostData: true,
+        },
+        initiator: { type: "fetch", stack: { callFrames: [] } },
       },
-      initiator: { type: "fetch", stack: { callFrames: [] } },
     },
-  },
-  {
-    method: "Network.requestWillBeSentExtraInfo",
-    params: {
-      requestId,
-      headers: {
-        "content-type": "application/json",
-        "user-agent": "com.example.fakeapp/1.0",
+    {
+      method: "Network.requestWillBeSentExtraInfo",
+      params: {
+        requestId,
+        headers: { ...requestHeaders, "user-agent": userAgent },
       },
     },
-  },
-  {
-    method: "Network.responseReceived",
-    params: {
-      requestId,
-      type: "XHR",
-      timestamp: 1000.4 + index,
-      response: {
-        url: `https://delivery-scope.test/live-${index}`,
-        status: 200,
-        statusText: "",
-        httpVersion: "HTTP/1.1",
-        mimeType: "application/json",
-        headers: { "content-type": "application/json", "content-length": "15" },
-        protocol: "http/1.1",
+    {
+      method: "Network.responseReceived",
+      params: {
+        requestId,
+        type: "XHR",
+        timestamp: timings.response,
+        response: {
+          url,
+          status: 200,
+          statusText: "",
+          httpVersion: "HTTP/1.1",
+          mimeType: "application/json",
+          // The body length the app says it received, in the header the app says it
+          // sent: one number, because a lifecycle that disagrees with itself is a
+          // fixture bug rather than a condition worth testing.
+          headers: {
+            "content-type": "application/json",
+            "content-length": String(bytes.dataLength),
+          },
+          protocol: "http/1.1",
+        },
       },
     },
-  },
-  {
-    method: "Network.dataReceived",
-    params: { requestId, timestamp: 1000.5 + index, dataLength: 15, encodedDataLength: 120 },
-  },
-  {
-    method: "Network.loadingFinished",
-    params: { requestId, timestamp: 1000.6 + index, encodedDataLength: 120 },
-  },
-];
+    {
+      method: "Network.dataReceived",
+      params: {
+        requestId,
+        timestamp: timings.data,
+        dataLength: bytes.dataLength,
+        encodedDataLength: bytes.encodedDataLength,
+      },
+    },
+    {
+      method: "Network.loadingFinished",
+      params: {
+        requestId,
+        timestamp: timings.finished,
+        encodedDataLength: bytes.encodedDataLength,
+      },
+    },
+  ];
+};
 
 /**
  * @param {object} options
@@ -134,7 +186,24 @@ const startFakeRNApp = ({ port, intervalMs = 500, note = () => {} }) => {
     const index = cycle++;
     const requestId = `live-${index}`;
     announced.push(requestId);
-    for (const message of lifecycleFor(requestId, index)) {
+    for (const message of cdpRequestLifecycle({
+      requestId,
+      loaderId: `loader-${index}`,
+      documentURL: "rn://delivery-fake-app",
+      url: `https://delivery-scope.test/live-${index}`,
+      postData: `{"cycle":${index}}`,
+      userAgent: "com.example.fakeapp/1.0",
+      // One second per cycle on the app's monotonic clock, so two cycles of the
+      // same run never share a timestamp and the model cannot merge them.
+      timings: {
+        started: 1000 + index,
+        wallTime: 1700000000 + index,
+        response: 1000.4 + index,
+        data: 1000.5 + index,
+        finished: 1000.6 + index,
+      },
+      bytes: { dataLength: 15, encodedDataLength: 120 },
+    })) {
       send(message);
     }
     note({ kind: "fake-app-lifecycle", requestId, index });
@@ -217,4 +286,4 @@ const startFakeRNApp = ({ port, intervalMs = 500, note = () => {} }) => {
   });
 };
 
-module.exports = { startFakeRNApp };
+module.exports = { startFakeRNApp, cdpRequestLifecycle };
