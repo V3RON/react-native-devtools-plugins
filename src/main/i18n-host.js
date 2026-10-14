@@ -6,11 +6,16 @@
 // `chrome.i18n.getMessage` at the top of their first script, so the answer has to exist
 // before any page script runs. Every IPC channel here is async (src/shared/ipc.js — no
 // sendSync), and an async answer would arrive after the first call. The extension
-// protocol is already the one sanctioned way for a frame to read its own files, it
-// already carries the path-containment guard, and a synchronous XMLHttpRequest to the
-// frame's OWN origin reads it without any new channel (src/preload/extension-frame.js).
+// protocol is already the one sanctioned way for a frame to read its own files, and a
+// synchronous XMLHttpRequest to the frame's OWN origin reads it without any new
+// channel (src/preload/extension-frame.js).
 // The frame decides nothing: the extension id is the request's own hostname, the UI
-// locale is the host's, and every file read happens here under the containment guard.
+// locale is the host's, and every file read happens here under a containment check —
+// but NOT under the protocol server's guard. That guard decides containment for the
+// path a REQUEST names; the paths in this file are built here from the root it was
+// handed, so `containmentFor` below applies the same realpath rule to them. Reading
+// the server's "every read goes through the guard" as covering these derived paths is
+// how an escaping `_locales` once reached a bundle (docs/SECURITY-PLATFORM.md §3.2).
 const fs = require("fs");
 const path = require("path");
 const i18n = require("../shared/i18n");

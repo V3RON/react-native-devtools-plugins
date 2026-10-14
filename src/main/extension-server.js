@@ -5,7 +5,11 @@
 // untrusted URL, so resolution is guarded against path traversal — a
 // request can never escape its own extension directory, and neither can a
 // symlink planted inside it: containment is decided on `fs.realpath`, not on
-// path text (see `resolveInsideExtension`). Every response also
+// path text (see `resolveInsideExtension`). The host-side reads that continue from
+// that guard's ROOT by building their own names under it — the message bundle and the
+// localized manifest/CSS — are contained by the same rule applied inside
+// src/main/i18n-host.js, because a derived path never reaches the guard below.
+// Every response also
 // carries that extension's Content-Security-Policy (src/shared/csp.js), so an
 // extension page gets Chrome's `script-src 'self'` unless its own manifest
 // declares a policy.
@@ -44,11 +48,15 @@ const BACKGROUND_BOOTSTRAP_PATH = "__rozenite_background__";
 const RESERVED_INNER_PATHS = new Set([BACKGROUND_BOOTSTRAP_PATH, I18N_BUNDLE_PATH]);
 
 /**
- * The containment guard, in one place: the id must be a plausible folder name,
- * the inner path must resolve to something inside that folder (`path.resolve`
+ * The containment guard for a REQUESTED path: the id must be a plausible folder
+ * name, the inner path must resolve to something inside that folder (`path.resolve`
  * collapses `..` first, and the `root + path.sep` prefix rule means one
  * extension can never name a sibling's file — `/…/extensions/ab` does not start
  * with `/…/extensions/a/`), and the path must not be a reserved one.
+ *
+ * It is the only guard for paths a request names, but NOT the only place the rule
+ * below is enforced: `containmentFor` in src/main/i18n-host.js applies the same
+ * realpath rule to the paths THAT file derives for itself, which never come here.
  *
  * Containment is then checked on RESOLVED paths, not on path text (finding F1,
  * docs/SECURITY-PLATFORM.md §3.2). The string rule alone was not enough: every
@@ -87,6 +95,11 @@ const RESERVED_INNER_PATHS = new Set([BACKGROUND_BOOTSTRAP_PATH, I18N_BUNDLE_PAT
  * claimed here; the point is that the remaining window needs the same privilege as
  * the thing we already accept.
  *
+ * Scope of the platform behaviour: verified on macOS and Linux. On Windows,
+ * `lstatSync().isSymbolicLink()` is false for NTFS junctions and other reparse
+ * points, and the realpath prefix compare is case-sensitive on a case-insensitive
+ * filesystem, so neither is covered by this rule or by these tests.
+ *
  * @returns {string|null} the real (link-free) path for anything that exists, the
  * text-contained path for a name with nothing behind it (so a caller can still
  * answer "missing"), or null when the request is refused
@@ -100,6 +113,11 @@ const resolveInsideExtension = (extensionId, innerPath) => {
   if (target !== root && !target.startsWith(root + path.sep)) {
     return null;
   }
+  // Three sync syscalls per path, deliberately per request rather than cached: the
+  // install folder is a LIVE folder whose contents change under us (docs/
+  // SECURITY-PLATFORM.md §7, item 7), so caching these answers would be caching the
+  // security decision, and a stale entry is exactly the window the rule is meant to
+  // close. The folder is a developer's own and the calls are three stats at most.
   let isLink;
   try {
     isLink = fs.lstatSync(root).isSymbolicLink();
