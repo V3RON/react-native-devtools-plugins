@@ -40,11 +40,12 @@ const readJson = (file) => {
  * but the reads in this file are for paths this file DERIVES — `manifest.json`,
  * `_locales/<locale>/messages.json` — and a derived path never passes that guard.
  * One `victim/_locales -> outside` link therefore left the message bundle reading
- * outside the folder while `resolveExtensionFile("victim", "_locales/en/messages
- * .json")` correctly answered null: the guard looked closed because the request that
- * was refused was not the request that was read. So containment is decided again
- * here, on every path derived from `root`, and every caller of this file inherits it
- * — the protocol handler, the manifest reader, and the CSS localisation alike.
+ * outside the folder while `resolveExtensionFile("victim",
+ * "_locales/en/messages.json")` correctly answered null: the guard looked closed
+ * because the request it refused was not the request being read. So containment is
+ * decided again here, on every path derived from `root`, and every caller of this
+ * file inherits it — the protocol handler, the manifest reader, and the CSS
+ * localisation alike.
  *
  * The anchor is `fs.realpathSync(root)`, i.e. the root this file was handed after the
  * caller's own check, and the rule is the guard's: the real path of the derived name
@@ -247,11 +248,12 @@ const statStamp = (contain, innerPath) => {
 
 const loadBundle = ({ root, extensionId, uiLocaleOverride = "", log = console }) => {
   const { uiLocale, preferredLanguages } = systemLocale(uiLocaleOverride);
-  // The signature is keyed on the REAL root, and it covers only directories
-  // containment allowed, so a cache entry can never be reused across two different
-  // folders or carry a locale that was refused here (`contain.realRoot` is the text
-  // root when the root cannot be resolved, which is the case where nothing is cached
-  // as readable anyway).
+  // The signature covers only directories containment allowed, so an entry can never
+  // carry a locale that was refused here, and the cache is keyed on the REAL root: two
+  // names for one folder are one folder, and an entry must not be reachable under a
+  // path whose containment verdict differs (`contain.realRoot` falls back to the text
+  // root when the root cannot be resolved, which is the case where nothing is readable
+  // through it anyway).
   const contain = containmentFor(root);
   const directories = localeDirectories(root, contain);
   const signature = [
@@ -261,12 +263,13 @@ const loadBundle = ({ root, extensionId, uiLocaleOverride = "", log = console })
     statStamp(contain, "manifest.json"),
     ...Object.values(directories).map((dir) => `${dir}=${statStamp(contain, path.join(LOCALES_DIR, dir, "messages.json"))}`),
   ].join("|");
-  const cached = bundleCache.get(root);
+  const cacheKey = contain.realRoot;
+  const cached = bundleCache.get(cacheKey);
   if (cached && cached.signature === signature) {
     return cached.bundle;
   }
   const bundle = buildFromDisk({ root, extensionId, uiLocale, preferredLanguages, log });
-  bundleCache.set(root, { signature, bundle });
+  bundleCache.set(cacheKey, { signature, bundle });
   return bundle;
 };
 
