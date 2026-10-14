@@ -14,7 +14,11 @@
 // Usage:
 //   node src/tools/rn-cdp.js \
 //     [--metro-host 127.0.0.1] [--metro-port 8081] [--listen-port 9223] \
-//     [--app expo56] [--device iPhone]
+//     [--listen-host 127.0.0.1] [--app expo56] [--device iPhone]
+//
+// `--listen-host` (or DEVTOOLS_CDP_HOST) is how you keep the remote-device relay
+// this tool was built for: without it the bridge binds loopback only, which is
+// the safe default but unreachable from another machine.
 //
 // Requires the RN app running against its Metro dev server, with a debugger
 // connection established (dev build; Dev Menu -> "Connect to debugger" if the
@@ -31,6 +35,11 @@ const bridge = createCdpBridge({
   metroHost: arg("metro-host", "127.0.0.1"),
   metroPort: Number(arg("metro-port", 8081)),
   listenPort: Number(arg("listen-port", 9223)),
+  // A CLI has to be able to say where it listens: `--listen-host` for the person
+  // typing, DEVTOOLS_CDP_HOST for anyone who already had the shell's env set (the
+  // same value src/main/config.js resolves). Unset both and the bridge's loopback
+  // default applies — this tool does not widen the F3 rule on its own.
+  listenHost: arg("listen-host", config.cdpBridge.listenHost),
   // The frontend really does dial this process, so it has to be let in: the same
   // origin list the in-shell bridge uses (the frontend's own origin plus
   // DEVTOOLS_CDP_ALLOWED_ORIGINS). Deliberately NOT the rest of
