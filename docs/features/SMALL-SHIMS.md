@@ -2,9 +2,16 @@
 
 | | |
 | --- | --- |
-| **Status** | 🟨 `permissions`, `tabs`, `notifications`, `alarms`, `downloads`, manifest `options_ui` and the `commands`/`contextMenus`/`sidePanel` accept-and-grant shells are all implemented, each with the producer it lacks named; `chrome.windows` is the one Tier-2 namespace still absent |
+| **Status** | 🟨 `permissions`, `tabs`, `notifications`, `alarms`, `downloads`, manifest `options_ui` are implemented with real behavior; `commands`/`contextMenus`/`sidePanel` are shells whose **missing events are 🚷 no-anchor** (no toolbar, no shortcut routing, no menu, no drawer); `chrome.windows` is 🚷 too (no window model) and is the one namespace still absent |
 | **Tier** | 2 |
 | **Blocked by** | [RUNTIME-MESSAGING.md](RUNTIME-MESSAGING.md) (messaging router + contract rules apply to all of these) |
+
+**Read this page's "never fires" rows as two different things.** Some are 🟨 open items — a
+producer could be written in this shell. Most are 🚷: the trigger is browser chrome UI (a
+toolbar button, a keyboard shortcut routed to an extension, a right-click menu, a side-panel
+drawer) or a tab strip / window model that React Native DevTools does not have and this shell
+must not fake. Only the first kind belongs on an open-items list; see
+[the anchor list](../OVERVIEW.md#what-rn-devtools-actually-offers-the-anchor-list).
 
 Cheap, independent wins. All follow the house rules from
 [RUNTIME-MESSAGING.md](RUNTIME-MESSAGING.md) (promise+callback, `lastError`, real Event
@@ -26,7 +33,7 @@ bottom of this page.
 
 | Shell | Status |
 | --- | --- |
-| `action.onClicked` | registrable, **never fires** — Chrome hands that listener a Tab, and the one tab this shell has is the inspected RN target, which has no toolbar button to click. Needs a toolbar surface, or an explicit "no toolbar here" decision. |
+| `action.onClicked` | registrable, **never fires** — 🚷 Chrome hands that listener a Tab and a toolbar button; neither exists here. This is the explicit "no toolbar here" decision, recorded. |
 | `action.setIcon` / `setBadgeText` / `setBadgeBackgroundColor` / `setBadgeTextColor` / `setTitle` / `setPopup` / `getPopup` / `enable` / `disable` / `create` | accept the call, resolve `undefined`/`""`, render nothing — the shell's whole job is that a worker can LOAD |
 | `notifications.create` | **real** — Electron `Notification`, and the id Chrome allocates (see the table below) |
 | `notifications.update` / `clear` / `getAll` | **real registry** |
@@ -63,10 +70,12 @@ real call, with `lastError` naming a permission it was just told it held.
 **🟨 One synthetic tab = the inspected RN target, plus what `create` really opened**
 (`src/chrome-shim/tabs.js` + `tab-model.js`, host side `src/main/tab-host.js`).
 
-**`chrome.windows` is not injected.** There is no window model to report — the one window
-this shell has is the DevTools window itself — and no shipped extension names the namespace.
+**`chrome.windows` is not injected.** Its anchor — a browser window model — does not exist
+here, so real behavior is 🚷; the one window this shell has is the DevTools window itself, and
+no shipped extension names the namespace. What *is* still an open item, and small: injecting an
+inert shell so the [stubbing rule](../OVERVIEW.md) holds.
 (`src/shared/permissions.js` lists it under `UNGATED_APIS`, which is only the statement that
-it would need no permission if it were injected.) Until it is injected, a worker that names
+it would need no permission if it were injected.) Until that shell lands, a worker that names
 `chrome.windows.getAll` at module scope takes a TypeError at load: the one place Tier 2 still
 breaks the stubbing rule ([../OVERVIEW.md](../OVERVIEW.md)).
 
@@ -78,8 +87,8 @@ breaks the stubbing rule ([../OVERVIEW.md](../OVERVIEW.md)).
 | `remove` | closes what `create` opened (by the host's own handle), fires `onRemoved`; for the inspected id it is a **resolving no-op** with one console line; an unknown id fails with Chrome's `No tab with id: N.` |
 | `update({url})` | reports that navigation is impossible and answers with the unchanged tab. `update({active: true})` does **not** fire `onActivated` — nothing changed, so there is nothing to announce. |
 | `sendMessage` | **still inert, deliberately** — resolves `undefined` with one console line and is *not* routed into this extension's own runtime mesh. See below. |
-| `captureVisibleTab` | `undefined` — a PNG-shaped string would be a fabricated screenshot. |
-| `onUpdated` / `onActivated` / `onHighlighted` / `onMoved` / `onAttached` / `onDetached` | registrable, **never fire**: no navigation, activation, move or attach can happen to a one-tab model. |
+| `captureVisibleTab` | 🚷 `undefined` — there is no rendered page to screenshot; a PNG-shaped string would be a fabricated screenshot. |
+| `onUpdated` / `onActivated` / `onHighlighted` / `onMoved` / `onAttached` / `onDetached` | 🚷 registrable, **never fire**: no navigation, activation, move or attach can happen to a one-tab model, and a one-tab model is what "no tab strip" means here. |
 | `query` filters | answered where honest: `active`, `currentWindow`/`lastFocusedWindow`/`lastOpenedWindow` (the inspected tab is the one tab of the one window), `status`, and `url` through **the same match-pattern compiler `chrome.webRequest` uses**. `windowId` / `groupId` / `title` match nothing — answering "yes" would claim a window model this shell does not have. |
 
 **`tabs.create`'s external open is a policy, and the default is off.** `shell.openExternal`
@@ -247,9 +256,9 @@ shim, and each says so once:
 
 | Namespace | What is real | What never happens |
 | --- | --- | --- |
-| `chrome.commands` | `getAll` returns the commands read from the extension's **manifest** (`commands`, with `suggested_key.default` folded into `shortcuts`, plus `description` and `global`), or `undefined` for an extension that declares none, like Chrome's. Altair's `openDevTools` therefore comes back with the `Alt+Shift+A` its own manifest declares. | `onCommand` **never fires**: no keyboard-shortcut routing exists here. Firing it would mean inventing a keypress whose whole purpose is to launch the handler. Surfacing these commands in the app menu is the honest path to making the event real. |
-| `chrome.contextMenus` | `create` / `update` / `remove` / `removeAll` are real over a **per-context registry**, with Chrome's validations and **Chromium's own message text**: a non-separator item with no title, a non-string `title`, a `contexts` entry that is not a `ContextType`, a `type` that is not an `ItemType`, a duplicate `id`, and `update`/`remove` of an id that was never created all reject (`Cannot create item with duplicate id …`, `Cannot find menu item with id …`). So `getPlatforms().contextMenus.create(…)` succeeds and a cleanup pass cannot crash a worker. `ContextType`, `ItemType` and `ACTION_MENU_TOP_LEVEL_LIMIT` are Chrome's. | `onClicked` and `onVisited` **never fire** — there is no right-click menu in the page to click, and a click event would run exactly the action the user chose by clicking. `create` resolves with the id the registry filed the item under — not with a menu item. |
-| `chrome.sidePanel` | `setOptions` / `getOptions` round-trip (extension-scoped ↔ per-`path` map) and `setPanelBehavior` / `getPanelBehavior` round-trip `openPanelOnActionClick`, because that configuration is state the extension owns and a read-back is checkable. `getOptions` answers with **what was set** and nothing more: Chrome's own default is `enabled: true`, and claiming that default here would report a panel state this host does not have. | **`open` fails, on purpose.** Its promise means "the panel is up" and nothing can be up here, so resolving would let `await open(); sendMessage(…)` wait forever on a panel. Chrome's own argument rejection (`At least one of tabId and windowId must be provided`) is kept. An unknown `setPanelBehavior` key is **reported and ignored**, not rejected: Chrome refuses it at its schema layer, which this shell cannot reproduce faithfully, and inventing a refusal would break code Chrome accepts. `onClicked` never fires, for the same reason as `onCommand`. |
+| `chrome.commands` | `getAll` returns the commands read from the extension's **manifest** (`commands`, with `suggested_key.default` folded into `shortcuts`, plus `description` and `global`), or `undefined` for an extension that declares none, like Chrome's. Altair's `openDevTools` therefore comes back with the `Alt+Shift+A` its own manifest declares. | `onCommand` **never fires**: no keyboard-shortcut routing exists here. Firing it would mean inventing a keypress whose whole purpose is to launch the handler. **This is the one shell UI event whose producer is writable here** — unlike a toolbar or a page context menu, a shortcut needs only the Electron app menu / `before-input-event`, so this row stays an open item rather than 🚷. Chrome's `global` scope (a shortcut while the app is unfocused) is a separate question. |
+| `chrome.contextMenus` | `create` / `update` / `remove` / `removeAll` are real over a **per-context registry**, with Chrome's validations and **Chromium's own message text**: a non-separator item with no title, a non-string `title`, a `contexts` entry that is not a `ContextType`, a `type` that is not an `ItemType`, a duplicate `id`, and `update`/`remove` of an id that was never created all reject (`Cannot create item with duplicate id …`, `Cannot find menu item with id …`). So `getPlatforms().contextMenus.create(…)` succeeds and a cleanup pass cannot crash a worker. `ContextType`, `ItemType` and `ACTION_MENU_TOP_LEVEL_LIMIT` are Chrome's. | 🚷 `onClicked` and `onVisited` **never fire** — the menu these attach to is the **page's** right-click menu, and there is no page. (`InspectorFrontendHost.showContextMenuAtPoint` is real for the *frontend's own* menus, which shows the transport is not what's missing.) A click event would also run exactly the action the user chose by clicking. `create` resolves with the id the registry filed the item under — not with a menu item. |
+| `chrome.sidePanel` | `setOptions` / `getOptions` round-trip (extension-scoped ↔ per-`path` map) and `setPanelBehavior` / `getPanelBehavior` round-trip `openPanelOnActionClick`, because that configuration is state the extension owns and a read-back is checkable. `getOptions` answers with **what was set** and nothing more: Chrome's own default is `enabled: true`, and claiming that default here would report a panel state this host does not have. | 🚷 **`open` fails, on purpose.** Its promise means "the panel is up" and nothing can be up here, so resolving would let `await open(); sendMessage(…)` wait forever on a panel. Chrome's own argument rejection (`At least one of tabId and windowId must be provided`) is kept. An unknown `setPanelBehavior` key is **reported and ignored**, not rejected: Chrome refuses it at its schema layer, which this shell cannot reproduce faithfully, and inventing a refusal would break code Chrome accepts. `onClicked` never fires, for the same reason as `onCommand` — except that one has a producer. |
 
 None of the three is permission-gated, matching Chrome. None of them throws synchronously
 for a bad argument either: Chrome routes those through `runtime.lastError` plus a rejected
@@ -278,5 +287,6 @@ of it, never anything the frame sent. Chrome's first `openOptionsPage` argument 
 `panels.elements` / `panels.sources` / `panels.performance`
 
 Covered in [DEVTOOLS-PANELS.md](DEVTOOLS-PANELS.md); listed here only to complete the
-Tier-2 inventory: all remain ❌ and depend on
-[INSPECTED-WINDOW.md](INSPECTED-WINDOW.md) / frontend events.
+Tier-2 inventory: `panels.elements.*` is 🚷 (no Elements panel), while `sources`,
+`performance` and `panels.network.getHAR` remain ❌ open — RN DevTools has Sources and
+Performance panels, and the HAR model already exists.

@@ -2,9 +2,9 @@
 
 | | |
 | --- | --- |
-| **Status** | 🟨 partial — `panels.create`, `themeName`/`setThemeChangeHandler` and `Panel.onShown/onHidden` are real and **shell-driven** (no fork knowledge); the rest is inert stubs |
-| **Tier** | 1 (create/theme) / 2 (elements, sources, performance) |
-| **Blocked by** | [DISPATCH-CHANNEL.md](DISPATCH-CHANNEL.md) (context menus) |
+| **Status** | 🟨 partial — `panels.create`, `themeName`/`setThemeChangeHandler` and `Panel.onShown/onHidden` are real and **shell-driven** (no fork knowledge); `panels.elements.*` is 🚷 (no Elements panel to anchor on); `sources` / `performance` / `network.getHAR` are the implementable remainder |
+| **Tier** | 1 (create/theme) / 2 (sources, performance, network) / 🚷 (elements) |
+| **Blocked by** | nothing for the remaining Tier-2 rows — see [Gaps](#gaps) |
 
 ## Chrome surface
 
@@ -16,11 +16,13 @@
   `themeChanged` event in any Chrome version — an earlier revision of this shim invented one)
 - `devtools.panels.elements` (`ElementsPanel`): `createSidebarPane(title) →
   ExtensionSidebarPane` (`setObject`/`setExpression`/`setTitle`/`onContextMenu`),
-  `openResource`, `inspectedObject`, `onCreateContextMenu`
+  `openResource`, `inspectedObject`, `onCreateContextMenu` — 🚷 all of it: this API is a
+  neighbour of the Elements panel, and RN DevTools does not have one
 - `devtools.panels.sources` (`SourcesPanel`): `openInFrontend`, `navigator`
 - `devtools.panels.network`: `getHAR`
 - `devtools.panels.performance`: `onRecordingStarted/Stopped`
-- `devtools.panels.recorder`: omit ([TIER3-OMITTED.md](TIER3-OMITTED.md))
+- `devtools.panels.recorder`: 🚫 omit — Chrome's Recorder panel has no RN analog
+  ([TIER3-OMITTED.md](TIER3-OMITTED.md))
 - `devtools.panels.openExtensionInDevtools(descriptor)` — relates to install flow
 
 ## How it works here today — shell-driven, no fork knowledge
@@ -172,11 +174,11 @@ ID") — `panelIdFor` sanitizes path separators/underscores accordingly.
 | `Panel.onSearch`, `createStatusBarButton` | ❌ | not implemented (deprecated / search UI) |
 | host `showPanel` producer | ✅ | host-internal, id-validated; see [showPanel](#showpanel-host---frontend) |
 | `themeName` / `setThemeChangeHandler` | ✅ | the frontend's real theme (`"default"` light / `"dark"`), live; see [Theme](#theme-themename--setthemechangehandler) for the one remaining divergence |
-| `elements.createSidebarPane` | ❌ | needs [inspected window](INSPECTED-WINDOW.md) (`Runtime.evaluate`) + RN element-tree selection; Redux-family devtools depend on it |
-| `elements.onCreateContextMenu`, `inspectedObject`, `openResource` | ❌ | context-menu events ride the dispatch channel |
-| `sources.openInFrontend` | ❌ | jump-to-source; RN DevTools has a Sources-like surface |
-| `network.getHAR` | ❌ | see [DEVTOOLS-NETWORK.md](DEVTOOLS-NETWORK.md) |
-| `performance.onRecording*` | ❌ | cheap if frontend exposes profiling state |
+| `elements.createSidebarPane` | 🚷 | **No anchor.** Chrome attaches these panes below the Elements panel's selected node; RN DevTools has no Elements panel and RN has no `DOM` domain, so there is no node and no selection to read (`setObject`/`setExpression` are `Runtime.evaluate`-shaped and could be made real, but the pane would have nowhere to render). See [the anchor list](../OVERVIEW.md#what-rn-devtools-actually-offers-the-anchor-list). Stays an inert shape so a Redux-family panel still loads |
+| `elements.onCreateContextMenu`, `inspectedObject`, `openResource` | 🚷 | same missing anchor: an element-context-menu and an inspected object presuppose the Elements panel. The dispatch channel *is* live for context menus (`showContextMenuAtPoint` is real), so the transport is not what's missing |
+| `sources.openInFrontend` | ❌ | jump-to-source — **implementable**: RN DevTools has a real Sources panel, and the dispatch channel is live |
+| `network.getHAR` | ❌ | trivial: the model behind [DEVTOOLS-NETWORK.md](DEVTOOLS-NETWORK.md) already builds the HAR; this is the same data exposed under one more name |
+| `performance.onRecording*` | ❌ | **implementable**: RN DevTools has the Performance panel since 0.83; needs the frontend's recording state on the dispatch channel |
 
 ## Definition of done (Tier 1 slice)
 

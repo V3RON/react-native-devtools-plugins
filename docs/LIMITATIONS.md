@@ -18,9 +18,11 @@
   nothing has to wake it, so `onSuspend`/`onUpdateAvailable` never fire and a worker that
   would have been torn down in Chrome keeps running here. That is a superset for a devtools
   host and a divergence from Chrome's resource model at the same time.
-- Still missing from the extension model: a working `action`/popup — plus a toolbar, browser
-  menu, or shortcut routing, which is why `action.onClicked`, `commands.onCommand`, and
-  `contextMenus.onClicked` are registrable but have no producer. Content-script injection has
+- Still missing from the extension model: a working `action`/popup — 🚷 **decision recorded, not
+  planned**: this host has no toolbar, so `action.onClicked` has no producer by construction and
+  never will. `commands.onCommand` and `contextMenus.onClicked` are registrable; only the first
+  is fixable here (the Electron app menu can route a shortcut), while the second is 🚷 — the menu
+  it attaches to is the page's, and there is no page. Content-script injection has
   arrived since (issue #5, [features/CONTENT-SCRIPTS.md](features/CONTENT-SCRIPTS.md)), but only
   for an extension a developer names in `DEVTOOLS_CONTENT_SCRIPTS`, and only into the app's own
   JS context — Hermes has no isolated worlds, so a script there can read and overwrite app
@@ -34,7 +36,9 @@
   empty list. A `chrome.permissions` prompt still does not exist, so `permissions.request`
   grants nothing. **`chrome.windows` is not injected at all** — no window model exists to
   report — so a worker naming it at module scope is the one remaining case where Tier 2
-  breaks the "a missing namespace must not kill the worker" rule.
+  breaks the "a missing namespace must not kill the worker" rule. Real `chrome.windows`
+  behavior is 🚷 (no window model); the *inert shell* that satisfies the rule is a small
+  open item.
 - DevTools pages are only "loaded" as iframes; no real separation between devtools page
   and panel frames like Chrome has.
 
@@ -42,7 +46,8 @@
 
 - `chrome.webRequest` is **observe-only**: seven of Chrome's nine events come from the
   shell's own CDP `Network.*` model with real filters and `ResourceType`, but listeners can
-  never block/modify/cancel a request — RN implements no CDP `Fetch` domain. `addListener`
+  never block/modify/cancel a request — RN implements no CDP `Fetch` domain (🚷: the backend
+  has no such domain, so this is not something we can implement here). `addListener`
   with `["blocking"]` registers and logs one honest note. `onHeadersReceived` and
   `onAuthRequired` have no CDP counterpart and never fire
   ([features/WEBREQUEST.md](features/WEBREQUEST.md)).
@@ -128,7 +133,9 @@
   debugger-session change rather than a page navigation and carries the target's title (or
   `""`), and HAR fields CDP never reported (`timings.blocked/dns/connect/ssl`,
   `headersSize`) stay HAR's own `-1` instead of a plausible number.
-  `inspectedWindow.getResources` / `getSelectedNode` answer with documented no-data.
+  `inspectedWindow.getResources` / `getSelectedNode` answer with documented no-data — of which
+  only `getResources` is open: `getSelectedNode` is 🚷 (no Elements panel, no DOM), see
+  [features/INSPECTED-WINDOW.md](features/INSPECTED-WINDOW.md).
 - `inspectedWindow.eval` only answers when the shell's CDP bridge actually has a session:
   no Metro, no debuggable app, or `DEVTOOLS_CDP_BRIDGE=off` without an external relay all
   surface as `exceptionInfo.isError` with the host's reason. Nothing is answered from
@@ -244,11 +251,13 @@
   `tabs` permission — a combination Chrome itself warns about — and the options host reports
   that gap too rather than dropping it.
 - **`commands`, `contextMenus` and `sidePanel` are injected, and none can do its headline
-  trick.** They exist with the real method shape so a worker naming them at module scope loads,
+  trick — two of the three are 🚷.** They exist with the real method shape so a worker naming
+  them at module scope loads,
   and each names what it lacks once: `commands.getAll` answers from the manifest but
-  `onCommand` never fires (no shortcut routing); `contextMenus` maintains a real registry with
-  Chrome's validations but `onClicked` never fires (no right-click menu to click);
-  `sidePanel` round-trips its configuration, and **`open` rejects** rather than resolving,
+  `onCommand` never fires (no shortcut routing — **open**: the Electron app menu can produce
+  this one); `contextMenus` maintains a real registry with Chrome's validations but
+  `onClicked` never fires 🚷 (the menu is the page's right-click menu, and there is no page);
+  `sidePanel` round-trips its configuration, and **`open` rejects** 🚷 rather than resolving,
   because its promise means a panel came up and none can
   ([features/SMALL-SHIMS.md](features/SMALL-SHIMS.md)).
 - **A content script's app→host payloads are also relayed to the DevTools frontend.** The host
@@ -276,5 +285,12 @@ far from a product: no install/reload UI, content scripts that inject only when 
 opts an extension in by hand (that path has now been walked on a device), no MV3 worker
 lifecycle,
 sandbox still off, deep coupling to an unmerged frontend fork.
+
+**Read "far from a product" against the pruned list, not against Chrome.** Some of what looks
+missing here is missing because React Native DevTools has no Elements panel, no DOM, no page,
+and no browser chrome to inspect — the Elements-family APIs, element selection, request
+blocking, toolbar/menu/shortcut events, DOM content scripts. Those are marked 🚷 across these
+docs and are closed, not deferred. What remains is
+[ROADMAP.md's pruned list](ROADMAP.md#what-we-can-actually-implement-the-pruned-list).
 The path forward is in [ROADMAP.md](ROADMAP.md); per-functionality state is in
 [features/README.md](features/README.md).

@@ -2,7 +2,7 @@
 
 | | |
 | --- | --- |
-| **Status** | 🚫 deliberately out of scope |
+| **Status** | 🚫 deliberately out of scope + 🚷 no anchor in RN DevTools ([Anchors RN DevTools itself does not have](#anchors-rn-devtools-itself-does-not-have-)) |
 | **Tier** | 3 |
 
 Everything below presupposes **a web browser the extension controls**, which does not
@@ -17,6 +17,28 @@ never fire); otherwise leave `undefined`. Document every divergence.
   (Injecting via `Runtime.evaluate` is *eval*, not DOM injection — don't fake a DOM.)
 - DOM-manipulating `content_scripts`: out of scope here; bridge-style ones are in scope →
   [features/CONTENT-SCRIPTS.md](CONTENT-SCRIPTS.md).
+
+## Anchors RN DevTools itself does not have 🚷
+
+These are not choices and not work-in-progress: the Chrome surface they extend is absent from
+React Native DevTools, so no amount of shim work makes them real. Listed once in
+[../OVERVIEW.md](../OVERVIEW.md#what-rn-devtools-actually-offers-the-anchor-list); marked 🚷
+wherever they appear so the open-items lists stay clean.
+
+| Omitted | The anchor that does not exist |
+| --- | --- |
+| `devtools.panels.elements.*` (`createSidebarPane`, `inspectedObject`, `openResource`, `onCreateContextMenu`) | no **Elements panel** |
+| `devtools.inspectedWindow.getSelectedNode` | no selected **DOM node** (no `DOM` domain in jsinspector-modern) |
+| DOM `content_scripts`, `chrome.scripting`, `insertCSS` | no **document** to inject into |
+| `action` popups, a real `contextMenus`, `sidePanel` drawer, `omnibox`, shortcut routing to an extension | no **browser chrome UI** (the shells stay, the events have no producer). One exception: `commands.onCommand` **is** producible here via the Electron app menu, so it remains an open item |
+| `devtools.recorder` | no **Recorder panel** |
+| `chrome.webRequest` **blocking**, `declarativeNetRequest` | no CDP **`Fetch` domain** in the RN backend (see [features/WEBREQUEST.md](features/WEBREQUEST.md)) |
+| `devtools.inspectedWindow.reload`/`getResources` **DOM semantics** | no page navigations; `reload` maps to a bundle reload instead |
+
+The React **Components** panel is not a substitute for the Elements panel in any of the above:
+it renders React's own tree inside an integrated React DevTools, exposes no selection to
+extensions, and wiring sidebars to it would be a new product feature rather than Chrome API
+fidelity.
 
 ## Browser chrome UI
 
@@ -51,9 +73,10 @@ document — doesn't exist), `runtime.requestUpdate`, `runtime.connect`/`sendMes
 
 ## DevTools-specific exclusions
 
-- `devtools.recorder` — Chrome's Recorder panel has no RN analog.
-- `devtools.inspectedWindow.reload`/`getResources` DOM semantics — degrade or omit
-  ([features/INSPECTED-WINDOW.md](INSPECTED-WINDOW.md)).
+- `devtools.recorder` — 🚷 Chrome's Recorder panel has no RN analog.
+- `devtools.inspectedWindow` **DOM semantics** — `getSelectedNode` 🚷 (no Elements panel);
+  the `getResources` *list* is still implementable over `Debugger.getScriptParsed`, it just
+  reports scripts, not DOM resources ([features/INSPECTED-WINDOW.md](INSPECTED-WINDOW.md)).
 - Chrome Sync backing for `storage.sync` — behaves as local
   ([features/STORAGE-AND-I18N.md](STORAGE-AND-I18N.md)).
 

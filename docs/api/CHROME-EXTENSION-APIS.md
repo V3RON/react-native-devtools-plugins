@@ -12,7 +12,9 @@ Per-namespace plans live in [../features/README.md](../features/README.md).
   correct from the first script; background contexts learn it async, see the Theme section
   of the panels doc); `Panel.onShown(window)`/`onHidden` ✅ real (host-routed to the creating
   devtools page; `setWidth` is not a Chrome API);
-  `elements` sidebar panes, `sources`, `performance` ❌ →
+  `elements` sidebar panes 🚷 **no anchor** (RN DevTools has no Elements panel —
+  [the anchor list](../OVERVIEW.md#what-rn-devtools-actually-offers-the-anchor-list));
+  `sources`, `performance`, `network.getHAR` ❌ and implementable →
   [features/DEVTOOLS-PANELS.md](../features/DEVTOOLS-PANELS.md). `recorder` 🚫.
   `openExtensionInDevtools(descriptor)` 🔧 (install flow).
 - **`devtools.network`** — 🟨 real: `onRequestFinished` (a `Request` = a HAR 1.2 entry with
@@ -26,8 +28,8 @@ Per-namespace plans live in [../features/README.md](../features/README.md).
 - **`devtools.inspectedWindow`** — 🟨 `eval` and `reload` are **real**: CDP
   `Runtime.evaluate` (`returnByValue`, `awaitPromise`) and `Page.reload` over the
   shell's CDP bridge, answering Chrome's `[value, exceptionInfo]` pair. `frameURL` /
-  `useContentScriptContext` accepted-and-ignored; `getResources` / `getSelectedNode`
-  inert → [features/INSPECTED-WINDOW.md](../features/INSPECTED-WINDOW.md). (Against a
+  `useContentScriptContext` accepted-and-ignored; `getResources` inert (open, implementable) and
+  `getSelectedNode` 🚷 (its anchor is the Elements panel, which RN DevTools has no notion of) → [features/INSPECTED-WINDOW.md](../features/INSPECTED-WINDOW.md). (Against a
   real Hermes backend this is asserted by the sample panel, not yet run on a device.)
 
 ## B. Extension-foundation namespaces (used by *every* extension page)
@@ -41,8 +43,8 @@ Per-namespace plans live in [../features/README.md](../features/README.md).
 | `permissions` | `contains/request/remove/getAll/onAdded/onRemoved` | 🟨 real as a report: `contains`/`getAll` answer the manifest's truth from the host's verdict; `request` resolves `true` only for what is already declared and grants nothing new; `onAdded`/`onRemoved` never fire → [SMALL-SHIMS.md](../features/SMALL-SHIMS.md) |
 | `events` (types) | Event contract: `addListener/removeListener/hasListener/hasListeners`; Rule APIs (`addRules/getRules/removeRules`) | 🔧 shim hand-rolls `addListener` only; full Event shape required — feature detection uses `hasListener` |
 | `webRequest` | 9 events + blocking responses, filters, `ResourceType` | 🟨 observe-only: 7 of 9 events from the CDP `Network.*` model with real `ResourceType` and Chrome's match-pattern/glob filters; the other two are registrable but have no CDP counterpart; blocking is infeasible (no CDP `Fetch` in RN backends) and is reported, not pretended → [WEBREQUEST.md](../features/WEBREQUEST.md) |
-| `tabs` | huge surface | 🟨 one synthetic tab = the inspected app target, under the id `devtools.inspectedWindow.tabId` reports; `query`/`get`/`getCurrent`/`update`/`create`/`remove` are real over that one tab, `create` adds an `openedVia` field and opens nothing unless the host is configured to, `sendMessage` has no receiver (no content scripts), and `onUpdated`/`onActivated`/… never fire → [SMALL-SHIMS.md](../features/SMALL-SHIMS.md) |
-| `action`, `notifications`, `alarms`, `downloads`, `contextMenus`, `commands`, `sidePanel`, `windows` | browser UI / lifecycle | Tier-2 subset: notifications→Electron `Notification`, alarms→timers, downloads→the shell's save path, `commands.getAll`→the manifest, `contextMenus`→a registry with no menu, `sidePanel`→options that round-trip; the events whose trigger this host lacks never fire → [SMALL-SHIMS.md](../features/SMALL-SHIMS.md) |
+| `tabs` | huge surface | 🟨 one synthetic tab = the inspected app target, under the id `devtools.inspectedWindow.tabId` reports; `query`/`get`/`getCurrent`/`update`/`create`/`remove` are real over that one tab, `create` adds an `openedVia` field and opens nothing unless the host is configured to. `sendMessage` is open (its receiver is an opted-in content script). `captureVisibleTab` and the `onUpdated`/`onActivated`/… family are 🚷 — no tab strip or window model to produce them → [SMALL-SHIMS.md](../features/SMALL-SHIMS.md) |
+| `action`, `notifications`, `alarms`, `downloads`, `contextMenus`, `commands`, `sidePanel`, `windows` | browser UI / lifecycle | Tier-2 subset: notifications→Electron `Notification`, alarms→timers, downloads→the shell's save path, `commands.getAll`→the manifest, `contextMenus`→a registry with no menu, `sidePanel`→options that round-trip. The events with no trigger are 🚷 (no toolbar, menu, drawer, or shortcut routing), **except** `commands.onCommand`, which the Electron app menu can produce; `chrome.windows` real behavior is 🚷, its inert shell is open → [SMALL-SHIMS.md](../features/SMALL-SHIMS.md) |
 | `cookies`, `history`, `bookmarks`, `webNavigation`, `scripting`, `declarativeNetRequest`, `identity`, `gcm`, `offscreen`, `system.*`, `power`, `idle`, `sessions`, `topSites`, `readingList`, `search`, `omnibox`, `proxy`, `privacy`, `debugger`, `management`, `tabCapture`, `pageCapture`, `desktopCapture`, `loginState`, `enterprise.*`, ChromeOS-only | 🚫 | [TIER3-OMITTED.md](../features/TIER3-OMITTED.md) |
 
 ## C. Cross-cutting contract details
@@ -67,5 +69,5 @@ every namespace added from here on:
 6. **Background context**: `chrome.*` must exist there too — ✅ it does now, and it is the
    *same* shim, the same permission gate and an ordinary router seat as any panel, in a hidden
    window per extension → [BACKGROUND-WORKER.md](../features/BACKGROUND-WORKER.md). The
-   browser APIs a worker asks for (`tabs`, `notifications`, `action`, `alarms`) are what is
-   still missing.
+   browser APIs a worker asks for (`tabs`, `notifications`, `alarms`, `downloads`) exist now;
+   what remains of that list is 🚷 rather than missing — see the rows above.
