@@ -773,16 +773,24 @@ suite(
     //    bytes never reach the page. All three shapes are ones the string check could
     //    not see — a file link, a directory link, and a `..` that escapes only AFTER a
     //    contained link has already been followed.
+    // The answer this server gives for a refused path is its own 404, which is what
+    // every other refusal here asserts (the reserved-path check above). The probe also
+    // records a fetch REJECTION (`rejected`) — Chromium's network layer refusing the
+    // request rather than this server answering it. Nothing is served either way, so it
+    // is allowed as an explicit fallback, but the status is not merely "404 or
+    // rejected": a guard that stopped answering 404 must not pass on the fallback.
     const refused = (record, label) => {
-      assert.equal(
-        record.status === 404 || Boolean(record.rejected),
-        true,
-        `${label} must not be served: ${JSON.stringify(record)}`
-      );
+      // The bytes rule is the actual security property, and it holds whichever layer
+      // refused, so it is asserted unconditionally.
       assert.ok(
         !/OUTSIDE-/.test(String(record.body || "")),
         `${label} must not carry the outside file's contents: ${JSON.stringify(record)}`
       );
+      if (record.rejected !== undefined) {
+        assert.ok(record.rejected, `${label} must not be served: ${JSON.stringify(record)}`);
+        return;
+      }
+      assert.equal(record.status, 404, `${label} must be refused with a 404: ${JSON.stringify(record)}`);
     };
     refused(stolenLink, "a file symlink pointing outside the folder");
     refused(directoryLink, "a directory symlink pointing outside the folder");
@@ -799,15 +807,17 @@ suite(
     // 8. A symlinked extension ROOT is refused by the server, which is what the
     //    scanner already did — the two containment layers now agree, and the policy is
     //    stated once in the guard's docblock (src/main/extension-server.js).
-    assert.equal(
-      linkedRoot.status === 404 || Boolean(linkedRoot.rejected),
-      true,
-      `a linked folder is not an extension root: ${JSON.stringify(linkedRoot)}`
-    );
+    //    Held to the same standard as `refused` above: the bytes rule always, the
+    //    network-layer rejection only as an explicit fallback.
     assert.ok(
       !/a-local-script/.test(String(linkedRoot.body || "")),
       `nothing is served under a linked id: ${JSON.stringify(linkedRoot)}`
     );
+    if (linkedRoot.rejected !== undefined) {
+      assert.ok(linkedRoot.rejected, `a linked folder is not an extension root: ${JSON.stringify(linkedRoot)}`);
+    } else {
+      assert.equal(linkedRoot.status, 404, `a linked folder is not an extension root: ${JSON.stringify(linkedRoot)}`);
+    }
 
     // 9. The host-side i18n route, which is NOT a file the guard resolves: the bundle
     //    is assembled by MAIN from `_locales/en/messages.json` under the root, a path
