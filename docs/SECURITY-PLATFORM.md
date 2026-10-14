@@ -65,8 +65,9 @@ resolves to, so an extension opening its own page still works. A refused URL thr
 message either policy gives, so the frame's shim reports one shape for "nothing opened"
 regardless of which policy is set. Asserted in `tests/tabs.test.js` and, through the real
 `attachTabHost` wiring, in `tests/frontend-host-electron.test.js`. What this does **not** do is
-guard the window it opens — no navigation guard, no `setWindowOpenHandler` — which is F4's
-`L4` row, not this fix.
+guard the window it opens — the `tabs.create` `window`-policy window, now named in F4's `L4` row
+alongside the worker and options windows — no navigation guard, no `setWindowOpenHandler`. That
+is `L4`, not this fix.
 
 ### 1.2 What is NOT there (also the answer)
 
@@ -241,7 +242,7 @@ Goal state, one sentence per asset:
 
 | **L2 save broker invariant** | Write to a sibling temp file, then `rename`. Create the final name with exclusive-create (`wx`) and Chrome's ` (1)` uniquify on `EEXIST`. Cleanup only ever touches the temp file. `fixedPath` (frontend re-save) uses the same temp + rename. Do not implement `conflictAction:"overwrite"` for extensions (keep reporting it). Fix the `"unique"` → `"uniquify"` spelling. | `fs.promises.open(…, "wx")`, `rename` | ~30 lines + test edits | **Worth doing, first** |
 | **L3 IPC broker** | Already in place: identity from frame, principal pinning, double permission enforcement, `isFrontendFrame` on file channels. **Add:** (i) `isFrontendFrame` on `PREF_*`, `WINDOW_*`, `SHOW_CONTEXT_MENU`; (ii) a `devtoolsCaller(event)` = registered principal **and** `event.sender === getFrontendContents()` **and** the manifest declares `devtools_page`, required by `DEVTOOLS_EVAL/RELOAD`, `NETWORK_GET_BODY`, and by `NETWORK_SUBSCRIBE/GET_HAR/GET_STATUS` unless the frame holds `webRequest`; (iii) delete the unused `Store.initRenderer()`. Keep the namespaces (shape-first rule); fail the call with lastError. | `ipcMain.handle`, `WebFrameMain` | ~25 lines | **Worth doing** |
-| **L4 extension windows** | Worker and options windows: `setWindowOpenHandler(() => ({action: "deny"}))`, plus `will-navigate` / `will-redirect` allowing only `rozenite://<same id>/`. Reuse the `guardNavigation` shape from `frontend-frame.js:69-78`. Optional: route an http(s) link to `tabs-host` policy instead of dropping it. | `webContents.setWindowOpenHandler`, `will-navigate`, `will-redirect` | ~15 lines | **Worth doing** |
+| **L4 extension windows** | Worker, options, and `tabs.create`'s `window`-policy windows (the `Extension tab` `BrowserWindow` in `tab-host.js`'s `openWindow`): `setWindowOpenHandler(() => ({action: "deny"}))`, plus `will-navigate` / `will-redirect` allowing only `rozenite://<same id>/`. Reuse the `guardNavigation` shape from `frontend-frame.js:69-78`. Optional: route an http(s) link to `tabs-host` policy instead of dropping it. | `webContents.setWindowOpenHandler`, `will-navigate`, `will-redirect` | ~15 lines | **Worth doing** |
 | **L5 CDP socket** | Default `listenHost` to loopback (`127.0.0.1` and `::1`, or switch the default `?ws=` to `127.0.0.1`). Add `verifyClient`: accept a missing `Origin` (non-browser local tools) or exactly the frontend's origin; reject everything else. `DEVTOOLS_CDP_HOST` stays the explicit opt-in for LAN use. | `ws` `verifyClient`, `host` | ~10 lines | **Worth doing** — measure that the frontend's `localhost` still connects |
 | **L6 per-extension origin for reads** | `session.defaultSession.webRequest.onBeforeRequest({urls: ["rozenite://*/*"]})`: for non-navigation resource types whose `details.frame.url` is another extension's `rozenite://`, cancel unless the path matches the target's `web_accessible_resources`. Navigations and frontend-origin requests pass. Caveat: Electron keeps one `onBeforeRequest` listener per session, so a future user must share it. | `session.webRequest`, `details.frame` (both measured to fire for the scheme) | ~30 lines | **Defer**: cheap, but low value — it protects other extensions' bundled files, not the user's |
 
