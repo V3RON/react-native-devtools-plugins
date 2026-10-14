@@ -17,6 +17,13 @@ const panelHost = require("./panel-host");
 const { createMessageRouter } = require("./message-router");
 const { evalInPage, reloadInPage } = require("./inspected-window");
 const { createNetworkService } = require("./network-service");
+// The grant filter `networkSenderFor` below applies to every host->frame network
+// push. Importing it here is load-bearing: the call sits inside the sender filter
+// that network-service's `broadcast` wraps in `try { … } catch {}`, so an unbound
+// name threw a ReferenceError that the catch swallowed — every live delivery died
+// silently, for every frame, with no log line (issue #20). Pinned live by
+// tests/delivery-scope.test.js.
+const { deliveryAllowed } = require("./delivery-scope");
 const { getContentBridge, attachContentBridge } = require("./content-bridge");
 const { deliverTabMessage } = require("./tab-send");
 const { sendCommand, onEvent, status: bridgeStatus } = require("./cdp-bridge");

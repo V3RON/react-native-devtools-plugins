@@ -15,9 +15,12 @@
 // 127.0.0.1:8081 and is not needed to assert any of this.
 //
 // `show: false`: headless — no visible window, no Metro, no device, no CDP
-// bridge (DEVTOOLS_CDP_BRIDGE=off). Extension pages report through console.log,
-// which the harness records; so do load failures, preload errors and the final
-// frame tree. One NDJSON line per observation on --out, then exit.
+// bridge (DEVTOOLS_CDP_BRIDGE=off) unless `--fake-rn-app=on`, which serves a fake
+// inspected app inside this process and starts the PRODUCTION CDP bridge against
+// it (tests/fake-rn-app.js) so the live network delivery path is observable.
+// Extension pages report through console.log, which the harness records; so do
+// load failures, preload errors and the final frame tree. One NDJSON line per
+// observation on --out, then exit.
 const { app, BrowserWindow } = require("electron");
 const { default: Store } = require("electron-store");
 const fs = require("fs");
@@ -80,12 +83,27 @@ const downloadsDir = arg("downloads-dir");
 // Either way the manifest decision, the URL from the file server's containment rules,
 // and the open-window tracking are the production host's own.
 const optionsWindowMode = (arg("options-windows") || "record").toLowerCase();
+// Run the PRODUCTION CDP bridge against a FAKE inspected app that this harness
+// serves in its own process (tests/fake-rn-app.js). Off by default:
+// every pre-existing run stays exactly as it was, with no debugger session.
+// The two ports are allocated by the caller so a parallel test run cannot collide.
+const fakeRNApp = ["on", "true", "1"].includes(arg("fake-rn-app"));
+const fakeMetroPort = Number(arg("metro-port") || 0);
+const fakeCdpPort = Number(arg("cdp-port") || 0);
 
 // Must precede requiring config: it captures DEVTOOLS_EXTENSIONS_DIR at module
 // load and the file server resolves against it. Production code unchanged,
 // pointed at the caller's extensions dir.
 process.env.DEVTOOLS_EXTENSIONS_DIR = extensionsDir;
-process.env.DEVTOOLS_CDP_BRIDGE = "off";
+// With a fake app to talk to, the bridge runs for real (src/main/index.js does the
+// same); loopback only, so a headless run cannot open a port on the LAN and does
+// not ask macOS's firewall about it.
+process.env.DEVTOOLS_CDP_BRIDGE = fakeRNApp ? "on" : "off";
+if (fakeRNApp) {
+  process.env.DEVTOOLS_METRO_PORT = String(fakeMetroPort);
+  process.env.DEVTOOLS_CDP_PORT = String(fakeCdpPort);
+  process.env.DEVTOOLS_CDP_HOST = "127.0.0.1";
+}
 process.env.DEVTOOLS_ALARM_CLOCK_SCALE = String(alarmClockScale);
 
 // Keep electron-store (and every other userData writer) inside the test tree.
@@ -96,6 +114,7 @@ if (userDataDir) {
 
 const production = require("../src/main/extension-server");
 const { registerIpcHandlers } = require("../src/main/ipc");
+const cdpBridge = require("../src/main/cdp-bridge");
 const { frontendPreferences, extensionFramePreferences } = require("../src/main/frame-security");
 const config = require("../src/main/config");
 const { createBackgroundHost } = require("../src/main/background-host");
@@ -281,6 +300,23 @@ app
 
     const policyFor = production.registerExtensionProtocol();
 
+    // The fake inspected app and the PRODUCTION CDP bridge in front of it
+    // (src/main/cdp-bridge.js, started by src/main/index.js the same way: after the
+    // IPC handlers and the protocol). With this pair running, a frame's network
+    // data arrives over a real debugger socket from an app that keeps reporting
+    // traffic — which is what makes "the live push reached the frame" observable at
+    // all (tests/delivery-scope.test.js).
+    let fakeApp = null;
+    if (fakeRNApp) {
+      const { startFakeRNApp } = require("./fake-rn-app");
+      fakeApp = await startFakeRNApp({
+        port: fakeMetroPort,
+        intervalMs: Number(arg("fake-app-interval") || 500),
+        note: (entry) => write(entry),
+      });
+      await cdpBridge.start();
+    }
+
     // The production background host, in the process that will actually hold it
     // (src/main/index.js does the same, after the protocol and the IPC handlers).
     // The install state is the real one, in userData — which is how a second run
@@ -423,6 +459,11 @@ app
       downloadsDir: downloadsDir || null,
       optionsWindows: optionsWindowMode,
       alarmClockScale,
+      // Whether this run had a debugger session at all. The app's own view of the
+      // session (the `Network.enable` it was sent, the requests it announced) is
+      // recorded at the END of the run as a `fake-app` line — this line happens
+      // before the page loads, so nothing has asked for a domain yet.
+      fakeRNApp: Boolean(fakeApp),
       electronVersion: process.versions.electron,
       chromeVersion: process.versions.chrome,
     });
@@ -473,6 +514,12 @@ app
     await new Promise((resolve) => setTimeout(resolve, SETTLE_MS));
 
     note({ kind: "frames", frames: frameDump() });
+    // What the fake inspected app ended up seeing (the CDP commands it was sent and
+    // the requests it announced). The `harness` line is written before the page
+    // loads, so the end-of-run state has to be recorded separately.
+    if (fakeApp) {
+      note({ kind: "fake-app", stats: fakeApp.stats() });
+    }
     if (host) {
       note({ kind: "background-windows", windows: host.list() });
     }
@@ -487,6 +534,10 @@ app
     app.exit(0);
   })
   .catch((error) => {
-    write({ kind: "harness-error", message: error && error.message });
+    write({
+      kind: "harness-error",
+      message: error && error.message,
+      stack: error && error.stack ? String(error.stack).split("\n").slice(0, 8).join(" | ") : "",
+    });
     app.exit(1);
   });
