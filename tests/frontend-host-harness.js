@@ -135,6 +135,14 @@ app.whenReady().then(async () => {
     // options-window harness uses, so a headless run pops nothing. What is production is
     // attachTabHost's own composition and the filter inside open(): a filter that did not
     // run would hand the recorder the file: URL and land in the catch below.
+    //
+    // This is the SECOND attachTabHost call, so it replaces the module singleton the first one
+    // installed: from here to the end of the process, getTabHost() answers with the
+    // recorder-backed host. That is deliberate and safe only because nothing runs after this
+    // block — the two `open` pairs below are the harness's last act, and no channel handler
+    // asks for the tab host again afterwards. A future case that needs the production wiring
+    // has to go above this point, or restore the singleton (there is no setter to restore it
+    // with, which is why the comment is cheaper than the capture).
     const loaded = [];
     const win = attachTabHost({
       policy: "window",
@@ -145,7 +153,9 @@ app.whenReady().then(async () => {
       },
     });
     result.windowHttps = await win.open({ url: "https://example.com/from-tabs" });
-    // An extension opening its own page is the whole reason the scheme is allowed here.
+    // This shell's own scheme is allowed by this branch, which is what lets a create of a
+    // relative path — the form Altair uses — still open. The id is not scoped to the caller
+    // (see src/main/tab-host.js's note on that).
     result.windowRozenite = await win.open({ url: "rozenite://probe.local/index.html" });
     try {
       await win.open({ url: "file:///etc/passwd" });

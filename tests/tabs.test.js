@@ -3,7 +3,8 @@
 //
 // Everything the model cannot know is injected: the inspected target's real
 // url/title, the capability to open something, the capability to close it. No test
-// here opens a window, launches a browser, or touches the filesystem.
+// here opens a window, launches a browser, or writes to the filesystem; the two
+// `readSource` tests below read this repo's own source files, read-only.
 // Run: npm test
 const test = require("node:test");
 const assert = require("node:assert");
@@ -553,6 +554,16 @@ test("open: the default policy opens nothing and says so; external and window ar
 // with a filter and one without is how `chrome.tabs.create` became a route to `file://`.
 // These assert both halves of the agreement: the same URL is refused by both policies, and
 // the refusal reaches the shim in the same shape either way.
+//
+// Which of these fails against the pre-fix code matters for review: THIS matrix is the one
+// that could not have passed before 9b40094 — every `file:` / `smb:` / `chrome:` entry used to
+// reach `openWindow` under the `window` policy. The three environment schemes appended below
+// were already refused by both branches at 9b40094 (measured), so they are contract pins that
+// stay green either way; they are here because `about:`, `blob:` and `ws:` are the schemes an
+// extension is most likely to `create` by accident, and a filter that silently stopped covering
+// them should fail loud. The normalization cases in the tests after this one are labelled
+// individually: an uppercase scheme was refused pre-fix and passes now (a pin on the new
+// verdict), while an embedded port and userinfo both USED TO LOAD and are regression guards.
 const REFUSALS = [
   "file:///Users/dev/Downloads/x.html",
   "file:///etc/passwd",
