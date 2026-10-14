@@ -203,11 +203,16 @@
   not declare gets a failing call (`runtime.lastError` + rejected promise) and, for
   `webRequest`, no deliveries at all — enforced twice, in main (`src/main/delivery-scope.js`
   decides from the manifest **on disk**, so a frame cannot talk itself into data) and in the
-  shim (`src/chrome-shim/permission-gate.js`). Both halves are measured: the main half
-  by the live-push suite in `tests/delivery-scope.test.js`, which starts the production
-  shell with a CDP session and asserts which events reach an entitled frame and which
-  reach a frame without the permission. (It had better be: the main half shipped
-  **broken and silent** for its whole life — the filter was never imported, and the
+  shim (`src/chrome-shim/permission-gate.js`). Both halves are measured, in one live run of
+  the production shell with a CDP session (`tests/delivery-scope.test.js`), and each is
+  measured by the observation that can actually see it: an entitled panel frame receives
+  every `chrome.webRequest` step and `devtools.network`'s finished event; for a frame with
+  no permission, the shim half is its own report that the listeners it registered were
+  withdrawn (`hasListeners()` false) and that nothing but devtools.network's two events ever
+  arrived, while main's half is the drop itself — the run records every push main addressed
+  to a frame, and no `request` / `sendHeaders` / `response` push was ever addressed to that
+  frame while `completed` was, for every cycle. (The main half had better be measured: it
+  shipped **broken and silent** for its whole life — the filter was never imported, and the
   swallowed exception in the delivery fan-out meant no live push reached any frame.
   Issue #20, `docs/SECURITY-PLATFORM.md` F6.)
   Deviation from Chrome, stated: Chrome omits

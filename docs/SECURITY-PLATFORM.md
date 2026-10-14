@@ -46,9 +46,9 @@ they are equally cheap:
 | # | Finding | Line | Evidence | Fix (estimate) |
 | --- | --- | --- | --- | --- |
 | F3 | The CDP bridge's WebSocket listens on every interface, accepts any `Origin`, and "last connection wins". Any local web page or LAN peer can replace the frontend's debugger session. Upstream it is presented to Metro with a loopback `Origin` (`src/main/cdp-bridge.js:49`, `:240`, `:316-333`, `:403-405`). | debugger session / the app | [measured] bind address, foreign `Origin` accepted, frontend evicted | ~10 lines |
-| F4 | An extension's own top-level window (background worker, options page) has no navigation guard and no window-open handler. A navigated-away document receives the **frontend** preload (`src/preload/index.js:16-20`). Its `PREF_*`, `WINDOW_*` and `SHOW_CONTEXT_MENU` are not gated in main (`src/main/ipc.js:286-306`). | (a) | [measured] in a standalone probe that mirrors the preload dispatch; the production path is [code] | ~15 lines |
-| F5 | `chrome.devtools.*` is installed in **every** extension context (`src/chrome-shim/index.js:224-236`). Main gates `DEVTOOLS_EVAL` / `DEVTOOLS_RELOAD` / `NETWORK_GET_BODY` only on "is a registered frame" (`src/main/ipc.js:498-590`). So an always-on worker, an options page, or an extension with no `devtools_page` can evaluate JS in the app and read response bodies. Chrome limits these APIs to DevTools contexts [docs]. | app / network data | [code] | ~15 lines |
-| F6 | **Found after the audit** (issue #20): the delivery-scope filter `ipc.js` applies to every host→frame network push was **never imported**. Its `ReferenceError` was thrown inside `network-service.js`'s `broadcast`, which wraps each `send` in `try { … } catch {}` and swallows it, so **every live `webRequest` / `devtools.network` push was dropped for every frame with no log line** — while `getHAR` / `getContent` kept working and hid it. The "enforced twice" claim in [LIMITATIONS.md](LIMITATIONS.md) was, for the main-process half, "enforced by crashing". One import; the gap that let it ship was the missing live-push test. | feature loss, and a guard that read as present | [test: `tests/delivery-scope.test.js` — verified to fail with the import removed] | 1 line + 1 test file |
+| F4 | An extension's own top-level window (background worker, options page) has no navigation guard and no window-open handler. A navigated-away document receives the **frontend** preload (`src/preload/index.js:16-20`). Its `PREF_*`, `WINDOW_*` and `SHOW_CONTEXT_MENU` are not gated in main (the `ipcMain.handle(PREF_*/WINDOW_*/SHOW_CONTEXT_MENU)` block in `src/main/ipc.js`, above `RUNTIME_GET_MANIFEST`). | (a) | [measured] in a standalone probe that mirrors the preload dispatch; the production path is [code] | ~15 lines |
+| F5 | `chrome.devtools.*` is installed in **every** extension context (`src/chrome-shim/index.js:224-236`). Main gates `DEVTOOLS_EVAL` / `DEVTOOLS_RELOAD` / `NETWORK_GET_BODY` only on "is a registered frame" (the `ipcMain.handle(DEVTOOLS_EVAL)` … `ipcMain.handle(NETWORK_GET_BODY)` range in `src/main/ipc.js`; the shared rule is `resolveFrameKey`). So an always-on worker, an options page, or an extension with no `devtools_page` can evaluate JS in the app and read response bodies. Chrome limits these APIs to DevTools contexts [docs]. | app / network data | [code] | ~15 lines |
+| F6 | **Found after the audit** (issue #20): the delivery-scope filter `ipc.js` applies to every host→frame network push was **never imported**. Its `ReferenceError` was thrown inside `network-service.js`'s `broadcast`, which wraps each `send` in `try { … } catch {}` and swallows it, so **every live `webRequest` / `devtools.network` push was dropped for every frame with no log line** — while `getHAR` / `getContent` kept working and hid it. The "enforced twice" claim in [LIMITATIONS.md](LIMITATIONS.md) was, for the main-process half, "enforced by crashing". One import; the gap that let it ship was the missing live-push test. | feature loss, and a guard that read as present | [test: `tests/delivery-scope.test.js` — measured to fail both ways: with the import removed, and with the filter replaced by `() => true`] | 1 line + 1 test file |
 
 **F6 is the audit's own failure mode, made concrete.** §5 lists
 `tests/delivery-scope.test.js` as the S2 safety net; that file did not exist, and every
@@ -72,7 +72,8 @@ guard — something has to observe the value arriving.
   that guard never covered.
 - **The frontend's file channels are refused to every extension context.** `HOST_SAVE`,
   `HOST_APPEND`, `HOST_CLOSE_FILE`, `HOST_OPEN_EXTERNAL` and `HOST_CONFIG` are gated by
-  `isFrontendFrame` (`src/main/ipc.js:822-839`, `src/main/frontend-frame.js:50-57`) [code].
+  `isFrontendFrame` (the `ipcMain.handle(HOST_*)` block at the end of `src/main/ipc.js`,
+  `src/main/frontend-frame.js:50-57`) [code].
   This holds even in F4's navigated window, which is not the frontend's WebContents.
 
 ### 1.3 The eight pre-verified facts, confirmed or corrected
@@ -80,7 +81,7 @@ guard — something has to observe the value arriving.
 | # | Claim | Verdict |
 | --- | --- | --- |
 | 1 | IPC is an allowlist of named channels with frame-derived identity, not "full filesystem via IPC" | **Confirmed** for extension frames. Two corrections. The filesystem gap that exists runs through the **protocol** (F1), not IPC. An extension's own *window* can reach the frontend preload by navigating away (F4). |
-| 2 | `HOST_*` file channels are `isFrontendFrame`-gated; `DOWNLOAD_*` use `gatedFrameKey(event, "downloads")`; permissions are enforced twice | **Confirmed** (`ipc.js:726-792`, `:822-839`). Not gated: the frontend preload's other channels — `PREF_REGISTER/GET/GET_ALL/SET/REMOVE/CLEAR`, `WINDOW_BRING_TO_FRONT`, `WINDOW_CLOSE`, `SHOW_CONTEXT_MENU` (`ipc.js:286-306`). |
+| 2 | `HOST_*` file channels are `isFrontendFrame`-gated; `DOWNLOAD_*` use `gatedFrameKey(event, "downloads")`; permissions are enforced twice | **Confirmed** (the `ipcMain.handle(DOWNLOAD_*)` block and the `ipcMain.handle(HOST_*)` block in `ipc.js`). Not gated: the frontend preload's other channels — `PREF_REGISTER/GET/GET_ALL/SET/REMOVE/CLEAR`, `WINDOW_BRING_TO_FRONT`, `WINDOW_CLOSE`, `SHOW_CONTEXT_MENU` (the `ipcMain.handle(PREF_*/WINDOW_*/SHOW_CONTEXT_MENU)` block in `ipc.js`). |
 | 3 | `safeName()` strips directories, so downloads cannot leave the chosen directory | **Confirmed** [measured]. `..` and `.` survive as whole names; the write then fails with `EISDIR` and the unlink of a directory fails, so this is harmless. A symlink that **already exists** inside `~/Downloads` is followed [measured]. |
 | 4 | Download without `saveAs` writes with no prompt; the realistic abuse is silent overwrite, which is Chrome's behavior | **No prompt: confirmed.** **"Chrome's behavior": corrected.** Chrome's default `conflictAction` is `uniquify`; it overwrites only when the call passes `overwrite` [docs: Chrome]. The reach matches Chrome; the default does not. **The realistic abuse is worse than overwrite — it is delete (F2).** Also, the shim compares against `"unique"` (`src/chrome-shim/downloads.js:128`), but Chrome's value is `"uniquify"`. |
 | 5 | `rozenite://` has no per-extension origin isolation; the fix may be a few lines in the handler | **Corrected.** Origins *are* distinct: cross-extension DOM access throws `SecurityError` [measured]. What is missing is a CORS check on the custom-scheme loader: even a `no-cors` fetch comes back `basic` with a readable body [measured]. **The fix cannot live in `protocol.handle`:** its `Request` carries no `Origin` and an empty `referrer` [measured]. `session.webRequest.onBeforeRequest` *does* fire for the scheme, with `details.frame.url` naming the requester [measured]. That fix is ~30 lines (§4, L6). The comment at `src/main/frame-security.js:62-65` ("shares one origin") is wrong. `:33-35` says the scheme is registered `secure`, but the code (`extension-server.js:110`) does not register it so. |
@@ -121,7 +122,7 @@ developer opted into.
 
 | Operation | Where | Reachable from | Who picks the path | Verdict |
 | --- | --- | --- | --- | --- |
-| `writeFile` (truncate + write) | `save-service.js:398` (attached `:545`) | extension with `downloads` (`DOWNLOAD_START`, `ipc.js:734`); frontend (`HOST_SAVE`) | non-`saveAs`: `~/Downloads/<safeName>` (`:246-249`); `saveAs`: the user's dialog (`:250-257`); `fixedPath`: host-files only | Stays in `~/Downloads` top level. Overwrites an existing file silently (default differs from Chrome's `uniquify`). Follows a pre-existing symlink. |
+| `writeFile` (truncate + write) | `save-service.js:398` (attached `:545`) | extension with `downloads` (`ipcMain.handle(DOWNLOAD_START)` in `ipc.js`); frontend (`HOST_SAVE`) | non-`saveAs`: `~/Downloads/<safeName>` (`:246-249`); `saveAs`: the user's dialog (`:250-257`); `fixedPath`: host-files only | Stays in `~/Downloads` top level. Overwrites an existing file silently (default differs from Chrome's `uniquify`). Follows a pre-existing symlink. |
 | `unlink` via `removePartial` | `save-service.js:272-282`, called at `:381`, `:400`, `:410` | same | `record.filename` = the chosen target, **not** a file this call created | **F2.** Fetch failure, malformed `data:`, or cancel each unlink a pre-existing file at that name [measured] |
 | `appendFile` | `host-files.js:107` (attached `:135`) | frontend only (`HOST_APPEND`, `isFrontendFrame`) | only a path a completed save of that url produced (`:100-105`) | Sound |
 | Re-save to remembered path | `host-files.js:57-69` → `fixedPath` (`save-service.js:327`) | frontend only | the remembered path | Documented sharp edge (`host-files.js:20-23`): a failed re-save deletes the earlier file. Same root cause as F2; same fix. |
@@ -152,7 +153,8 @@ developer opted into.
   `downloadsDir()/name`, **no prompt**. With `saveAs` → dialog (or the test seam).
 - **`fixedPath`.** It is set only from `request.filePath` (`:301`, `:327`). The
   `DOWNLOAD_START` handler builds its request field by field and never passes `filePath`
-  (`ipc.js:739-753`), so only `host-files.js:68` can set it. [code]
+  (`ipcMain.handle(DOWNLOAD_START)`, which builds its request field by field in `ipc.js`),
+  so only `host-files.js:68` can set it. [code]
 - **`data:` / `blob:`.** `data:` is decoded in main (`:82-96`), and a malformed one throws
   *after* the target is chosen, which is one way into F2. There is no `blob:` path: a `blob:`
   URL from a renderer is not fetchable by `node-fetch` in main, so it fails, also after the
@@ -181,7 +183,8 @@ escalation [code].
 ### 3.6 Channel census: what an extension frame can call, and whether it can name a resource
 
 Identity is always `event.senderFrame` / `event.frameId`, pinned to the principal registered at
-`RUNTIME_REGISTER` (`ipc.js:273-276`, `:339-410`) [code]. "Names" means a payload field the
+`RUNTIME_REGISTER` (the `resolveFrameKey` helper and the `ipcMain.handle(RUNTIME_REGISTER)`
+block in `ipc.js`) [code]. "Names" means a payload field the
 host then acts on.
 
 | Channel(s) | Gate in main | Payload can name | Verdict |
@@ -189,7 +192,7 @@ host then acts on.
 | `RUNTIME_GET_MANIFEST`, `RUNTIME_REGISTER` | frame URL host | nothing | Sound |
 | `RUNTIME_SEND_MESSAGE/RESPONSE/CONNECT/PORT_*` | registered principal | port / request ids, router-scoped | Sound [test: messaging-frames] |
 | `STORAGE_CALL` | principal + `storage` grant | area (validated), keys | Sound |
-| `EXT_PANEL_CREATE` | principal; page must be a file of *this* extension (`ipc.js:446-473`) | page path inside own folder | Sound (but see F1 for "inside") |
+| `EXT_PANEL_CREATE` | principal; page must be a file of *this* extension (`ipcMain.handle(EXT_PANEL_CREATE)` in `ipc.js`) | page path inside own folder | Sound (but see F1 for "inside") |
 | `DEVTOOLS_EVAL`, `DEVTOOLS_RELOAD` | principal **only** | expression / `injectedScript` (consented capability) | **F5**: no DevTools-context or `devtools_page` check |
 | `NETWORK_SUBSCRIBE/GET_HAR/GET_STATUS/GET_BODY` | principal; `webRequest`-only kinds filtered (`delivery-scope.js`) | `requestId` | **F5** for bodies and HAR from non-DevTools contexts |
 | `TABS_TARGET_INFO/OPEN/CLOSE/SEND_TO_APP` | principal + `tabs` | URL (policy `none` by default; `external` = http(s) allowlist); window handle | Sound. Under `DEVTOOLS_TABS_OPEN=window` the URL is not scheme-filtered and the window has no guards (`tab-host.js:146-150`); it gets Electron's default sandboxed, preload-less prefs [inferred] |
@@ -198,7 +201,8 @@ host then acts on.
 | `OPTIONS_OPEN` | frame URL host; page contained | nothing | Sound; the opened window lacks guards (F4) |
 
 Channels the extension preload does **not** expose, but which main also leaves ungated:
-`PREF_*`, `WINDOW_BRING_TO_FRONT`, `WINDOW_CLOSE`, `SHOW_CONTEXT_MENU` (`ipc.js:286-306`). The
+`PREF_*`, `WINDOW_BRING_TO_FRONT`, `WINDOW_CLOSE`, `SHOW_CONTEXT_MENU` (the
+`ipcMain.handle(PREF_*/WINDOW_*/SHOW_CONTEXT_MENU)` block in `ipc.js`). The
 same holds for electron-store's synchronous `electron-store-get-data`, registered by
 `Store.initRenderer()` (`index.js:15`; electron-store 10.1.0 `index.js:25`). No renderer in
 `src/` uses electron-store, so that call is dead code [code].
@@ -301,7 +305,7 @@ Footnotes:
 | --- | --- | --- |
 | S1 i18n / worker / content (²) | `tests/background-worker-electron.test.js` (suite at `:570`), `tests/i18n-electron.test.js`, `tests/content-scripts-registry.test.js` | Stage an extension with an in-folder symlink resolving outside the root: the fetch is 404, while a symlinked extension *root* still serves. Existing traversal and bootstrap assertions stay green. |
 | S1 downloads / save (⁴) | `tests/save-service.test.js`, `tests/host-primitives.test.js` (real `fs` at `:81`, `:445`) | A pre-existing file survives (a) a failed fetch, (b) a malformed `data:` URL, (c) cancel. A clashing name produces ` (1)`. **Change** `:272-278` to expect the *temp* path unlinked. A failed re-save via `fixedPath` keeps the earlier file. |
-| S2 network / eval (³) | `tests/extension-frame-electron.test.js` (harness registers its host as frontend at `extension-frame-harness.js:336`), `tests/inspected-window.test.js`, `tests/delivery-scope.test.js` (its live-push suite landed with F6: the harness runs the production CDP bridge against `tests/fake-rn-app.js`), `tests/background-worker-electron.test.js` | A panel frame still evaluates. A worker's `inspectedWindow.eval` returns `isError` with the DevTools-context reason. graphql's worker still receives `webRequest` deliveries (the panel-frame half of that is measured as of F6; the worker half is still to assert). `NETWORK_GET_BODY` from a worker is refused. |
+| S2 network / eval (³) | `tests/extension-frame-electron.test.js` (the harness registers its host as the frontend via `setFrontendContents` in `extension-frame-harness.js`), `tests/inspected-window.test.js`, `tests/delivery-scope.test.js` (its live-push suite landed with F6: the harness runs the production CDP bridge against `tests/fake-rn-app.js`, and `--observe-frame-sends=on` records the pushes so a filtered-out one is observable), `tests/background-worker-electron.test.js` | A panel frame still evaluates. A worker's `inspectedWindow.eval` returns `isError` with the DevTools-context reason. graphql's worker still receives `webRequest` deliveries (the panel-frame half of that is measured as of F6; the worker half is still to assert). `NETWORK_GET_BODY` from a worker is refused. |
 | S2 windows (⁵) | `tests/background-worker-electron.test.js`, `tests/options-and-requests.test.js` | A worker that sets `location.href` to http stays on its bootstrap URL. `window.open` from a worker creates no window (count `BrowserWindow.getAllWindows()`). |
 | S2 CDP (⁷) | `tests/cdp-bridge.test.js` | A client with a foreign `Origin` is rejected and does **not** evict the current client. A client with the frontend origin, or no `Origin`, connects. Default bind is loopback. |
 | S2 frontend-only (⁸) | `tests/frontend-host-electron.test.js` (sets `DEVTOOLS_FRONTEND_URL`, `frontend-host-harness.js:48,64`), `tests/theme.test.js` | Prefs round-trip from the frontend. `PREF_SET` from a non-frontend main frame (a navigated window) returns refused and does not write. |

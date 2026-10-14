@@ -139,9 +139,11 @@ The end-to-end assertions for all of this live in `tests/extension-frame-electro
 + `tests/extension-frame-harness.js`, which boots a production-shaped shell headlessly
 (`show: false`, `DEVTOOLS_CDP_BRIDGE=off`, no Metro) — an extension frame needs neither a
 device nor the frontend to be observable. One run goes further: `--fake-rn-app=on` serves a
-fake inspected app inside the harness and starts the real CDP bridge against it, which is how
+fake inspected app inside the harness (on a port the OS picks, reported back on the NDJSON
+`harness` line) and starts the real CDP bridge against it, which is how
 `tests/delivery-scope.test.js` proves a live network push actually reaches a subscribed frame
-(see F6 in [SECURITY-PLATFORM.md](SECURITY-PLATFORM.md) for why that assertion exists).
+and records the pushes main addressed to each frame, so a filtered-out one is visible too
+(see F6 in [SECURITY-PLATFORM.md](SECURITY-PLATFORM.md) for why those assertions exist).
 
 ### Main-frame preload (`src/preload/frontend-host.js`)
 
