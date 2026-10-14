@@ -79,6 +79,14 @@ frontend's connection, keeps the upstream session to Metro, and exposes
 `sendCommand(method, params)` / `onEvent(method, handler)` to the host — multiplexed
 onto the frontend's own session by message id, so no second debugger appears on the
 app. First consumer: [inspected-window](INSPECTED-WINDOW.md).
+
+Because that dial is made by the *frontend document itself*, the `Origin` it presents on
+the upgrade is the origin of its own URL — `http://127.0.0.1:8081` on the default
+frontend URL, and whatever `DEVTOOLS_FRONTEND_URL` says otherwise [inferred from the URL;
+the header itself is Chrome's WebSocket behaviour, not measured against the fork here].
+That is the origin the bridge allowlists (issue #23): `src/main/config.js` derives it from
+the same `frontendURL` the window loads, so the frontend is let in by construction, and
+anything else needs `DEVTOOLS_CDP_ALLOWED_ORIGINS`.
 Still missing:
 
 - No producer yet for `colorThemeChanged`/etc.; they only become meaningful as

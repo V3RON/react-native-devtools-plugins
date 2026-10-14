@@ -43,6 +43,8 @@ into the frontend's main world, never `require`d at runtime.
   `DEVTOOLS_EXTENSIONS_DIR`, `DEVTOOLS_CDP_BRIDGE` (`off` = external relay),
   `DEVTOOLS_SHOW_PANEL` (`<extensionId>[/<pagePath>]`: open on that extension's panel),
   `DEVTOOLS_METRO_HOST` / `DEVTOOLS_METRO_PORT`, `DEVTOOLS_CDP_HOST` / `DEVTOOLS_CDP_PORT`,
+  `DEVTOOLS_CDP_ALLOWED_ORIGINS` (extra browser origins for the CDP socket; default: the
+  frontend's own origin only),
   `DEVTOOLS_APP_FILTER` / `DEVTOOLS_DEVICE_FILTER`, `DEVTOOLS_CDP_REQUEST_TIMEOUT_MS`,
   `DEVTOOLS_UI_LOCALE` (UI locale `chrome.i18n` reports; default: Electron's).
   The frontend is a patched RN
@@ -59,6 +61,15 @@ into the frontend's main world, never `require`d at runtime.
   verbatim. Injected transports/timers/logging (no Electron import) keep it unit-testable
   against a fake upstream (`tests/cdp-bridge.test.js`). `DEVTOOLS_CDP_BRIDGE=off` leaves
   the socket to an external relay.
+  **Who may dial it:** bound to `127.0.0.1` and `::1` (both, because the frontend dials
+  `?ws=localhost:…` and `localhost` may resolve to either family) and gated at the
+  WebSocket upgrade: an `Origin` must be the frontend's own or one named by
+  `DEVTOOLS_CDP_ALLOWED_ORIGINS`; a missing `Origin` is accepted from a loopback peer
+  only (a browser cannot omit that header, so its absence means a local tool). Exactly
+  one client owns the session — a second is refused with `close 4001` rather than
+  evicting the first, and a newcomer's frames are held until it wins or is refused.
+  A reload reattaches: the close frees the seat, and an owner that stops answering pings
+  loses it after ~1 s. `docs/SECURITY-PLATFORM.md` F3 is the reasoning.
 - `inspected-window.js` — `chrome.devtools.inspectedWindow.eval` / `.reload` as
   `Runtime.evaluate` / `Page.reload` on that session, with the pure CDP → Chrome
   `[value, exceptionInfo]` mapping (`mapEvaluation`).

@@ -152,6 +152,18 @@
   multi-target/device multiplexing (`src/tools/fake-cdp.js` likewise proxies exactly one
   Chrome tab). Target *selection* is filterable (`DEVTOOLS_APP_FILTER` /
   `DEVTOOLS_DEVICE_FILTER`), multiplexing is not.
+- The CDP socket has **one owner**, and a second client is *refused* rather than taking
+  over (`close 4001` + a warning in the shell's terminal). That is a divergence from
+  Chrome, where a second DevTools page evicts the first: here eviction was the attack
+  ([SECURITY-PLATFORM.md](SECURITY-PLATFORM.md) F3), so takeover is a visible refusal.
+  A frontend **reload** still reattaches — the old socket's close frees the seat, and an
+  owner that stops answering pings loses it after the bridge's liveness probe times out
+  (~1 s). There is no shared session and no way to ask politely for the seat.
+- That socket is bound to loopback only and accepts the frontend's own `Origin` (plus
+  `DEVTOOLS_CDP_ALLOWED_ORIGINS`) or no `Origin` at all from a local peer. Consequences:
+  a non-browser tool on this machine connects freely, a web page on any other origin
+  cannot, and serving the frontend from another host needs an explicit
+  `DEVTOOLS_CDP_ALLOWED_ORIGINS` (or `DEVTOOLS_CDP_HOST` to bind elsewhere at all).
 - Because the frontend URL carries `?ws=`, the frontend build talks to the socket itself
   and `InspectorFrontendHost.sendMessageToBackend` is never called — that Chrome escape
   hatch is structurally unavailable here, and the host reaches the backend on the socket

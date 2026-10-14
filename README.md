@@ -35,6 +35,12 @@ Notes:
   app through Metro's `/json/list` and answers on the frontend's `ws` port. Knobs:
   `DEVTOOLS_METRO_HOST` / `DEVTOOLS_METRO_PORT`, `DEVTOOLS_APP_FILTER` /
   `DEVTOOLS_DEVICE_FILTER`, `DEVTOOLS_CDP_PORT`.
+  That port is the inspected app's debugger session, so it is bound to loopback and
+  accepts only the frontend's own `Origin` (or no `Origin` at all from a local peer —
+  that's how `npm run rn-cdp` and the tests connect). Serving the frontend from another
+  host: `DEVTOOLS_CDP_ALLOWED_ORIGINS=http://host:port`. Debugging a device from another
+  machine: `DEVTOOLS_CDP_HOST=<address>` plus that allowlist. One frontend owns the
+  session at a time; a second one is refused, not swapped in.
 - `chrome.i18n` follows Electron's UI locale (`npm start -- --lang=pt-BR`, or the OS language);
   `DEVTOOLS_UI_LOCALE=ar` overrides it for extensions only. The sample extension ships
   `_locales` for en, pt_BR, de and ar ([docs/features/STORAGE-AND-I18N.md](docs/features/STORAGE-AND-I18N.md)).
