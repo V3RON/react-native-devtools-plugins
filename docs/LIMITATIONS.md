@@ -152,6 +152,8 @@
   multi-target/device multiplexing (`src/tools/fake-cdp.js` likewise proxies exactly one
   Chrome tab). Target *selection* is filterable (`DEVTOOLS_APP_FILTER` /
   `DEVTOOLS_DEVICE_FILTER`), multiplexing is not.
+  Note that `src/tools/fake-cdp.js` is a plain proxy: it does **not** inherit the F3 access
+  rules below (dev-only tool; a follow-up ticket will cover it).
 - The CDP socket has **one owner**, and a second client is *refused* rather than taking
   over (`close 4001` + a warning in the shell's terminal). That is a divergence from
   Chrome, where a second DevTools page evicts the first: here eviction was the attack

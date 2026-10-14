@@ -45,7 +45,7 @@ they are equally cheap:
 
 | # | Finding | Line | Evidence | Fix (estimate) |
 | --- | --- | --- | --- | --- |
-| F3 | The CDP bridge's WebSocket listens on every interface, accepts any `Origin`, and "last connection wins". Any local web page or LAN peer can replace the frontend's debugger session. Upstream it is presented to Metro with a loopback `Origin` (`src/main/cdp-bridge.js:49`, `:240`, `:316-333`, `:403-405`). | debugger session / the app | [measured] bind address, foreign `Origin` accepted, frontend evicted | ~10 lines |
+| F3 | The CDP bridge's WebSocket listened on every interface, accepted any `Origin`, and "last connection wins". Any local web page or LAN peer could replace the frontend's debugger session, and upstream it was presented to Metro with a loopback `Origin`. **Fixed (issue #23):** the default bind is the two loopbacks, `verifyClient` accepts only the frontend's origin (plus `DEVTOOLS_CDP_ALLOWED_ORIGINS`) or an Origin-less dial from a loopback peer, and a second client is *refused* rather than evicting the owner. | debugger session / the app | was [measured] bind address, foreign `Origin` accepted, frontend evicted; closed by [test: `tests/cdp-bridge.test.js`] | ~10 lines — **done** |
 | F4 | An extension's own top-level window (background worker, options page) has no navigation guard and no window-open handler. A navigated-away document receives the **frontend** preload (`src/preload/index.js:16-20`). Its `PREF_*`, `WINDOW_*` and `SHOW_CONTEXT_MENU` are not gated in main (`src/main/ipc.js:286-306`). | (a) | [measured] in a standalone probe that mirrors the preload dispatch; the production path is [code] | ~15 lines |
 | F5 | `chrome.devtools.*` is installed in **every** extension context (`src/chrome-shim/index.js:224-236`). Main gates `DEVTOOLS_EVAL` / `DEVTOOLS_RELOAD` / `NETWORK_GET_BODY` only on "is a registered frame" (`src/main/ipc.js:498-590`). So an always-on worker, an options page, or an extension with no `devtools_page` can evaluate JS in the app and read response bodies. Chrome limits these APIs to DevTools contexts [docs]. | app / network data | [code] | ~15 lines |
 
@@ -321,14 +321,17 @@ will be folded in later may reorder steps 1–3. Nothing here argues for step 4 
 
 **Step 2 — ambient-authority gates (F3 + F4 + F5).**
 
+- *Status:* **the F3 half is done** (the CDP socket). Loopback-default bind, `verifyClient`
+  on the frontend origin + `DEVTOOLS_CDP_ALLOWED_ORIGINS`, Origin-less accepted from a
+  loopback peer only, first-wins ownership with a liveness probe — see
+  `src/main/cdp-bridge.js` and `tests/cdp-bridge.test.js` (issue #23). F4 and F5 are open.
 - *Closes:* line (a) for navigated extension windows; DevTools authority held by non-DevTools
-  contexts; debugger-session takeover over the socket.
-- *Cost:* ~50 lines across `ipc.js`, `background-host.js`, `options-host.js`, `cdp-bridge.js`.
+  contexts.
+- *Cost:* ~50 lines across `ipc.js`, `background-host.js`, `options-host.js`.
   About one day including tests.
 - *Could break:*
   - a third-party extension calling `inspectedWindow.eval` from its worker. Chrome forbids
     that too; no shipped extension does it (grep: only panel scripts use it) [code].
-  - the frontend dialling `localhost` when bound to `127.0.0.1` only. Measure, or bind both.
   - an options page with external links (route them through the tabs policy).
 - *Proof:* §5 rows S2.
 
@@ -394,9 +397,11 @@ Residual risk after steps 1 and 2, stated so it can stop being worried about:
   only? Chromium usually falls back across addresses, but this is unmeasured. Binding both
   loopbacks avoids the question.
   **Measured (F3 fix, `tests/cdp-bridge.test.js`):** the bridge binds `127.0.0.1` and `::1`
-  as two `ws` servers on one port, and `ws://localhost:<port>` connects either way — the
-  question does not arise. A `127.0.0.1`-only bind also accepted a `localhost` dial on the
-  machine tested, which is *why* both are bound rather than one. That the **real** patched
+  as two `ws` servers on one port, and the suite now dials `ws://localhost:<port>` for real
+  (plus `[::1]` and `127.0.0.1` each, checking the family each landed on), so the promise
+  holds by test rather than by hope. A `127.0.0.1`-only bind also accepted a `localhost`
+  dial on the machine originally tested — resolver luck on one machine, not a contract; we
+  bind both so the behavior does not depend on the resolver. That the **real** patched
   frontend connects remains a device-run item; the socket-level behaviour is covered.
 - Do any third-party devtools extensions in the wild call `chrome.devtools.*` from a worker,
   relying on this shell's superset? Chrome forbids it, so step 2 would align with Chrome, but
