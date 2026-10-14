@@ -491,11 +491,8 @@ const createCdpBridge = (options = {}) => {
         log("info", "CDP bridge: frontend disconnected (0 clients)");
       }
     });
-    client.on("error", () => {
-      if (owner === client) {
-        owner = null;
-      }
-    });
+    // No `error` handler here: it belongs to `handleClient`, where it covers the
+    // clients that never reach this function.
     // The frontend fires Runtime.enable/Debugger.enable the moment the socket
     // opens, which can be while a liveness probe is still running. Those frames
     // were held back (a refused client must not be able to write upstream); now
@@ -519,6 +516,21 @@ const createCdpBridge = (options = {}) => {
       client.removeListener("message", stage);
       refuse(client, reason);
     };
+    // Registered on ARRIVAL, not in `promote`. `ws` emits `error` on the
+    // server-side socket for a protocol error, and an EventEmitter with no
+    // `error` listener throws — so any client that completes the handshake and
+    // then writes one malformed frame (an unmasked `[0x82, 0x00]` is enough)
+    // would take the Electron main process down with it. A client that is
+    // refused, or still inside the liveness-probe window, is exactly the client
+    // that never reaches `promote`, so the handler cannot live there: it has to
+    // be here, before the first await. The refused case has no state to undo;
+    // the owner losing its socket to a protocol error must still free the seat.
+    client.on("error", (error) => {
+      if (owner === client) {
+        owner = null;
+        log("warn", `CDP bridge: the frontend's socket errored (${error.message})`);
+      }
+    });
     client.on("message", stage);
 
     const decide = async () => {

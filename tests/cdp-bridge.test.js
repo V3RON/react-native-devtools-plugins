@@ -14,6 +14,7 @@
 const test = require("node:test");
 const assert = require("node:assert");
 const http = require("http");
+const net = require("net");
 const os = require("os");
 const path = require("path");
 const { execFileSync } = require("child_process");
@@ -669,6 +670,50 @@ const dialedButRefused = (url, options = {}) =>
     });
   });
 
+/**
+ * A TCP connection that completes the WebSocket handshake by hand and then writes
+ * `raw` as bytes. A real `WebSocket` client cannot produce this: `ws` would never
+ * send an unmasked client frame, and a protocol error is exactly what a hostile
+ * peer can send. `host` is bracketed because `net.connect` does not strip them.
+ */
+const writeRawFrameAfterHandshake = ({ host, port, path = "/", headers = {}, raw }) =>
+  new Promise((resolve, reject) => {
+    const socket = net.connect(port, host, () => {
+      const lines = [
+        `GET ${path} HTTP/1.1`,
+        `Host: ${host}:${port}`,
+        "Upgrade: websocket",
+        "Connection: Upgrade",
+        "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==",
+        "Sec-WebSocket-Version: 13",
+        ...Object.entries(headers).map(([name, value]) => `${name}: ${value}`),
+        "",
+        "",
+      ];
+      socket.write(lines.join("\r\n"));
+    });
+    let upgraded = false;
+    socket.on("data", (chunk) => {
+      if (upgraded || !chunk.toString().startsWith("HTTP/1.1 101")) {
+        return;
+      }
+      upgraded = true;
+      socket.write(raw);
+      resolve(socket);
+    });
+    socket.on("error", () => {
+      // The server tears the connection down when it rejects the frame, which is
+      // the expected end of this peer's story.
+      if (!upgraded) {
+        reject(new Error("the raw upgrade never completed"));
+      }
+    });
+  });
+
+/** An unmasked client frame: every client frame must be masked (RFC 6455 §5.2),
+ *  so `ws` raises a protocol error on the SERVER-side socket for it. */
+const UNMASKED_FRAME = Buffer.from([0x82, 0x00]);
+
 test("the default bind is loopback, and nothing else", async (t) => {
   // `listenHost` is deliberately NOT passed: this test is about the default.
   // The spy wraps the REAL `ws` server (so the bind itself is real) and records
@@ -843,8 +888,61 @@ test("a refused client cannot get a single CDP command upstream", async (t) => {
   await relays(owner);
 });
 
-test("the frontend still reconnects after its socket closes", async (t) => {
-  // Refusal must not mean "wedged": the everyday frontend reload closes the old
+test("a malformed frame from a REFUSED client does not take the process down", async (t) => {
+  // `ws` emits `error` on the SERVER-side socket when a peer breaks the protocol,
+  // and an EventEmitter with no `error` listener throws — which in the shell means
+  // the Electron main process dies. The bridge decides ownership asynchronously,
+  // so a client that is refused (or still inside the liveness-probe window) has not
+  // been through `promote`; if the error handler lived only there, this peer would
+  // be the one socket on earth with no handler. One unmasked frame is all it takes,
+  // after a handshake that the access rules PASS (a loopback Origin-less dial).
+  const { bridge, listenPort } = await makePolicyWorld(t);
+  const owner = await dialOwner(t, `ws://127.0.0.1:${listenPort}`, {
+    origin: FRONTEND_ORIGIN,
+  });
+
+  const attacker = await writeRawFrameAfterHandshake({
+    host: "127.0.0.1",
+    port: listenPort,
+    raw: UNMASKED_FRAME,
+  });
+  t.after(() => attacker.destroy());
+
+  // The whole point: this test runs IN the process under test, so an unhandled
+  // 'error' event would fail it rather than pass it. What is left to pin is that
+  // the bridge is still a bridge afterwards.
+  await relays(owner);
+  assert.strictEqual(bridge.status().clients, 1, "the owner was not disturbed");
+});
+
+test("a malformed frame from a client inside the probe window does not take the process down", async (t) => {
+  // The other un-promoted shape: the newcomer is STAGED while the owner is probed,
+  // so for `probeTimeoutMs` it is a client that exists and has not been through
+  // `promote` either. It writes its malformed frame in that window, and the
+  // bridge has to survive it and still hand the session to the next frontend.
+  const { bridge, listenPort } = await makePolicyWorld(t, {
+    bridge: { probeTimeoutMs: 400 },
+  });
+  await dialOwner(t, `ws://127.0.0.1:${listenPort}`, {
+    origin: FRONTEND_ORIGIN,
+    autoPong: false,
+  });
+
+  const attacker = await writeRawFrameAfterHandshake({
+    host: "127.0.0.1",
+    port: listenPort,
+    headers: { Origin: FRONTEND_ORIGIN },
+    raw: UNMASKED_FRAME,
+  });
+  t.after(() => attacker.destroy());
+
+  // Still serving: a later frontend that dials gets the session (the zombie never
+  // answered a ping, so the probe retires it).
+  await dialOwner(t, `ws://127.0.0.1:${listenPort}`, { origin: FRONTEND_ORIGIN });
+  assert.strictEqual(bridge.status().clients, 1);
+});
+
+test("the frontend still reconnects after its socket closes", async (t) => {  // Refusal must not mean "wedged": the everyday frontend reload closes the old
   // socket and dials again, and that reconnect has to win without waiting on a
   // liveness timeout.
   const { bridge, listenPort } = await makePolicyWorld(t);
