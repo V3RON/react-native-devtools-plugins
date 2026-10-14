@@ -1004,7 +1004,8 @@ test("a malformed frame from a client inside the probe window does not take the 
   assert.strictEqual(bridge.status().clients, 1);
 });
 
-test("the frontend still reconnects after its socket closes", async (t) => {  // Refusal must not mean "wedged": the everyday frontend reload closes the old
+test("the frontend still reconnects after its socket closes", async (t) => {
+  // Refusal must not mean "wedged": the everyday frontend reload closes the old
   // socket and dials again, and that reconnect has to win without waiting on a
   // liveness timeout.
   const { bridge, listenPort } = await makePolicyWorld(t);
@@ -1042,6 +1043,60 @@ test("an owner that stops answering does not wedge the socket", async (t) => {
     "the takeover waited for the liveness probe instead of skipping it"
   );
   assert.strictEqual(bridge.status().clients, 1, "still one owner, now the newcomer");
+});
+
+test("a reload that loses the race is refused while the live owner keeps the seat", async (t) => {
+  // The stale-tab shape, which is what "first wins" has to survive: the frontend's
+  // OLD document is still alive and pinging (a tab the user never closed, a peer
+  // that answers control frames, a cross-family dial) while a NEW dial arrives. The
+  // newcomer must be refused, and — the half a loosely-written rule gets wrong —
+  // refused *without* the old owner being replaced. Only the owner's own close may
+  // free the seat. Three sequential dials rather than one racing promise: that is
+  // the sequence someone can actually cause by reloading a tab.
+  const { bridge, listenPort } = await makePolicyWorld(t);
+  const live = await dialOwner(t, `ws://127.0.0.1:${listenPort}`, {
+    origin: FRONTEND_ORIGIN,
+  });
+
+  const refused = await dialedButRefused(`ws://127.0.0.1:${listenPort}`, {
+    origin: FRONTEND_ORIGIN,
+  });
+  assert.strictEqual(refused.code, REFUSE_CLOSE_CODE);
+  assert.strictEqual(bridge.status().clients, 1, "the refusal changed no ownership");
+  await relays(live);
+
+  // The refused dial gives up and the live owner finally goes away (the user closes
+  // the old tab): the next dial is in, with no probe window to sit through.
+  const closed = new Promise((resolve) => live.once("close", resolve));
+  live.close();
+  await closed;
+
+  await dialOwner(t, `ws://127.0.0.1:${listenPort}`, { origin: FRONTEND_ORIGIN });
+  assert.strictEqual(bridge.status().clients, 1, "exactly one owner, the third dial");
+});
+
+test("an owner that dies mid-probe hands the session to the newcomer", async (t) => {
+  // The close can land *inside* `probeTimeoutMs` — a tab killed at the moment the
+  // newcomer dials. The probe settles on that close instead of sitting out its
+  // timer, so the newcomer is not refused for a seat nobody holds. The owner has to
+  // be deaf (`autoPong: false`) for the window to exist at all: a live one pongs in
+  // the first millisecond and settles the probe before any close could arrive.
+  const { bridge, listenPort } = await makePolicyWorld(t, {
+    bridge: { probeTimeoutMs: 4000 },
+  });
+  const zombie = await dialOwner(t, `ws://127.0.0.1:${listenPort}`, {
+    origin: FRONTEND_ORIGIN,
+    autoPong: false,
+  });
+
+  const t0 = Date.now();
+  setTimeout(() => zombie.terminate(), 100);
+  await dialOwner(t, `ws://127.0.0.1:${listenPort}`, { origin: FRONTEND_ORIGIN });
+  assert.ok(
+    Date.now() - t0 < 3000,
+    "the newcomer took over on the close, not after the whole probe window"
+  );
+  assert.strictEqual(bridge.status().clients, 1);
 });
 
 test("an explicit listenHost is honoured (remote-device development)", async (t) => {
