@@ -22,10 +22,16 @@
 // observe an open without launching anything (docs/ARCHITECTURE.md's layering).
 //
 // What a policy may NOT open is decided here rather than inside the injected
-// capability, so the rule holds whichever window or browser is wired up — see
-// `openableWindowUrl` below and docs/SECURITY-PLATFORM.md's F6.
+// capability, so the rule holds whichever window or browser is wired up: the
+// `external` branch applies `openableUrl` and the `window` branch applies
+// `openableWindowUrl` below, each before its capability is called, and both refuse with
+// one message (docs/SECURITY-PLATFORM.md's F6).
 const { openableUrl, refusalMessage } = require("./external-open");
-const { parseExtensionURL } = require("../shared/protocol");
+const { EXTENSION_SCHEME } = require("../shared/protocol");
+
+// `new URL` reports a scheme lowercased and with its colon, which is what comparing
+// against it needs (`EXTENSION_SCHEME` is the bare name the protocol is registered under).
+const EXTENSION_PROTOCOL = `${EXTENSION_SCHEME}:`;
 
 const NO_TARGET = { attached: false };
 
@@ -40,18 +46,25 @@ const NO_TARGET = { attached: false };
  * anything the developer's `file://` origin can fetch).
  *
  * The extension scheme is allowed additionally, and only in this branch: it is this
- * shell's own protocol (`src/main/extension-server.js`), and an extension opening one
- * of its OWN pages is what `create` exists for — Altair's
+ * shell's own protocol (`src/main/extension-server.js`), and `create` exists largely for
+ * an extension reaching a page over it — Altair's
  * `create({ url: "altair-app/index.html" })` resolves against the extension origin and
- * arrives here as `rozenite://<id>/…` (`src/chrome-shim/tabs.js`). Widening
- * `ALLOWED_PROTOCOLS` is the wrong place for that: the external policy must never see
- * the scheme, since `shell.openExternal` has no handler for it. A `rozenite:` URL whose
- * hostname names no extension is refused outright — the protocol has nothing to serve
- * for it, and "we opened a window and it 404s" is not what a filter is for.
+ * arrives here as `rozenite://<id>/…` (`src/chrome-shim/tabs.js`). Note what this does NOT
+ * claim: nothing here scopes `<id>` to the extension that called, so one extension can ask
+ * for a `rozenite:` page of another's (the file server still confines every read to inside
+ * the named folder). Caller-scoping the id is follow-up work (see #24's window guards,
+ * which are the same "the window this opened is unguarded" half of F4/L4). Widening
+ * `ALLOWED_PROTOCOLS` is the wrong place for the scheme: the external policy must never see
+ * it, since `shell.openExternal` has no handler for it. A `rozenite:` URL that names no
+ * extension folder is refused outright — the protocol has nothing to serve for it, and
+ * "we opened a window and it 404s" is not what a filter is for.
  *
- * What comes back is the string that was checked, not the caller's: `openableUrl` hands
- * back the form it parsed, the way the external branch hands `allowed` to
- * `shell.openExternal` rather than the raw input.
+ * What comes back is the string that was checked, not the caller's, for BOTH halves: each
+ * hands the form `new URL` parsed to the capability, the way the external branch hands
+ * `allowed` to `shell.openExternal` rather than the raw input. Checking one string and
+ * loading another is the bug class F6 exists to close, so the extension half normalizes
+ * through `new URL` too rather than reusing the caller's text: the scheme the filter judged
+ * is then the scheme the window loads, whatever the caller's capitalisation or padding.
  *
  * @returns {string|null} the URL this policy may load, or null when it is refused
  */
@@ -60,9 +73,32 @@ const openableWindowUrl = (url) => {
   if (!requested) {
     return null;
   }
-  // `parseExtensionURL` is a prefix + hostname rule over the string, so for the scheme
-  // this branch alone allows, the checked string IS the trimmed one.
-  return openableUrl(requested) || (parseExtensionURL(requested) ? requested : null);
+  const http = openableUrl(requested);
+  if (http) {
+    return http;
+  }
+  // The scheme this branch alone allows. Parsed the same way the http half parses, so the
+  // string below is the string a window is handed — `ROZENITE://a.b/x` counts as the scheme
+  // (Chromium lowercases a URL's scheme, so a filter that string-matched the lowercase
+  // prefix would be judging a different URL than the one that loads), and `href` is what
+  // the window then loads.
+  let parsed;
+  try {
+    parsed = new URL(requested);
+  } catch {
+    return null;
+  }
+  if (parsed.protocol !== EXTENSION_PROTOCOL) {
+    return null;
+  }
+  // `id == hostname` is the load-bearing contract (`src/shared/protocol.js`), so a URL with
+  // no hostname, an embedded port, or credentials names no folder this protocol can serve:
+  // `rozenite://a.b@evil/x` is the case that matters — the userinfo would otherwise carry a
+  // host the filter never looked at.
+  if (!parsed.hostname || parsed.port || parsed.username || parsed.password) {
+    return null;
+  }
+  return parsed.href;
 };
 
 /**
@@ -139,7 +175,17 @@ const createTabHost = ({
       return { via: null, handle: null };
     }
     if (policy === "external" && openExternal) {
-      await openExternal(url);
+      // The same filter the `window` branch applies, applied here rather than left to the
+      // injected opener. The shipped wiring does filter — `attachTabHost` injects
+      // `external-open.js`'s opener, which checks — but a filter that lives only inside one
+      // injection is a filter a future caller can switch off by injecting `shell.openExternal`
+      // directly. `openableUrl` is idempotent, so running it twice on the shipped path checks
+      // the same URL and hands over the same string.
+      const allowed = openableUrl(url);
+      if (!allowed) {
+        throw new Error(refusalMessage(url));
+      }
+      await openExternal(allowed);
       return { via: "external", handle: null };
     }
     if (policy === "window" && openWindow) {

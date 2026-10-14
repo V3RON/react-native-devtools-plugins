@@ -45,6 +45,13 @@ const openableUrl = (url) => {
  * The refusal a caller sees when `openableUrl` rejects a URL. Shared because the
  * `external` policy and the `window` policy (src/main/tab-host.js) must say the same
  * thing about the same URL — one refusal message, not two that can drift apart.
+ *
+ * It names http(s) because that is the allowlist both branches share; the `window`
+ * branch's one extra reason ("it is a `rozenite:` URL that names no folder", e.g. an
+ * embedded port) is not spelled out, deliberately: the message is pinned by the Electron
+ * evidence captures as well as the tests, and "this is not openable here" is the whole
+ * answer either branch is entitled to give. Wording it differently is a change to make in
+ * one place, with the Electron suite runnable.
  */
 const refusalMessage = (url) =>
   `refused to open a URL that is not http(s): ${String(url).slice(0, 80)}`;
