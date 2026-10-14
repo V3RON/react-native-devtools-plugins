@@ -3,8 +3,8 @@
 //
 // Everything the model cannot know is injected: the inspected target's real
 // url/title, the capability to open something, the capability to close it. No test
-// here opens a window, launches a browser, or writes to the filesystem; the two
-// `readSource` tests below read this repo's own source files, read-only.
+// here opens a window, launches a browser, or writes to the filesystem; the
+// `readSource` test below reads two of this repo's own source files, read-only.
 // Run: npm test
 const test = require("node:test");
 const assert = require("node:assert");
@@ -626,13 +626,78 @@ test("the window policy refuses every scheme the external policy refuses, before
 
   // The same shipped-style composition still OPENS an http(s) URL, and the launcher is handed
   // the normalized href exactly once. The host checks, then `external-open`'s opener checks the
-  // string the host just handed it: `openableUrl` is idempotent, so the host-side filter the
-  // `external` branch added is not a second verdict that could disagree with the opener's.
+  // string the host just handed it: `openableUrl` judges the href it returns, so the host-side
+  // filter the `external` branch added is not a second verdict that could disagree with the
+  // opener's — whatever passes the first pass passes the second with the same string.
   assert.deepStrictEqual(await externalHost.open({ url: " https://example.com/a?b=1 " }), {
     via: "external",
     handle: null,
   });
   assert.deepEqual(launched, ["https://example.com/a?b=1"]);
+});
+
+// The one place the two passes of the `external` branch could disagree: the 8192-char cap.
+// Percent-encoding EXPANDS (`é` becomes `%C3%A9`), so a URL whose raw form sits under the cap
+// can normalize past it, and a cap on the raw input checked it against the wrong string: the
+// window branch (one pass) accepted the 49040-char href while the shipped external branch
+// (the host's check, then the opener's re-check of that href) refused it — one URL, two
+// verdicts. The cap now judges `parsed.href`, so both passes see the same over-long string
+// and both refuse, which is what the cap is for anyway: bounding what the OS launcher can
+// be handed, not what the caller typed.
+test("a URL under the cap in raw form but over it as an href is refused by both policies", async () => {
+  // 4085 emoji: 20 + 8170 = 8190 chars raw (under 8192), 4085 × 12-char escapes in the href.
+  const overCapAsHref = `https://example.com/${"\u{1F600}".repeat(4085)}`;
+  assert.ok(overCapAsHref.length < 8192, "the raw form is under the cap");
+  assert.ok(new URL(overCapAsHref).href.length > 8192, "the href is over it");
+  const opened = [];
+  const launched = [];
+  const windowHost = createTabHost({
+    policy: "window",
+    openWindow: (url) => {
+      opened.push(url);
+      return 1;
+    },
+  });
+  const externalHost = createTabHost({
+    policy: "external",
+    openExternal: async (url) => {
+      const reply = await createExternalOpener({ openExternal: (u) => launched.push(u) }).open(url);
+      if (!reply.ok) {
+        throw new Error(reply.error);
+      }
+    },
+  });
+  // Pre-fix this is where they split: the window branch ACCEPTED (one pass, raw under the
+  // cap) while the external branch's re-check refused. Now one message from both.
+  const threw = async (host) => {
+    try {
+      await host.open({ url: overCapAsHref });
+      return null;
+    } catch (error) {
+      return error.message;
+    }
+  };
+  const [viaWindow, viaExternal] = [await threw(windowHost), await threw(externalHost)];
+  assert.ok(viaExternal, "the external policy must refuse it");
+  assert.strictEqual(viaWindow, viaExternal, "both policies refuse the over-cap href alike");
+  assert.match(viaWindow, /^refused to open a URL that is not http\(s\): /);
+  assert.deepEqual(opened, [], "no window for an href the cap exists to bound");
+  assert.deepEqual(launched, [], "and no browser either");
+
+  // The cap still bounds only the CAP, not http(s) in general: a normal long URL under it
+  // opens through both policies, href and all.
+  const underCap = `https://example.com/search?q=${"a".repeat(8000)}`;
+  assert.deepStrictEqual(await externalHost.open({ url: underCap }), {
+    via: "external",
+    handle: null,
+  });
+  assert.equal(launched.length, 1, "the under-cap href reached the launcher");
+  assert.equal(launched[0], underCap, "as the normalized href, handed once");
+  assert.deepStrictEqual(await windowHost.open({ url: underCap }), {
+    via: "window",
+    handle: 1,
+  });
+  assert.deepEqual(opened, [underCap]);
 });
 
 test("the window policy still opens http(s) and the extension's own rozenite:// pages", async () => {

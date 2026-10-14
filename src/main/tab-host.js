@@ -179,8 +179,9 @@ const createTabHost = ({
       // injected opener. The shipped wiring does filter — `attachTabHost` injects
       // `external-open.js`'s opener, which checks — but a filter that lives only inside one
       // injection is a filter a future caller can switch off by injecting `shell.openExternal`
-      // directly. `openableUrl` is idempotent, so running it twice on the shipped path checks
-      // the same URL and hands over the same string.
+      // directly. `openableUrl` is idempotent — every check judges the href it returns, the
+      // length cap included — so running it twice on the shipped path checks the same URL and
+      // hands over the same string.
       const allowed = openableUrl(url);
       if (!allowed) {
         throw new Error(refusalMessage(url));
