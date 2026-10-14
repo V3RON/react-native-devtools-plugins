@@ -32,12 +32,13 @@ When a fix is too expensive or impossible, we live with the gap and say so in
 
 ### 1.1 The short answer
 
-**Two filesystem gaps are reachable from ordinary extension code today.** Both cross line (b),
-and both are cheap to close. **No route from extension page code to Node was found.**
+**Two filesystem gaps were reachable from ordinary extension code.** Both cross line (b),
+and both are cheap to close. **F1 (reads) is closed**; F2 (deletes) is open, and its ~30 lines
+are what is left of line (b). **No route from extension page code to Node was found.**
 
 | # | Finding | Line | Evidence | Fix (estimate) |
 | --- | --- | --- | --- | --- |
-| F1 | `rozenite://` containment is checked on the path string only, not on the resolved path. A symlink inside an extension folder is followed. | (b) read | [measured] | ~6 lines |
+| F1 | `rozenite://` containment was checked on the path string only, not on the resolved path. A symlink inside an extension folder was followed. **Fixed:** containment compares the `realpath` of root and target, and a symlinked extension root is refused by the server as well as skipped by the scan. | (b) read | was [measured]; closed by [test: `tests/extension-symlink-containment.test.js` + `tests/background-worker-electron.test.js` (suite "a background context cannot be claimed from a page")] | ~6 lines — **done** |
 | F2 | A failed or cancelled `chrome.downloads.download` removes the target path, even when that file existed before. | (b) delete | [measured] | ~30 lines |
 
 Three more findings are ambient authority rather than filesystem. They are listed here because
@@ -59,9 +60,14 @@ they are equally cheap:
 - **No write outside `~/Downloads` or a path the user picked in a dialog.** `safeName` drops
   every directory component [measured, §3.3]. `fixedPath` is reachable only from the frontend
   [code, §3.3].
-- **No path traversal through `rozenite://`.** `../` and `?script=../` both return 404
-  [test: `tests/background-worker-electron.test.js:604-677`]. F1 is the symlink case, which
-  that guard never covered.
+- **No path traversal through `rozenite://`, and no symlink escape either.** `../` and
+  `?script=../` both return 404, and so does every symlink shape that would leave the
+  folder — a file link, a directory link, or a contained link with `..` joined on after
+  it [test: `tests/background-worker-electron.test.js` (suite "a background context
+  cannot be claimed from a page")]. Containment is checked on `fs.realpathSync` of the
+  root and the target, not on path text (`resolveInsideExtension`,
+  `src/main/extension-server.js`) [test: `tests/extension-symlink-containment.test.js`].
+  What the guard is *not* is a same-origin check — §7, item 8.
 - **The frontend's file channels are refused to every extension context.** `HOST_SAVE`,
   `HOST_APPEND`, `HOST_CLOSE_FILE`, `HOST_OPEN_EXTERNAL` and `HOST_CONFIG` are gated by
   `isFrontendFrame` (`src/main/ipc.js:822-839`, `src/main/frontend-frame.js:50-57`) [code].
@@ -78,7 +84,7 @@ they are equally cheap:
 | 5 | `rozenite://` has no per-extension origin isolation; the fix may be a few lines in the handler | **Corrected.** Origins *are* distinct: cross-extension DOM access throws `SecurityError` [measured]. What is missing is a CORS check on the custom-scheme loader: even a `no-cors` fetch comes back `basic` with a readable body [measured]. **The fix cannot live in `protocol.handle`:** its `Request` carries no `Origin` and an empty `referrer` [measured]. `session.webRequest.onBeforeRequest` *does* fire for the scheme, with `details.frame.url` naming the requester [measured]. That fix is ~30 lines (§4, L6). The comment at `src/main/frame-security.js:62-65` ("shares one origin") is wrong. `:33-35` says the scheme is registered `secure`, but the code (`extension-server.js:110`) does not register it so. |
 | 6 | `sandbox:false` ⇒ renderer compromise = Node compromise; `nodeIntegrationInSubFrames` is load-bearing | **Confirmed, crux below.** Measured on Electron 38: with `sandbox:true` + `nodeIntegrationInSubFrames:true`, the preload still runs in `rozenite://` iframes (`process.sandboxed === true`). Its `require` resolves `electron` / `events` / `timers` / `url` only; `fs`, `path` and `./local` fail. With the flag false, no iframe preload runs at all. So under sandbox the flag **stays true**; it is the "run preloads in subframes" switch. |
 | 7 | `host_permissions` excluded from the gate; `permissions.request` grants nothing | **Confirmed.** `host_permissions` guards no capability here, in either direction. It does not limit egress, and the scheme is not `corsEnabled`, so it does not grant Chrome's CORS exemption either [inferred, unmeasured]. It is theater. §4 L10 says not to make it real. |
-| 8 | "Installed" = a folder in `extensions/`, with no signature, review, or lifecycle UI | **Confirmed.** Minor addition: `extensions.js:16-17,37` uses `Dirent.isDirectory()`, so a *symlinked* extension folder is not scanned, yet the file server would still serve it [code]. |
+| 8 | "Installed" = a folder in `extensions/`, with no signature, review, or lifecycle UI | **Confirmed.** Minor addition: `extensions.js:16-17,37` uses `Dirent.isDirectory()`, so a *symlinked* extension folder is not scanned, yet the file server would still serve it [code]. **Closed:** the server refuses a linked root too, so both layers now hold the same rule — a symlinked folder is never an extension root [test: `tests/extension-symlink-containment.test.js`] |
 
 **The sandbox crux, unhedged.** `sandbox:true` does **nothing** against ordinary extension code
 that follows the API. That code already cannot reach Node (fact 6, [test]). Sandbox contains
@@ -126,8 +132,8 @@ developer opted into.
 
 | Read | Where | Path source | Verdict |
 | --- | --- | --- | --- |
-| `rozenite://<id>/<path>` file | `extension-server.js:273-307` → `resolveExtensionFile` `:72-78` → `resolveInsideExtension` `:53-63` | URL | **F1**: `path.resolve` + prefix test, then `fs.statSync` / `net.fetch(file://)` follow links. Measured against the production module: a file link and a directory link inside the folder were both served from outside it. |
-| Manifest, `_locales`, CSS localisation | `extension-server.js:125-151`, `:239-271`; `i18n-host.js` | fixed names under the root | Same resolver, so the same symlink exposure (JSON/CSS parsers limit what comes back) [inferred] |
+| `rozenite://<id>/<path>` file | `extension-server.js` → `resolveExtensionFile` → `resolveInsideExtension` | URL | Was **F1**: `path.resolve` + prefix test, then `fs.statSync` / `net.fetch(file://)` follow links. Measured against the production module: a file link and a directory link inside the folder were both served from outside it. **Closed** — the guard `lstat`s the root (a linked root is refused, matching the scan) and applies the prefix rule to `fs.realpathSync` of root and target [test: `tests/extension-symlink-containment.test.js` + the real-Electron suite named in §1.2]. |
+| Manifest, `_locales`, CSS localisation | `extension-server.js` (manifest reader, `serveI18nBundle`, `serveLocalizedCss`); `i18n-host.js` | fixed names under the root | Same resolver, so the same symlink exposure (JSON/CSS parsers limit what comes back) [inferred]. Now closed with it; the main-side reads through these paths are asserted to still work, including an in-folder-linked `_locales` [test: `tests/extension-symlink-containment.test.js`] |
 | Bootstrap `?script=` | `extension-server.js:213-237` | query | Contained [test] |
 | `chrome.downloads` source URL | `save-service.js:538-544` (`node-fetch` in **main**) | extension | Main fetches any http(s) URL with no CORS. The body goes to disk, not back to the extension. Only success/failure and the status text return. Comparable to Chrome's download fetch [inferred]. Accepted, §7. |
 | Notification icon | `notification-host.js:60-77` | extension | `iconUrl` is passed but never loaded by the Electron notifier (`:157-170`) [code] |
@@ -181,7 +187,7 @@ host then acts on.
 | `RUNTIME_GET_MANIFEST`, `RUNTIME_REGISTER` | frame URL host | nothing | Sound |
 | `RUNTIME_SEND_MESSAGE/RESPONSE/CONNECT/PORT_*` | registered principal | port / request ids, router-scoped | Sound [test: messaging-frames] |
 | `STORAGE_CALL` | principal + `storage` grant | area (validated), keys | Sound |
-| `EXT_PANEL_CREATE` | principal; page must be a file of *this* extension (`ipc.js:446-473`) | page path inside own folder | Sound (but see F1 for "inside") |
+| `EXT_PANEL_CREATE` | principal; page must be a file of *this* extension (`ipc.js:446-473`) | page path inside own folder | Sound |
 | `DEVTOOLS_EVAL`, `DEVTOOLS_RELOAD` | principal **only** | expression / `injectedScript` (consented capability) | **F5**: no DevTools-context or `devtools_page` check |
 | `NETWORK_SUBSCRIBE/GET_HAR/GET_STATUS/GET_BODY` | principal; `webRequest`-only kinds filtered (`delivery-scope.js`) | `requestId` | **F5** for bodies and HAR from non-DevTools contexts |
 | `TABS_TARGET_INFO/OPEN/CLOSE/SEND_TO_APP` | principal + `tabs` | URL (policy `none` by default; `external` = http(s) allowlist); window handle | Sound. Under `DEVTOOLS_TABS_OPEN=window` the URL is not scheme-filtered and the window has no guards (`tab-host.js:146-150`); it gets Electron's default sandboxed, preload-less prefs [inferred] |
@@ -218,7 +224,7 @@ Goal state, one sentence per asset:
 
 | Layer | Design | Electron 38 primitives | Cost | Stance |
 | --- | --- | --- | --- | --- |
-| **L1 containment on resolved paths** | `resolveInsideExtension` also compares realpaths of target and root (see §6 step 1) | `fs.realpathSync` | ~6 lines | **Worth doing, first** |
+| **L1 containment on resolved paths** | `resolveInsideExtension` also compares realpaths of target and root (see §6 step 1) | `fs.realpathSync` | ~6 lines | **DONE** (F1) |
 
 | **L2 save broker invariant** | Write to a sibling temp file, then `rename`. Create the final name with exclusive-create (`wx`) and Chrome's ` (1)` uniquify on `EEXIST`. Cleanup only ever touches the temp file. `fixedPath` (frontend re-save) uses the same temp + rename. Do not implement `conflictAction:"overwrite"` for extensions (keep reporting it). Fix the `"unique"` → `"uniquify"` spelling. | `fs.promises.open(…, "wx")`, `rename` | ~30 lines + test edits | **Worth doing, first** |
 | **L3 IPC broker** | Already in place: identity from frame, principal pinning, double permission enforcement, `isFrontendFrame` on file channels. **Add:** (i) `isFrontendFrame` on `PREF_*`, `WINDOW_*`, `SHOW_CONTEXT_MENU`; (ii) a `devtoolsCaller(event)` = registered principal **and** `event.sender === getFrontendContents()` **and** the manifest declares `devtools_page`, required by `DEVTOOLS_EVAL/RELOAD`, `NETWORK_GET_BODY`, and by `NETWORK_SUBSCRIBE/GET_HAR/GET_STATUS` unless the frame holds `webRequest`; (iii) delete the unused `Store.initRenderer()`. Keep the namespaces (shape-first rule); fail the call with lastError. | `ipcMain.handle`, `WebFrameMain` | ~25 lines | **Worth doing** |
@@ -276,9 +282,10 @@ Footnotes:
 1. Every preload-backed feature depends on the bundle reproducing today's module graph. No
    behavior change is intended; the whole Electron suite is the net.
 2. Realpath containment applies to every resolver caller (manifest, `_locales`, CSS,
-   bootstrap `?script=`, content-script `js`). Legitimate in-folder files are unaffected, and
-   so is an extension folder that is itself a symlink (the root's realpath is the
-   reference).
+   bootstrap `?script=`, content-script `js`). Legitimate in-folder files are unaffected.
+   A symlinked extension *folder* is the one thing that changed from the audit's assumption:
+   the decided policy is that a link is never an extension root, so the server refuses it the
+   way the scan already skips it (`src/main/extension-server.js`, issue #21).
 3. Calls from a worker, an options page, or an extension without `devtools_page` now fail
    with lastError. `webRequest` in a worker keeps working via its grant.
 4. Temp + rename; a name clash yields ` (1)`, not an overwrite.
@@ -291,7 +298,7 @@ Footnotes:
 
 | Cell(s) | Existing test | Assertion to add (or change) |
 | --- | --- | --- |
-| S1 i18n / worker / content (²) | `tests/background-worker-electron.test.js` (suite at `:570`), `tests/i18n-electron.test.js`, `tests/content-scripts-registry.test.js` | Stage an extension with an in-folder symlink resolving outside the root: the fetch is 404, while a symlinked extension *root* still serves. Existing traversal and bootstrap assertions stay green. |
+| S1 i18n / worker / content (²) | `tests/background-worker-electron.test.js` (suite "a background context cannot be claimed from a page"), `tests/i18n-electron.test.js`, `tests/content-scripts-registry.test.js` | **Done.** Stage an extension with an in-folder symlink resolving outside the root: the fetch is 404, while an in-folder link still serves — and a symlinked extension *root* is refused by the server too, the way the scan already skips it. Existing traversal and bootstrap assertions stay green. New coverage: `tests/extension-symlink-containment.test.js`. |
 | S1 downloads / save (⁴) | `tests/save-service.test.js`, `tests/host-primitives.test.js` (real `fs` at `:81`, `:445`) | A pre-existing file survives (a) a failed fetch, (b) a malformed `data:` URL, (c) cancel. A clashing name produces ` (1)`. **Change** `:272-278` to expect the *temp* path unlinked. A failed re-save via `fixedPath` keeps the earlier file. |
 | S2 network / eval (³) | `tests/extension-frame-electron.test.js` (harness registers its host as frontend at `extension-frame-harness.js:336`), `tests/inspected-window.test.js`, `tests/delivery-scope.test.js`, `tests/background-worker-electron.test.js` | A panel frame still evaluates. A worker's `inspectedWindow.eval` returns `isError` with the DevTools-context reason. graphql's worker still receives `webRequest` deliveries. `NETWORK_GET_BODY` from a worker is refused. |
 | S2 windows (⁵) | `tests/background-worker-electron.test.js`, `tests/options-and-requests.test.js` | A worker that sets `location.href` to http stays on its bootstrap URL. `window.open` from a worker creates no window (count `BrowserWindow.getAllWindows()`). |
@@ -310,14 +317,22 @@ will be folded in later may reorder steps 1–3. Nothing here argues for step 4 
 
 **Step 1 — filesystem containment (F1 + F2).**
 
+- *Status:* **the F1 half is done** (reads). `resolveInsideExtension` compares
+  `fs.realpathSync` of the root and the target, refuses a symlinked root (the rule the
+  scan already followed), and keeps in-folder links working — see
+  `src/main/extension-server.js` and `tests/extension-symlink-containment.test.js`.
+  The F2 half (writes/deletes) is open; `save-service.test.js` still pins the old
+  behavior at `:272-278`.
 - *Closes:* line (b) completely: reads stay inside the folder, and no write can modify or
   delete a pre-existing file.
 - *Cost:* ~40 lines in `extension-server.js` and `save-service.js`, plus the test edits in §5.
   About half a day.
 - *Could break:* an extension whose files are symlinks *within* its own folder (still fine);
   code that expects a re-download to overwrite (it now gets ` (1)`, as in Chrome).
-- *Proof:* `save-service.test.js`, `host-primitives.test.js`, `background-worker-electron.test.js`
-  (§5 rows S1).
+- *Proof:* `tests/extension-symlink-containment.test.js` (F1, unit level, real links), the
+  real-Electron suite in `tests/background-worker-electron.test.js` (F1 as a renderer's
+  `fetch`), `save-service.test.js`, `host-primitives.test.js`,
+  `background-worker-electron.test.js` (§5 rows S1).
 
 **Step 2 — ambient-authority gates (F3 + F4 + F5).**
 
@@ -417,7 +432,9 @@ lived in `/tmp`; nothing in the repo was changed by them.
 - **F1:** a standalone Electron app that `require`s the worktree's
   `src/main/extension-server.js`, with `DEVTOOLS_EXTENSIONS_DIR` pointing at a temp folder.
   Content outside the extension root was served for both a file symlink and a directory
-  symlink.
+  symlink. That probe is now a committed test instead of a script in `/tmp`:
+  `tests/extension-symlink-containment.test.js` (real links, the guard's verdict) plus the
+  symlink cases in the real-Electron suite in `tests/background-worker-electron.test.js`.
 - **Fact 5:** a two-host custom scheme registered with the same privileges as `rozenite`.
   Cross-host fetch was readable (`basic` even for `no-cors`); cross-host DOM access threw
   `SecurityError`. The `protocol.handle` request had no `Origin` and an empty `referrer`.

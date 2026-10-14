@@ -190,7 +190,8 @@
 - **The `rozenite://` scheme has no per-extension origin isolation, and that is measured, not
   assumed.** The traversal guard stops a path from escaping its own folder inside one request,
   asserted from inside a real extension frame (`../` → 404; a bootstrap `?script=../sibling/x`
-  → 404). It was never a same-origin check: a page in extension A can
+  → 404; a symlink out of the folder → 404, resolved on `fs.realpath` —
+  `tests/extension-symlink-containment.test.js`). It was never a same-origin check: a page in extension A can
   `fetch("rozenite://B/file.js")` and read the body. Verified under BOTH the old
   `registerFileProtocol` handler and the current `protocol.handle` one — identical 200 with the
   real contents — so the migration did not open this. Closing it needs per-origin isolation for
