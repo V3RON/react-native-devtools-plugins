@@ -38,7 +38,7 @@ are what is left of line (b). **No route from extension page code to Node was fo
 
 | # | Finding | Line | Evidence | Fix (estimate) |
 | --- | --- | --- | --- | --- |
-| F1 | `rozenite://` containment was checked on the path string only, not on the resolved path. A symlink inside an extension folder was followed. **Fixed:** containment compares the `realpath` of root and target, and a symlinked extension root is refused by the server as well as skipped by the scan. | (b) read | was [measured]; closed by [test: `tests/extension-symlink-containment.test.js` + `tests/background-worker-electron.test.js` (suite "a background context cannot be claimed from a page")] | ~6 lines — **done** |
+| F1 | `rozenite://` containment was checked on the path string only, not on the resolved path. A symlink inside an extension folder was followed. **Fixed:** containment compares the `realpath` of root and target, and a symlinked extension root is refused by the server as well as skipped by the scan. Re-audit found the claim had been made one module too early — the host-side i18n/manifest/CSS reads derive their own paths under the root and were still exposed; the same rule now covers them too (see the §3.2 row). | (b) read | was [measured]; closed by [test: `tests/extension-symlink-containment.test.js` + `tests/background-worker-electron.test.js` (suite "a background context cannot be claimed from a page")] | ~6 lines + a second enforcement point — **done** |
 | F2 | A failed or cancelled `chrome.downloads.download` removes the target path, even when that file existed before. | (b) delete | [measured] | ~30 lines |
 
 Three more findings are ambient authority rather than filesystem. They are listed here because
@@ -66,7 +66,14 @@ they are equally cheap:
   it [test: `tests/background-worker-electron.test.js` (suite "a background context
   cannot be claimed from a page")]. Containment is checked on `fs.realpathSync` of the
   root and the target, not on path text (`resolveInsideExtension`,
-  `src/main/extension-server.js`) [test: `tests/extension-symlink-containment.test.js`].
+  `src/main/extension-server.js`) [test: `tests/extension-symlink-containment.test.js`],
+  and the guard hands back the **resolved** path so the read that follows cannot be
+  re-directed by a link that appears after the check. The host-side reads that build
+  their own paths under the root (the message bundle, the manifest, CSS localisation)
+  apply the same rule to those paths in `src/main/i18n-host.js`; without that second
+  enforcement point the claim in this bullet was false for `__rozenite_i18n__` — see the
+  §3.2 row [test: `tests/extension-symlink-containment.test.js` suite 6 + the i18n probe
+  in the suite named above].
   What the guard is *not* is a same-origin check — §7, item 8.
 - **The frontend's file channels are refused to every extension context.** `HOST_SAVE`,
   `HOST_APPEND`, `HOST_CLOSE_FILE`, `HOST_OPEN_EXTERNAL` and `HOST_CONFIG` are gated by
@@ -133,7 +140,7 @@ developer opted into.
 | Read | Where | Path source | Verdict |
 | --- | --- | --- | --- |
 | `rozenite://<id>/<path>` file | `extension-server.js` → `resolveExtensionFile` → `resolveInsideExtension` | URL | Was **F1**: `path.resolve` + prefix test, then `fs.statSync` / `net.fetch(file://)` follow links. Measured against the production module: a file link and a directory link inside the folder were both served from outside it. **Closed** — the guard `lstat`s the root (a linked root is refused, matching the scan) and applies the prefix rule to `fs.realpathSync` of root and target [test: `tests/extension-symlink-containment.test.js` + the real-Electron suite named in §1.2]. |
-| Manifest, `_locales`, CSS localisation | `extension-server.js` (manifest reader, `serveI18nBundle`, `serveLocalizedCss`); `i18n-host.js` | fixed names under the root | Same resolver, so the same symlink exposure (JSON/CSS parsers limit what comes back) [inferred]. Now closed with it; the main-side reads through these paths are asserted to still work, including an in-folder-linked `_locales` [test: `tests/extension-symlink-containment.test.js`] |
+| Manifest, `_locales`, CSS localisation | `extension-server.js` (manifest reader, `serveI18nBundle`, `serveLocalizedCss`); `i18n-host.js` | fixed names under the root | **Was open after F1 was declared closed, and is now actually closed.** The first F1 fix guarded the ROOT of these reads and then stopped: `i18n-host.js` joins its own names (`manifest.json`, `_locales/<locale>/messages.json`) as plain strings and `stat`/`readFile` follow links, so `victim/_locales -> outside` served the outside catalog to `rozenite://victim/__rozenite_i18n__` while the equivalent *file request* was correctly refused — the guard was asked about a path that was not the path being read. The realpath rule now runs again inside `i18n-host.js` on every derived path, including the ones the cache signature `stat`s. Contained reads, including an in-folder-linked `_locales`, are asserted to still work; escaping ones are asserted to leak nothing [test: `tests/extension-symlink-containment.test.js` suite 6, and the real-Electron i18n probe in §1.2] |
 | Bootstrap `?script=` | `extension-server.js:213-237` | query | Contained [test] |
 | `chrome.downloads` source URL | `save-service.js:538-544` (`node-fetch` in **main**) | extension | Main fetches any http(s) URL with no CORS. The body goes to disk, not back to the extension. Only success/failure and the status text return. Comparable to Chrome's download fetch [inferred]. Accepted, §7. |
 | Notification icon | `notification-host.js:60-77` | extension | `iconUrl` is passed but never loaded by the Electron notifier (`:157-170`) [code] |
@@ -224,7 +231,7 @@ Goal state, one sentence per asset:
 
 | Layer | Design | Electron 38 primitives | Cost | Stance |
 | --- | --- | --- | --- | --- |
-| **L1 containment on resolved paths** | `resolveInsideExtension` also compares realpaths of target and root (see §6 step 1) | `fs.realpathSync` | ~6 lines | **DONE** (F1) |
+| **L1 containment on resolved paths** | `resolveInsideExtension` also compares realpaths of target and root and returns the resolved path (see §6 step 1). `i18n-host.js` applies the same rule to the paths *it* derives, because those never pass the request-time guard | `fs.realpathSync` | ~6 lines + a second enforcement point | **DONE** (F1) |
 
 | **L2 save broker invariant** | Write to a sibling temp file, then `rename`. Create the final name with exclusive-create (`wx`) and Chrome's ` (1)` uniquify on `EEXIST`. Cleanup only ever touches the temp file. `fixedPath` (frontend re-save) uses the same temp + rename. Do not implement `conflictAction:"overwrite"` for extensions (keep reporting it). Fix the `"unique"` → `"uniquify"` spelling. | `fs.promises.open(…, "wx")`, `rename` | ~30 lines + test edits | **Worth doing, first** |
 | **L3 IPC broker** | Already in place: identity from frame, principal pinning, double permission enforcement, `isFrontendFrame` on file channels. **Add:** (i) `isFrontendFrame` on `PREF_*`, `WINDOW_*`, `SHOW_CONTEXT_MENU`; (ii) a `devtoolsCaller(event)` = registered principal **and** `event.sender === getFrontendContents()` **and** the manifest declares `devtools_page`, required by `DEVTOOLS_EVAL/RELOAD`, `NETWORK_GET_BODY`, and by `NETWORK_SUBSCRIBE/GET_HAR/GET_STATUS` unless the frame holds `webRequest`; (iii) delete the unused `Store.initRenderer()`. Keep the namespaces (shape-first rule); fail the call with lastError. | `ipcMain.handle`, `WebFrameMain` | ~25 lines | **Worth doing** |
@@ -319,8 +326,11 @@ will be folded in later may reorder steps 1–3. Nothing here argues for step 4 
 
 - *Status:* **the F1 half is done** (reads). `resolveInsideExtension` compares
   `fs.realpathSync` of the root and the target, refuses a symlinked root (the rule the
-  scan already followed), and keeps in-folder links working — see
-  `src/main/extension-server.js` and `tests/extension-symlink-containment.test.js`.
+  scan already followed), keeps in-folder links working, and returns the RESOLVED path.
+  The same rule covers the host-side reads that derive their own paths under the root,
+  enforced in `src/main/i18n-host.js` — the gap a re-audit found after this was first
+  marked done, and the reason "the guard is in one place" has to name both places.
+  See `src/main/extension-server.js` and `tests/extension-symlink-containment.test.js`.
   The F2 half (writes/deletes) is open; `save-service.test.js` still pins the old
   behavior at `:272-278`.
 - *Closes:* line (b) completely: reads stay inside the folder, and no write can modify or
