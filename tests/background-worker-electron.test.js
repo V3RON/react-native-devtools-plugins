@@ -591,7 +591,14 @@ suite(
 
     const extensionsDir = path.join(root, "extensions");
     stageExtension(extensionsDir, "a.local", {
-      "manifest.json": JSON.stringify({ name: "A", version: "1", manifest_version: 3 }),
+      // `default_locale` makes the host build this folder's message bundle, which is
+      // the read the `_locales` link below aims at (see the assertion on `i18nBundle`).
+      "manifest.json": JSON.stringify({
+        name: "A",
+        version: "1",
+        manifest_version: 3,
+        default_locale: "en",
+      }),
       "__rozenite_background__": "<html><body>SHADOWED</body></html>",
       "probe.html": `<!DOCTYPE html><html><body><script src="/probe.js"></script></body></html>`,
       "probe.js": `
@@ -621,6 +628,21 @@ suite(
           grab("/alias.js"),                     // a link that stays inside (own.js)
           grab("/shortcut/deep.js"),             // a directory link that stays inside
           grab("rozenite://c.local/own.js"),     // a LINKED EXTENSION ROOT
+          // The host-side i18n route: the bundle is built from the _locales folder by
+          // MAIN, from a path that never passes the request guard (see the _locales
+          // link staged below). The bundle is several KB of predefined messages, so the probe reports what
+          // matters about the WHOLE body rather than a truncated slice of it — a leak
+          // must not be able to hide past a body cap.
+          fetch("/__rozenite_i18n__", { cache: "no-store" }).then(
+            (r) => r.text().then((t) => ({
+              url: "/__rozenite_i18n__",
+              status: r.status,
+              bodyLength: t.length,
+              outsideContents: /OUTSIDE-/.test(t),
+              outsideMessage: /extName/.test(t),
+            })),
+            (e) => ({ url: "/__rozenite_i18n__", rejected: String(e.message) })
+          ),
         ]).then((results) => {
           console.log(MARKER + JSON.stringify({ results }));
           // The marker line becomes a probe record in the harness, so it is not
@@ -645,12 +667,21 @@ suite(
     fs.mkdirSync(path.join(outside, "dir"), { recursive: true });
     fs.writeFileSync(path.join(outside, "id_ed25519"), "OUTSIDE-PRIVATE-KEY-CONTENT");
     fs.writeFileSync(path.join(outside, "dir/inside-dir.txt"), "OUTSIDE-VIA-DIRECTORY-LINK");
+    // A whole message catalog outside the folder, reachable only as `_locales`.
+    fs.mkdirSync(path.join(outside, "locales/en"), { recursive: true });
+    fs.writeFileSync(
+      path.join(outside, "locales/en/messages.json"),
+      JSON.stringify({ extName: { message: "OUTSIDE-BUNDLE-SECRET" } })
+    );
     const aRoot = path.join(extensionsDir, "a.local");
     fs.mkdirSync(path.join(aRoot, "inner"), { recursive: true });
     fs.writeFileSync(path.join(aRoot, "inner/deep.js"), "console.log('in-folder-link-content');\n");
     fs.symlinkSync(path.join(outside, "id_ed25519"), path.join(aRoot, "stolen"));
     fs.symlinkSync(path.join(outside, "dir"), path.join(aRoot, "elsewhere"));
     fs.symlinkSync(outside, path.join(aRoot, "wide-open"));
+    // The whole `_locales` folder as a link — the shape the host's own bundle read used
+    // to follow, because a path this file derives never passes the request guard.
+    fs.symlinkSync(path.join(outside, "locales"), path.join(aRoot, "_locales"));
     fs.symlinkSync(path.join(aRoot, "own.js"), path.join(aRoot, "alias.js"));
     fs.symlinkSync(path.join(aRoot, "inner"), path.join(aRoot, "shortcut"));
     // A folder whose whole "install" is a link to a real extension, sitting in the
@@ -689,6 +720,7 @@ suite(
       inFolderFileLink,
       inFolderDirLink,
       linkedRoot,
+      i18nBundle,
     ] = data.results;
 
     // 1. The reserved path is reserved in BOTH directions: a folder that ships a
@@ -776,5 +808,20 @@ suite(
       !/a-local-script/.test(String(linkedRoot.body || "")),
       `nothing is served under a linked id: ${JSON.stringify(linkedRoot)}`
     );
+
+    // 9. The host-side i18n route, which is NOT a file the guard resolves: the bundle
+    //    is assembled by MAIN from `_locales/en/messages.json` under the root, a path
+    //    src/main/i18n-host.js builds itself. One link at `_locales` therefore reached
+    //    the page through `__rozenite_i18n__` while the equivalent file request was
+    //    correctly refused. The answer here is legitimately a 200 (a folder with no
+    //    usable catalog still gets a bundle of predefined messages), so what is
+    //    asserted is the thing that must never happen — the probe's own scan of the
+    //    FULL body for the outside catalog's contents and message names.
+    assert.ok(i18nBundle, "the i18n bundle request was attempted");
+    if (i18nBundle.rejected === undefined) {
+      assert.ok(i18nBundle.bodyLength > 0, `a bundle came back: ${JSON.stringify(i18nBundle)}`);
+      assert.equal(i18nBundle.outsideContents, false, `an escaping _locales must not reach the message bundle: ${JSON.stringify(i18nBundle)}`);
+      assert.equal(i18nBundle.outsideMessage, false, `and neither may its message names: ${JSON.stringify(i18nBundle)}`);
+    }
   }
 );

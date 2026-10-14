@@ -7,9 +7,11 @@
 // page read any file the developer can read, with a plain `fetch("stolen")`: no IPC,
 // no permission, no prompt. The fix compares the REALPATHS of the root and the
 // target; these tests are the ways that rule could be wrong, each with a real link on
-// disk. Every caller inherits it, because every caller goes through this one guard:
-// the scanners' manifest reads, `src/main/content-scripts.js`, and the
-// panel/options/registration gates in `src/main/ipc.js`.
+// disk. Every caller that asks the guard for a path inherits it — the scanners'
+// manifest reads, `src/main/content-scripts.js`, and the panel/options/registration
+// gates in `src/main/ipc.js`. `src/main/i18n-host.js` does NOT ask the guard: it
+// builds its OWN paths under the root, so it applies the same rule to them itself,
+// and that second copy is what makes the claim hold for every read there is (suite 6).
 //
 //   1. a link that escapes the folder is REFUSED — a file link, a directory link, and
 //      an escape reached by joining segments on AFTER the link was followed;
@@ -23,7 +25,12 @@
 //      chrome.i18n bundle, which read the root and `_locales/` rather than a
 //      page-served file, so a realpath change could have broken them silently;
 //   5. a path that simply does not exist is still reported as MISSING, not REFUSED
-//      (the distinction `src/main/content-scripts.js` shows the developer).
+//      (the distinction `src/main/content-scripts.js` shows the developer);
+//   6. the message-bundle and CSS-localisation reads — which build their OWN paths
+//      under the root (`_locales/<locale>/messages.json`) and therefore never pass a
+//      page-facing resolver — are contained by the same rule, inside
+//      `src/main/i18n-host.js`. That is what makes the claim above ("every caller
+//      inherits it") true rather than aspirational.
 //
 // The folder is a temp dir and `config.extensionsDir` is redirected at CALL time — the
 // technique tests/extensions-scan.test.js and tests/content-scripts-registry.test.js
@@ -53,8 +60,18 @@ const {
   scanBackgroundExtensions,
 } = require("../src/main/extensions");
 const i18nHost = require("../src/main/i18n-host");
+const i18n = require("../src/shared/i18n");
 
 const REAL_EXTENSIONS_DIR = config.extensionsDir;
+
+/** The path the guard is expected to hand back for a contained name that exists. */
+const real = (filePath) => fs.realpathSync(filePath);
+
+/** A log that collects warnings instead of printing them (as tests/i18n-host.test.js does). */
+const quiet = () => {
+  const warnings = [];
+  return { warnings, log: { warn: (message) => warnings.push(message), log() {}, error() {} } };
+};
 
 // Unprivileged symlink creation works on macOS and Linux; on Windows it needs
 // developer mode or elevation. A run that cannot create a link cannot test this rule
@@ -164,7 +181,10 @@ suite("a link inside an extension folder that points outside is refused", { time
       // hands out are its real files, and none of them carries the outside secret.
       const own = ["manifest.json", "own.js", "inner/nested.js"].map((innerPath) => {
         const resolved = resolveExtensionFile("steal", innerPath);
-        assert.strictEqual(resolved, path.join(root, `extensions/steal/${innerPath}`));
+        // The guard hands back the REAL path, so the read walks no link component
+        // (src/main/extension-server.js). On macOS the temp root is itself behind
+        // `/var -> /private/var`, hence `real` rather than the text path.
+        assert.strictEqual(resolved, real(path.join(root, `extensions/steal/${innerPath}`)));
         assert.ok(fs.existsSync(resolved));
         return resolved;
       });
@@ -202,9 +222,12 @@ suite("a link that stays inside the extension folder still resolves", { timeout:
         assert.notStrictEqual(resolved, null, `"${innerPath}" must resolve`);
         assert.strictEqual(
           resolved,
-          path.join(extensionsDir, `linked/${innerPath}`),
-          `"${innerPath}" resolves to the contained name`
+          real(path.join(extensionsDir, `linked/${innerPath}`)),
+          `"${innerPath}" resolves to its real, contained path`
         );
+        // The contract that closes the resolve-then-read window: what the guard hands
+        // back is already fully resolved, so the read that follows walks no link.
+        assert.strictEqual(resolved, real(resolved), `"${innerPath}" is returned link-free`);
         assert.ok(fs.statSync(resolved).isFile(), `"${innerPath}" must be a readable file`);
         return fs.readFileSync(resolved, "utf8");
       };
@@ -213,10 +236,15 @@ suite("a link that stays inside the extension folder still resolves", { timeout:
       assert.match(read("shortcut/nested/deep.js"), /deep/);
       assert.match(read("paths/deep.js"), /deep/);
       assert.match(read("real/own.js"), /fine/, "and the plain path each one aliases");
+      // Which is what the guard's answer for a link now is: the file it really is.
+      assert.strictEqual(
+        resolveExtensionFile("linked", "alias.js"),
+        path.join(real(path.join(extensionsDir, "linked")), "real/own.js")
+      );
 
       // The folder itself is not under suspicion: only paths are.
       assert.ok(extensionFolders().includes("linked"), "the folder is still discovered");
-      assert.strictEqual(resolveInsideExtension("linked", ""), path.join(extensionsDir, "linked"));
+      assert.strictEqual(resolveInsideExtension("linked", ""), real(path.join(extensionsDir, "linked")));
     }
   );
 });
@@ -354,10 +382,12 @@ suite("the reserved inner paths keep their rules, and main-side reads still reso
       //     is served and an escaping one is refused, exactly like any other file.
       assert.strictEqual(
         resolveExtensionFile("reserved", "bg.js"),
-        path.join(extensionsDir, "reserved/bg.js")
+        real(path.join(extensionsDir, "reserved/bg.js"))
       );
+      // A linked script resolves to the file it really is, and that is the answer the
+      // server reads — the resolve-then-read window is why it is the real path.
       const linkedScript = resolveExtensionFile("reserved", "alias-bg.js");
-      assert.strictEqual(linkedScript, path.join(extensionsDir, "reserved/alias-bg.js"));
+      assert.strictEqual(linkedScript, real(path.join(extensionsDir, "reserved/bg.js")));
       assert.match(fs.readFileSync(linkedScript, "utf8"), /log\.js/, "and it is readable");
       assert.strictEqual(resolveExtensionFile("reserved", "stolen.js"), null);
       assert.strictEqual(resolveExtensionFile("reserved", "../real.ext/bg.js"), null);
@@ -365,7 +395,7 @@ suite("the reserved inner paths keep their rules, and main-side reads still reso
       // 4b. The i18n bundle: the root resolves, and the messages behind the in-folder
       //     link reach main exactly as before.
       const root = resolveInsideExtension("reserved", "");
-      assert.strictEqual(root, path.join(extensionsDir, "reserved"));
+      assert.strictEqual(root, real(path.join(extensionsDir, "reserved")));
       const warnings = [];
       const log = { warn: (message) => warnings.push(message), log() {}, error() {} };
       const bundle = i18nHost.loadBundle({
@@ -396,8 +426,8 @@ suite("the reserved inner paths keep their rules, and main-side reads still reso
       const cssPath = resolveExtensionFile("reserved", "styles-link/panel.css");
       assert.strictEqual(
         cssPath,
-        path.join(extensionsDir, "reserved/styles-link/panel.css"),
-        "a stylesheet behind an in-folder link resolves"
+        real(path.join(extensionsDir, "reserved/styles/panel.css")),
+        "a stylesheet behind an in-folder link resolves to the real file"
       );
       assert.strictEqual(i18nHost.cssUsesMessages(cssPath), true, "the marker is seen");
       assert.strictEqual(
@@ -457,6 +487,159 @@ suite("a path that does not exist is missing, not refused", { timeout: 60000 }, 
       // A path that DOES exist outside, by contrast, is a hard refusal (suite 1) —
       // "missing" is reserved for paths with nothing behind them at all.
       assert.strictEqual(resolveExtensionFile("plain", "out-link/id_ed25519"), null);
+    }
+  );
+});
+
+// ── 6. the reads that build their OWN paths under the root ───────────────────
+suite("the i18n and CSS-localisation reads are contained too: an escaping _locales is not read", { timeout: 60000 }, () => {
+  // The page-facing guard sees only the URL's inner path, so it refused
+  // `_locales/en/messages.json` while the message bundle the HOST builds was
+  // assembled from `path.join(root, "_locales", dir, "messages.json")` — a path that
+  // never passed a guard. One link, `victim/_locales -> outside`, therefore served the
+  // outside JSON to `rozenite://victim/__rozenite_i18n__` (the reviewer's repro),
+  // through the route `serveI18nBundle`/`serveLocalizedCss` -> i18n-host. So the
+  // realpath rule lives INSIDE src/main/i18n-host.js, on every path it derives.
+  // The assertion is "the outside bytes never reach the bundle", not "404": a bundle
+  // with no catalog is a legitimate answer (an extension with no `_locales` gets one),
+  // and it is what `serveI18nBundle` returns here too.
+  const OUTSIDE_BUNDLE = {
+    "outside/locales/en/messages.json": {
+      extName: { message: "OUTSIDE-BUNDLE-SECRET" },
+      hello: { message: "OUTSIDE-HELLO-SECRET" },
+    },
+    // Reached only if a derived path is trusted without containment: the catalog the
+    // manifest's `default_locale` selects, behind a link at the locale directory.
+    "outside/by-locale/en/messages.json": {
+      extName: { message: "OUTSIDE-LOCALE-DIR-SECRET" },
+    },
+  };
+
+  // 6a. `_locales` itself is the link.
+  withTree(
+    {
+      ...OUTSIDE_BUNDLE,
+      "extensions/victim/manifest.json": {
+        name: "__MSG_extName__",
+        version: "1",
+        manifest_version: 3,
+        default_locale: "en",
+      },
+      "extensions/victim/_locales": { link: "../../outside/locales" },
+      "extensions/victim/styles/panel.css": "a{content:'__MSG_hello__'}\n",
+    },
+    ({ extensionsDir }) => {
+      // The page-facing verdict was already correct — which is exactly why this route
+      // looked closed. It has to stay correct.
+      assert.strictEqual(resolveExtensionFile("victim", "_locales/en/messages.json"), null);
+      assert.strictEqual(resolveExtensionFile("victim", "_locales"), null);
+
+      const root = resolveInsideExtension("victim", "");
+      const { log, warnings } = quiet();
+      const bundle = i18nHost.loadBundle({
+        root,
+        extensionId: "victim",
+        uiLocaleOverride: "en",
+        log,
+      });
+      const rendered = JSON.stringify(bundle);
+      assert.ok(!/OUTSIDE-BUNDLE-SECRET/.test(rendered), "the outside catalog never enters the bundle");
+      assert.ok(!/OUTSIDE-HELLO-SECRET/.test(rendered), "and neither does any message from it");
+      assert.deepStrictEqual(bundle.messages, {}, "no message is served that this folder does not have");
+      assert.strictEqual(
+        i18nHost.localizeManifest({
+          manifest: { name: "__MSG_extName__" },
+          rawText: '{"name":"__MSG_extName__"}',
+          root,
+          extensionId: "victim",
+          uiLocaleOverride: "en",
+          log,
+        }).name,
+        "__MSG_extName__",
+        "so the marker stays unresolved instead of resolving to an outside file"
+      );
+      const css = i18nHost.localizeCssFile({
+        text: fs.readFileSync(resolveExtensionFile("victim", "styles/panel.css"), "utf8"),
+        root,
+        extensionId: "victim",
+        uiLocaleOverride: "en",
+        log,
+      });
+      assert.strictEqual(css, "a{content:'__MSG_hello__'}\n", "and the CSS gets no outside substitution");
+      assert.ok(
+        warnings.some((w) => /_locales/.test(w)),
+        `the refused read is reported, not silent: ${JSON.stringify(warnings)}`
+      );
+    }
+  );
+
+  // 6b. The link is deeper: a real `_locales/en/` whose `messages.json` is a link.
+  // (A LINKED locale directory is not a vector at all — `readdir({ withFileTypes:
+  // true })` + `isDirectory()` never reports a link — which is why this is the shape
+  // that matters, and why the per-entry check exists to keep it that way.)
+  withTree(
+    {
+      ...OUTSIDE_BUNDLE,
+      "extensions/by-locale/manifest.json": {
+        name: "__MSG_extName__",
+        version: "1",
+        manifest_version: 3,
+        default_locale: "en",
+      },
+      // Four levels up: the link lives in `_locales/en/`, so `en` -> `_locales` ->
+      // `by-locale` -> `extensions` -> the temp root.
+      "extensions/by-locale/_locales/en/messages.json": { link: "../../../../outside/by-locale/en/messages.json" },
+      // A real, contained catalog next to it, so the answer cannot be "this folder has
+      // no catalogs at all": containment must refuse the link and keep the real one.
+      "extensions/by-locale/_locales/pt/messages.json": { hello: { message: "Olá" } },
+    },
+    () => {
+      assert.strictEqual(resolveExtensionFile("by-locale", "_locales/en/messages.json"), null);
+      const root = resolveInsideExtension("by-locale", "");
+      const { log, warnings } = quiet();
+      const bundle = i18nHost.loadBundle({
+        root,
+        extensionId: "by-locale",
+        uiLocaleOverride: "pt",
+        log,
+      });
+      assert.ok(
+        !/OUTSIDE-LOCALE-DIR-SECRET/.test(JSON.stringify(bundle)),
+        "the escaping messages.json is not read"
+      );
+      assert.strictEqual(i18n.getMessage(bundle, ["hello"]), "Olá", "the contained catalog still is");
+      assert.ok(
+        warnings.some((w) => /_locales\/en\/messages\.json unreadable/.test(w)),
+        `and the refused read is reported: ${JSON.stringify(warnings)}`
+      );
+    }
+  );
+
+  // 6c. The manifest read, which is the same derive-your-own-path pattern one level up.
+  withTree(
+    {
+      ...OUTSIDE_BUNDLE,
+      "outside/manifest-link/manifest.json": { default_locale: "en", name: "OUTSIDE-MANIFEST-SECRET" },
+      "extensions/fake-manifest/manifest.json": { link: "../../../outside/manifest-link/manifest.json" },
+      "extensions/fake-manifest/_locales/pt/messages.json": { hello: { message: "Olá" } },
+    },
+    () => {
+      // `default_locale` must not be readable from outside the folder, even through the
+      // name every caller starts from.
+      const { log, warnings } = quiet();
+      const bundle = i18nHost.loadBundle({
+        root: resolveInsideExtension("fake-manifest", ""),
+        extensionId: "fake-manifest",
+        uiLocaleOverride: "pt",
+        log,
+      });
+      assert.strictEqual(bundle.defaultLocale, "", "no default locale is taken from outside the folder");
+      assert.ok(!/OUTSIDE-MANIFEST-SECRET/.test(JSON.stringify(bundle)));
+      assert.ok(
+        warnings.some((w) => /manifest\.json/.test(w)),
+        `a manifest the host may not read is reported, not treated as absent: ${JSON.stringify(warnings)}`
+      );
+      assert.strictEqual(i18n.getMessage(bundle, ["hello"]), "Olá", "the contained catalog still is");
     }
   );
 });

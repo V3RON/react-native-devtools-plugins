@@ -29,6 +29,80 @@ const readJson = (file) => {
 };
 
 /**
+ * The realpath rule, applied HERE rather than left to the caller.
+ *
+ * `src/main/extension-server.js` decides containment for the path a REQUEST names,
+ * but the reads in this file are for paths this file DERIVES — `manifest.json`,
+ * `_locales/<locale>/messages.json` — and a derived path never passes that guard.
+ * One `victim/_locales -> outside` link therefore left the message bundle reading
+ * outside the folder while `resolveExtensionFile("victim", "_locales/en/messages
+ * .json")` correctly answered null: the guard looked closed because the request that
+ * was refused was not the request that was read. So containment is decided again
+ * here, on every path derived from `root`, and every caller of this file inherits it
+ * — the protocol handler, the manifest reader, and the CSS localisation alike.
+ *
+ * The anchor is `fs.realpathSync(root)`, i.e. the root this file was handed after the
+ * caller's own check, and the rule is the guard's: the real path of the derived name
+ * must be the root or start with it plus a separator (docs/SECURITY-PLATFORM.md §3.2).
+ *
+ * That rule therefore exists twice: `resolveInsideExtension` in
+ * src/main/extension-server.js, and `containmentFor` here. It cannot be shared,
+ * because extension-server requires THIS module and a shared guard would close the
+ * cycle in the wrong direction — so the two are deliberately the same rule, and a
+ * change to one is a change to the other. It is not one rule enforced in two places by
+ * accident; it is one rule with two enforcement points because one of the readers
+ * derives paths the request-time guard never sees.
+ *
+ * @returns {((innerPath: string) => string) & { realRoot: string }} the REAL path to
+ * read, throwing an `Error` whose `refused` flag says whether the path exists but is
+ * not allowed here (as opposed to simply not being there)
+ */
+const containmentFor = (root) => {
+  let realRoot = "";
+  try {
+    realRoot = fs.realpathSync(root);
+  } catch {
+    // The root itself cannot be resolved: this file can say nothing about any path
+    // under it, so every read is refused rather than trusted. A folder that is not
+    // there has no messages either way.
+    realRoot = null;
+  }
+  const contain = (innerPath) => {
+    if (realRoot === null) {
+      const error = new Error("the extension folder cannot be resolved");
+      error.refused = true;
+      throw error;
+    }
+    let real;
+    try {
+      real = fs.realpathSync(path.resolve(root, innerPath));
+    } catch (error) {
+      // ENOENT/ENOTDIR are the ordinary "this extension has no such file" case (no
+      // `_locales`, or no catalog for this locale); anything else is a path this file
+      // cannot say anything about. Both end the read; only the `refused` flag differs,
+      // and it decides whether the caller stays quiet or reports the path.
+      const missing = error && (error.code === "ENOENT" || error.code === "ENOTDIR");
+      const wrapped = missing
+        ? new Error("no such file")
+        : new Error(`unreadable (${error && error.code})`);
+      wrapped.refused = !missing;
+      throw wrapped;
+    }
+    if (real !== realRoot && !real.startsWith(realRoot + path.sep)) {
+      const error = new Error("refused: it resolves outside the extension folder");
+      error.refused = true;
+      throw error;
+    }
+    return real;
+  };
+  contain.realRoot = realRoot === null ? root : realRoot;
+  return contain;
+};
+
+/** A read of one file under `root`, or the refusal that stopped it. */
+const readUnderRoot = (contain, innerPath) => readJson(contain(innerPath));
+
+/**
  * The host's UI locale and the user's preferred languages.
  *
  * `DEVTOOLS_UI_LOCALE` (config.uiLocale) wins when set — a test and screenshot knob —
@@ -54,18 +128,41 @@ const systemLocale = (override = "") => {
 };
 
 /** Directory names under `_locales`, as { normalized name -> real directory name }. */
-const localeDirectories = (root) => {
+const localeDirectories = (root, contain, warn = () => {}) => {
   const found = {};
+  // The directory itself first: a linked `_locales` is exactly the shape that made
+  // this file read outside the folder, and listing it is already a read of it.
+  try {
+    contain(LOCALES_DIR);
+  } catch (error) {
+    if (error.refused) {
+      warn(`${LOCALES_DIR} is ${error.message}`);
+    }
+    // Not refused: it is simply not there, which is the ordinary case for an
+    // extension with no catalog and must stay silent.
+    return found;
+  }
   try {
     for (const entry of fs.readdirSync(path.join(root, LOCALES_DIR), { withFileTypes: true })) {
       const locale = entry.isDirectory() ? i18n.normalizeLocale(entry.name) : "";
       // `_locales/pt_br` is accepted for `pt_BR`; an exact name wins over a mis-cased one.
-      if (locale && (found[locale] === undefined || entry.name === locale)) {
+      if (!locale) {
+        continue;
+      }
+      try {
+        contain(path.join(LOCALES_DIR, entry.name));
+      } catch (error) {
+        if (error.refused) {
+          warn(`${LOCALES_DIR}/${entry.name} is ${error.message}`);
+        }
+        continue;
+      }
+      if (found[locale] === undefined || entry.name === locale) {
         found[locale] = entry.name;
       }
     }
   } catch {
-    // no _locales folder: a bundle with only the predefined messages
+    // unreadable listing: a bundle with only the predefined messages
   }
   return found;
 };
@@ -78,15 +175,22 @@ const localeDirectories = (root) => {
  * @param {object} [input.log]
  */
 const buildFromDisk = ({ root, extensionId, uiLocale, preferredLanguages, log }) => {
+  const contain = containmentFor(root);
   let defaultLocale = "";
   try {
-    const manifest = readJson(path.join(root, "manifest.json"));
+    const manifest = readUnderRoot(contain, "manifest.json");
     defaultLocale = typeof manifest.default_locale === "string" ? manifest.default_locale : "";
-  } catch {
-    // unreadable manifest: no default locale
+  } catch (error) {
+    // An unreadable or absent manifest means no default locale. A REFUSED one is
+    // reported: a manifest the host is not allowed to read is not the same fact as a
+    // manifest that is not there, and silence here would make the first look like the
+    // second (docs/SECURITY-PLATFORM.md §3.2).
+    if (error.refused) {
+      log.warn(`[i18n] ${extensionId}: manifest.json is ${error.message}`);
+    }
   }
-  const directories = localeDirectories(root);
   const warn = (message) => log.warn(`[i18n] ${extensionId}: ${message}`);
+  const directories = localeDirectories(root, contain, warn);
   if (Object.keys(directories).length > 0 && !i18n.normalizeLocale(defaultLocale)) {
     warn(
       "has a _locales folder but no valid default_locale in manifest.json (Chrome refuses to load it); " +
@@ -101,7 +205,7 @@ const buildFromDisk = ({ root, extensionId, uiLocale, preferredLanguages, log })
       continue;
     }
     try {
-      catalogs[locale] = readJson(path.join(root, LOCALES_DIR, directories[locale], "messages.json"));
+      catalogs[locale] = readUnderRoot(contain, path.join(LOCALES_DIR, directories[locale], "messages.json"));
     } catch (error) {
       warn(`_locales/${directories[locale]}/messages.json unreadable (${error.message}); skipped`);
     }
@@ -115,7 +219,19 @@ const buildFromDisk = ({ root, extensionId, uiLocale, preferredLanguages, log })
 // would be the common case; stat()ing the inputs is the cheap way to know it is still
 // valid, and it keeps "edit messages.json, reload the frame" working without a restart.
 const bundleCache = new Map(); // root -> { signature, bundle }
-const statStamp = (file) => {
+/**
+ * The signature reads go through the same containment as the bundle reads: `stat`
+ * follows links too, so stamping a raw joined name would let a linked catalog report
+ * an outside file's mtime and size to whoever can time a rebuild. Refused or missing
+ * both stamp "-", which is what "no such input" already meant.
+ */
+const statStamp = (contain, innerPath) => {
+  let file;
+  try {
+    file = contain(innerPath);
+  } catch {
+    return "-";
+  }
   try {
     const stat = fs.statSync(file);
     return `${stat.mtimeMs}:${stat.size}`;
@@ -126,13 +242,19 @@ const statStamp = (file) => {
 
 const loadBundle = ({ root, extensionId, uiLocaleOverride = "", log = console }) => {
   const { uiLocale, preferredLanguages } = systemLocale(uiLocaleOverride);
-  const directories = localeDirectories(root);
+  // The signature is keyed on the REAL root, and it covers only directories
+  // containment allowed, so a cache entry can never be reused across two different
+  // folders or carry a locale that was refused here (`contain.realRoot` is the text
+  // root when the root cannot be resolved, which is the case where nothing is cached
+  // as readable anyway).
+  const contain = containmentFor(root);
+  const directories = localeDirectories(root, contain);
   const signature = [
     extensionId,
     uiLocale,
     preferredLanguages.join(","),
-    statStamp(path.join(root, "manifest.json")),
-    ...Object.values(directories).map((dir) => `${dir}=${statStamp(path.join(root, LOCALES_DIR, dir, "messages.json"))}`),
+    statStamp(contain, "manifest.json"),
+    ...Object.values(directories).map((dir) => `${dir}=${statStamp(contain, path.join(LOCALES_DIR, dir, "messages.json"))}`),
   ].join("|");
   const cached = bundleCache.get(root);
   if (cached && cached.signature === signature) {

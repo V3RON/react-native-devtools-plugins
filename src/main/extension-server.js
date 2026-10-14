@@ -68,13 +68,28 @@ const RESERVED_INNER_PATHS = new Set([BACKGROUND_BOOTSTRAP_PATH, I18N_BUNDLE_PAT
  * permissive one. A link that stays INSIDE its extension folder keeps working:
  * the rule is about where a path lands, not about which directory entries are links.
  *
- * Its one limit, stated rather than implied: the check happens at resolve time, so
- * links swapped by another writer while a request is in flight are not atomically
- * contained. Reaching that needs write access to the install folder — the
- * developer's own `extensions/`, where anyone with it can rewrite the extension's
- * files outright (docs/SECURITY-PLATFORM.md §7, item 7).
+ * The guard returns the REALPATH, not the text-contained path, and that is the
+ * second half of the rule: a caller that reads what this returns opens a path with
+ * no link components left in it, so the read cannot be re-directed by a link that
+ * appears after the check. Returning the text path would hand the caller a name
+ * whose meaning can still change underneath it.
  *
- * @returns {string|null} the absolute path, or null when the request is refused
+ * The residual race, stated honestly: between the `realpath` here and the `open`
+ * in the caller, another writer can still swap a PARENT DIRECTORY of the target,
+ * and the inode opened is then not the inode checked. That window is a
+ * confidentiality question — an extension page has no `fs`, so this server IS its
+ * read channel, and a mid-flight swap is a read, not a corruption — and it is
+ * closed only by opening a descriptor relative to a checked directory, which
+ * `net.fetch(file://)` and the plain `fs` reads here cannot do. It is accepted for
+ * the reason §7 item 7 gives: reaching it needs write access to the developer's own
+ * `extensions/` folder, and that access already means rewriting the extension's
+ * own files and running its own code. Integrity is not the mitigation being
+ * claimed here; the point is that the remaining window needs the same privilege as
+ * the thing we already accept.
+ *
+ * @returns {string|null} the real (link-free) path for anything that exists, the
+ * text-contained path for a name with nothing behind it (so a caller can still
+ * answer "missing"), or null when the request is refused
  */
 const resolveInsideExtension = (extensionId, innerPath) => {
   if (!EXTENSION_ID_RE.test(extensionId) || RESERVED_IDS.has(extensionId)) {
@@ -99,10 +114,22 @@ const resolveInsideExtension = (extensionId, innerPath) => {
   if (isLink) {
     return null; // the decided policy: see the docblock — the scanner skips it too
   }
+  // Root and target are resolved in SEPARATE tries, because the two ENOENTs mean
+  // different things: ENOENT on the root means this extension has no folder (the
+  // scanner would not have offered it, so it is a refusal, not a missing file), while
+  // ENOENT on the target means the extension is installed and the name it asked for is
+  // simply not there — the honest "missing" src/main/content-scripts.js reports.
+  // One shared `try` keyed the answer on whichever threw first, so a root that
+  // vanished mid-call returned the text-contained target UNVALIDATED: the fail-open
+  // attached to the wrong operand.
   let realRoot;
-  let realTarget;
   try {
     realRoot = fs.realpathSync(root);
+  } catch {
+    return null;
+  }
+  let realTarget;
+  try {
     realTarget = fs.realpathSync(target);
   } catch (error) {
     // ENOENT / ENOTDIR mean nothing can be BEHIND this path — it does not exist, or
@@ -119,7 +146,7 @@ const resolveInsideExtension = (extensionId, innerPath) => {
   if (realTarget !== realRoot && !realTarget.startsWith(realRoot + path.sep)) {
     return null;
   }
-  return target;
+  return realTarget;
 };
 
 /**
