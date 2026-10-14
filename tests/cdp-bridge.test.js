@@ -17,14 +17,13 @@ const http = require("http");
 const net = require("net");
 const os = require("os");
 const path = require("path");
-const { execFileSync } = require("child_process");
+const { execFileSync, spawn } = require("child_process");
 const WebSocket = require("ws");
 
 const {
   createCdpBridge,
   HOST_ID_BASE,
   REFUSE_CLOSE_CODE,
-  DEFAULTS,
   isLoopbackAddress,
   upgradeAllowed,
 } = require("../src/main/cdp-bridge");
@@ -1056,6 +1055,96 @@ test("an explicit listenHost is honoured (remote-device development)", async (t)
     bridge.listeningAddresses().map((address) => address.address),
     [peer]
   );
+});
+
+/**
+ * Runs `src/tools/rn-cdp.js` the way a developer does and waits for its listening
+ * line, returning the addresses it printed. A child process is the only honest way
+ * to test the CLI — the flag/env resolution happens at its load time. Metro is not
+ * running, which is fine: discovery retries and the socket still binds.
+ */
+const runRnCdp = (t, { args = [], env = {} } = {}) =>
+  new Promise((resolve, reject) => {
+    const child = spawn(
+      process.execPath,
+      [path.join(__dirname, "..", "src", "tools", "rn-cdp.js"), ...args],
+      {
+        // Cleared, not inherited: a developer running the suite with this set would
+        // otherwise change what the no-flag test sees.
+        env: { ...process.env, DEVTOOLS_CDP_HOST: "", ...env },
+        stdio: ["ignore", "pipe", "pipe"],
+      }
+    );
+    t.after(() => child.kill("SIGTERM"));
+    let out = "";
+    const timer = setTimeout(
+      () => reject(new Error(`rn-cdp.js never listened. Output:\n${out}`)),
+      15000
+    );
+    const onData = (chunk) => {
+      out += String(chunk);
+      const match = out.match(/CDP bridge listening on (.*?) \(Metro:/);
+      if (match) {
+        clearTimeout(timer);
+        // The default bind is two addresses separated by ", ", so this is a list;
+        // each test says how many it expects.
+        resolve(match[1].split(", "));
+      }
+    };
+    child.stdout.on("data", onData);
+    child.stderr.on("data", onData);
+    child.once("error", reject);
+    child.once("exit", (code) =>
+      reject(new Error(`rn-cdp.js exited (${code}) before listening:\n${out}`))
+    );
+  });
+
+test("rn-cdp.js binds where it is told: --listen-host, then DEVTOOLS_CDP_HOST", async (t) => {
+  // F3 gave the bridge a loopback default, which took the remote-device relay away
+  // from the one tool people run BECAUSE they want a peer on another machine. `::1`
+  // is the smallest address that proves the value reached `.listen` (the default is
+  // IPv4-first) and it has to come back bracketed, since the log line is what gets
+  // pasted into a browser.
+  const flagPort = await freePort();
+  assert.deepStrictEqual(
+    await runRnCdp(t, { args: ["--listen-host", "::1", "--listen-port", String(flagPort)] }),
+    [`ws://[::1]:${flagPort}`]
+  );
+  // Not just the log line: the address in it is really reachable. No Metro is up,
+  // so this proves the connect, not a session. Closed inline rather than in a
+  // teardown: the child is killed first otherwise, and the reset would surface as an
+  // unhandled 'error' on this side.
+  const byFlag = await dial("ws://[::1]:" + flagPort);
+  await new Promise((resolve) => {
+    byFlag.once("close", resolve);
+    byFlag.close();
+  });
+
+  // Same address by env, the knob the shell reads too — the two must not drift.
+  // Its own port: the first child is still holding that one.
+  const envPort = await freePort();
+  assert.deepStrictEqual(
+    await runRnCdp(t, {
+      args: ["--listen-port", String(envPort)],
+      env: { DEVTOOLS_CDP_HOST: "::1" },
+    }),
+    [`ws://[::1]:${envPort}`]
+  );
+  const byEnv = await dial("ws://[::1]:" + envPort);
+  await new Promise((resolve) => {
+    byEnv.once("close", resolve);
+    byEnv.close();
+  });
+});
+
+test("rn-cdp.js with no --listen-host keeps the loopback default", async (t) => {
+  // The CLI must not become a way around F3 just because it is a tool.
+  const listenPort = await freePort();
+  const listening = await runRnCdp(t, { args: ["--listen-port", String(listenPort)] });
+  assert.deepStrictEqual(listening, [
+    `ws://127.0.0.1:${listenPort}`,
+    `ws://[::1]:${listenPort}`,
+  ]);
 });
 
 test("DEVTOOLS_CDP_ALLOWED_ORIGINS is unset-by-default and additive", () => {
