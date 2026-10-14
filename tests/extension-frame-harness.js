@@ -425,19 +425,38 @@ app
     // already has (Electron 38 does not export the class), and it holds for every
     // frame in every window: Electron hands out the same instance per frame, so one
     // wrapper sees all of them and `this.url` names the addressee.
+    //
+    // What the record can PROVE is bounded by where the patch is installed: after
+    // cdpBridge.start() and after this frontend BrowserWindow exists. A push before
+    // that moment is simply unrecorded, so "absent from the record" never by itself
+    // means "the filter dropped it". Current tests are safe because a frame can only
+    // push after it has subscribed, which is after installation, and because the
+    // completed >= 2 precondition fails loudly if that ever stops holding.
     if (observeFrameSends) {
       const frameProto = Object.getPrototypeOf(win.webContents.mainFrame);
       const originalSend = frameProto.send;
       frameProto.send = function (channel, ...rest) {
         if (channel === NETWORK_DELIVER) {
-          const payload = rest[0] && rest[0].payload;
-          write({
-            kind: "frame-send",
-            channel,
-            to: this.url,
-            payloadKind: payload && payload.kind,
-            requestId: payload && payload.record && payload.record.requestId,
-          });
+          // The recorder must never touch the delivery path. `write` is a
+          // synchronous fs append and can throw, and this call sits INSIDE main's
+          // own `send`; an exception here would unwind into the caller's try/catch
+          // (makeFrameSender's, say), which unregisters the frame on failure. A
+          // harness I/O error would then look exactly like a lost delivery — the
+          // opposite of what this recorder is for. Swallow it and let the real send
+          // through; a broken record shows up as an incomplete record, not a
+          // phantom bug.
+          try {
+            const payload = rest[0] && rest[0].payload;
+            write({
+              kind: "frame-send",
+              channel,
+              to: this.url,
+              payloadKind: payload && payload.kind,
+              requestId: payload && payload.record && payload.record.requestId,
+            });
+          } catch {
+            // deliberately ignored: observation only
+          }
         }
         return originalSend.apply(this, [channel, ...rest]);
       };
