@@ -119,7 +119,8 @@ app.whenReady().then(async () => {
     await call(`InspectorFrontendHost.save("moved.txt", "x", true, false)`);
     await sleep(800);
 
-    // 6. chrome.tabs.create's external policy through the real attachTabHost wiring
+    // 6. chrome.tabs.create's policies through the real attachTabHost wiring: both
+    //    agree about what is openable, and both refuse the same way (F6).
     const tabs = attachTabHost({ policy: "external", bridgeStatus: () => ({ attached: false }) });
     result.tabsHttps = await tabs.open({ url: "https://example.com/from-tabs" });
     try {
@@ -128,6 +129,31 @@ app.whenReady().then(async () => {
     } catch (error) {
       result.tabsFile = `rejected: ${error.message}`;
     }
+
+    // The `window` policy's side of the same contract. `openWindow` is the harness's
+    // recorder rather than a real BrowserWindow — the same `record` seam this repo's
+    // options-window harness uses, so a headless run pops nothing. What is production is
+    // attachTabHost's own composition and the filter inside open(): a filter that did not
+    // run would hand the recorder the file: URL and land in the catch below.
+    const loaded = [];
+    const win = attachTabHost({
+      policy: "window",
+      bridgeStatus: () => ({ attached: false }),
+      openWindow: (url) => {
+        loaded.push(url);
+        return loaded.length;
+      },
+    });
+    result.windowHttps = await win.open({ url: "https://example.com/from-tabs" });
+    // An extension opening its own page is the whole reason the scheme is allowed here.
+    result.windowRozenite = await win.open({ url: "rozenite://probe.local/index.html" });
+    try {
+      await win.open({ url: "file:///etc/passwd" });
+      result.windowFile = "resolved";
+    } catch (error) {
+      result.windowFile = `rejected: ${error.message}`;
+    }
+    result.windowLoaded = loaded;
   } catch (error) {
     result.harnessError = error && error.stack;
   }

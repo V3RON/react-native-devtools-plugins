@@ -20,7 +20,50 @@
 // Everything is injected — `bridgeStatus`, `sendCommand`, `openExternal`,
 // `openWindow` — so the rules are unit-testable under bare Node and a test can
 // observe an open without launching anything (docs/ARCHITECTURE.md's layering).
+//
+// What a policy may NOT open is decided here rather than inside the injected
+// capability, so the rule holds whichever window or browser is wired up — see
+// `openableWindowUrl` below and docs/SECURITY-PLATFORM.md's F6.
+const { openableUrl, refusalMessage } = require("./external-open");
+const { parseExtensionURL } = require("../shared/protocol");
+
 const NO_TARGET = { attached: false };
+
+/**
+ * What the `window` policy may load in a window of this shell.
+ *
+ * The http(s) half is `openableUrl` — the same check the `external` branch applies —
+ * so the two policies cannot disagree about one URL. Before that they did: `window`
+ * handed `url` straight to `win.loadURL`, which made `chrome.tabs.create` a route to
+ * any scheme a shell window can host, `file://` included (docs/SECURITY-PLATFORM.md's
+ * F6 — chained with a download that leaves a file in `~/Downloads`, that is a read of
+ * anything the developer's `file://` origin can fetch).
+ *
+ * The extension scheme is allowed additionally, and only in this branch: it is this
+ * shell's own protocol (`src/main/extension-server.js`), and an extension opening one
+ * of its OWN pages is what `create` exists for — Altair's
+ * `create({ url: "altair-app/index.html" })` resolves against the extension origin and
+ * arrives here as `rozenite://<id>/…` (`src/chrome-shim/tabs.js`). Widening
+ * `ALLOWED_PROTOCOLS` is the wrong place for that: the external policy must never see
+ * the scheme, since `shell.openExternal` has no handler for it. A `rozenite:` URL whose
+ * hostname names no extension is refused outright — the protocol has nothing to serve
+ * for it, and "we opened a window and it 404s" is not what a filter is for.
+ *
+ * What comes back is the string that was checked, not the caller's: `openableUrl` hands
+ * back the form it parsed, the way the external branch hands `allowed` to
+ * `shell.openExternal` rather than the raw input.
+ *
+ * @returns {string|null} the URL this policy may load, or null when it is refused
+ */
+const openableWindowUrl = (url) => {
+  const requested = typeof url === "string" ? url.trim() : "";
+  if (!requested) {
+    return null;
+  }
+  // `parseExtensionURL` is a prefix + hostname rule over the string, so for the scheme
+  // this branch alone allows, the checked string IS the trimmed one.
+  return openableUrl(requested) || (parseExtensionURL(requested) ? requested : null);
+};
 
 /**
  * @param {object} deps
@@ -83,6 +126,13 @@ const createTabHost = ({
    * Open `url`, honoring the policy. Resolves `{via, handle}` where `via` is what
    * the shim will report as the created tab's `openedVia`, and `handle` is this
    * module's own id for whatever was opened (null when nothing was).
+   *
+   * A URL the policy may not open is a THROWN refusal, which is how the `external`
+   * branch already reports one (its `openExternal` is
+   * `src/main/external-open.js`'s opener, which rejects). `src/main/ipc.js` turns the
+   * throw into `{ok: false, error}`, and the frame's shim says the reason and resolves
+   * `openedVia: null` — so a refused create looks the same whichever policy is set, and
+   * Chrome's `create` never has to model a failure it does not have.
    */
   const open = async ({ url }) => {
     if (typeof url !== "string" || !url) {
@@ -93,7 +143,14 @@ const createTabHost = ({
       return { via: "external", handle: null };
     }
     if (policy === "window" && openWindow) {
-      const handle = await openWindow(url);
+      // The capability exists, so the question is only what it may load — checked
+      // BEFORE the window is created. A window that opened and then failed to load has
+      // already happened as a side effect; a refused URL must not cause one.
+      const loadable = openableWindowUrl(url);
+      if (!loadable) {
+        throw new Error(refusalMessage(url));
+      }
+      const handle = await openWindow(loadable);
       if (handle === null || handle === undefined) {
         return { via: null, handle: null };
       }
@@ -101,7 +158,9 @@ const createTabHost = ({
       return { via: "window", handle };
     }
     // "none", or a policy whose capability is missing: nothing opens. The shim
-    // reports openedVia: null, which is the whole truth.
+    // reports openedVia: null, which is the whole truth. The capability check comes
+    // first for the same reason it does for `external` above: a host that cannot open a
+    // window has not been offered a URL filter either, so there is nothing to refuse.
     return { via: null, handle: null };
   };
 

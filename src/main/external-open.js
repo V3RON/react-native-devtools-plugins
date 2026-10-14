@@ -5,8 +5,10 @@
 // page (a DevTools link, a console message, a panel) must never reach it unfiltered.
 // The allowlist is http(s) only (and without embedded credentials): the two schemes a
 // "new tab" can honestly mean. It is
-// shared by `InspectorFrontendHost.openInNewTab` and the `chrome.tabs.create`
-// `external` policy (src/main/tab-host.js).
+// shared by `InspectorFrontendHost.openInNewTab` and both `chrome.tabs.create` policies
+// (src/main/tab-host.js): the `external` branch applies it directly, the `window` branch
+// applies it plus its own extension scheme (see `openableWindowUrl` there for why the
+// scheme cannot join the list below — the OS launcher has no handler for it).
 //
 // The opener is injected so the rules are unit-testable under bare Node; the Electron
 // wiring at the bottom is the only part that touches `shell`, and a test seam
@@ -40,6 +42,14 @@ const openableUrl = (url) => {
 };
 
 /**
+ * The refusal a caller sees when `openableUrl` rejects a URL. Shared because the
+ * `external` policy and the `window` policy (src/main/tab-host.js) must say the same
+ * thing about the same URL — one refusal message, not two that can drift apart.
+ */
+const refusalMessage = (url) =>
+  `refused to open a URL that is not http(s): ${String(url).slice(0, 80)}`;
+
+/**
  * @param {object} deps
  * @param {(url: string) => (void|Promise<void>)} deps.openExternal
  * @returns {{open: (url: any) => Promise<{ok: true, url: string}|{ok: false, error: string}>}}
@@ -48,10 +58,7 @@ const createExternalOpener = ({ openExternal }) => ({
   open: async (url) => {
     const allowed = openableUrl(url);
     if (!allowed) {
-      return {
-        ok: false,
-        error: `refused to open a URL that is not http(s): ${String(url).slice(0, 80)}`,
-      };
+      return { ok: false, error: refusalMessage(url) };
     }
     try {
       await openExternal(allowed);
@@ -81,4 +88,10 @@ const getExternalOpener = () => {
   return instance;
 };
 
-module.exports = { ALLOWED_PROTOCOLS, openableUrl, createExternalOpener, getExternalOpener };
+module.exports = {
+  ALLOWED_PROTOCOLS,
+  openableUrl,
+  refusalMessage,
+  createExternalOpener,
+  getExternalOpener,
+};
