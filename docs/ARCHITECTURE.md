@@ -138,7 +138,10 @@ listed honestly in [LIMITATIONS.md](LIMITATIONS.md): sandbox off, one shared
 The end-to-end assertions for all of this live in `tests/extension-frame-electron.test.js`
 + `tests/extension-frame-harness.js`, which boots a production-shaped shell headlessly
 (`show: false`, `DEVTOOLS_CDP_BRIDGE=off`, no Metro) — an extension frame needs neither a
-device nor the frontend to be observable.
+device nor the frontend to be observable. One run goes further: `--fake-rn-app=on` serves a
+fake inspected app inside the harness and starts the real CDP bridge against it, which is how
+`tests/delivery-scope.test.js` proves a live network push actually reaches a subscribed frame
+(see F6 in [SECURITY-PLATFORM.md](SECURITY-PLATFORM.md) for why that assertion exists).
 
 ### Main-frame preload (`src/preload/frontend-host.js`)
 

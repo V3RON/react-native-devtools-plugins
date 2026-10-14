@@ -29,11 +29,14 @@ exposes them at `chrome-extension://<id>/`, and drives each declared execution c
   (`script-src 'self'; object-src 'self'`, plus `wasm-unsafe-eval` for service-worker
   extensions). A declaration that weakens `script-src`/`object-src` is not served — the
   strict default is, with one console line naming the extension and the reason.
-- **Declared permissions gate capability.** Two enforcement points, both asserted in
-  `tests/extension-frame-electron.test.js`: `src/main/delivery-scope.js` filters host→frame
-  deliveries using the manifest read **from disk** (a frame cannot talk itself into data),
-  and `src/chrome-shim/permission-gate.js` makes the promise/callback APIs answer with
-  `runtime.lastError` + a rejected promise. Only `permissions` counts, like Chrome's
+- **Declared permissions gate capability.** Two enforcement points: `src/main/delivery-scope.js`
+  filters host→frame deliveries using the manifest read **from disk** (a frame cannot talk
+  itself into data), and `src/chrome-shim/permission-gate.js` makes the promise/callback APIs
+  answer with `runtime.lastError` + a rejected promise. The shim half is asserted in
+  `tests/extension-frame-electron.test.js`; the main half in `tests/delivery-scope.test.js`,
+  which additionally proves a live push really arrives at an entitled frame — the filter once
+  shipped unimported, and the swallowed exception in the delivery fan-out made that invisible
+  (issue #20, `docs/SECURITY-PLATFORM.md` F6). Only `permissions` counts, like Chrome's
   `permissions.contains()` — `host_permissions` is network reach, `optional_permissions`
   are by definition not granted.
 - **Background contexts are discovered and run.** `scanBackgroundExtensions()`
