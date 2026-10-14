@@ -543,3 +543,48 @@ test("external relay mode binds nothing and refuses host commands", async (t) =>
     /ECONNREFUSED|socket hang up|closed/i
   );
 });
+
+test("the port reported is the port bound, including when port 0 was asked for", async (t) => {
+  // tests/extension-frame-harness.js reports this number as the run's CDP endpoint,
+  // so it has to be the one a client would dial. Port 0 is how a caller asks for an
+  // unused one, and it is the case where "what was asked for" and "what was bound"
+  // differ — an accessor that echoed the option would report 0 forever, and the
+  // bridge's own startup line would name a socket that does not exist.
+  const fakeMetro = createFakeMetro({});
+  const metroPort = await fakeMetro.listen();
+  const logs = [];
+  const bridgeUnderTest = createCdpBridge({
+    metroHost: "127.0.0.1",
+    metroPort,
+    listenHost: "127.0.0.1",
+    listenPort: 0,
+    pollIntervalMs: 20,
+    requestTimeoutMs: 500,
+    log: (level, message) => logs.push(`${level}: ${message}`),
+  });
+  t.after(async () => {
+    await bridgeUnderTest.stop();
+    await fakeMetro.close();
+  });
+
+  assert.strictEqual(bridgeUnderTest.listenPort(), null, "nothing is bound before start()");
+  await bridgeUnderTest.start();
+  const bound = bridgeUnderTest.listenPort();
+  assert.ok(Number.isInteger(bound) && bound > 0, `a real port, not the 0 asked for: ${bound}`);
+
+  // The number is not merely plausible: a frontend dialing exactly it gets through.
+  const frontend = connectFrontend(bound);
+  await frontend.open();
+  await frontend.close();
+
+  const line = logs.find((entry) => entry.includes("listening on"));
+  assert.ok(line, `the bridge says where it listens: ${logs.join(" | ")}`);
+  assert.ok(
+    line.includes(`ws://localhost:${bound}`),
+    `the startup line names the bound port: ${line}`
+  );
+  assert.ok(
+    !logs.some((entry) => entry.includes("localhost:0")),
+    `and never the placeholder: ${logs.join(" | ")}`
+  );
+});

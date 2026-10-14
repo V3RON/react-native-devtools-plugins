@@ -136,13 +136,15 @@ const cdpRequestLifecycle = ({
 
 /**
  * @param {object} options
- * @param {number} options.port           the port to serve Metro's endpoints on
- * @param {number} [options.intervalMs]   how often one request lifecycle is emitted
+ * @param {number} [options.port]           port to serve Metro's endpoints on;
+ *        0 (the default) lets the OS pick one, and the chosen port is reported back
+ *        on the resolved object so the caller can point the bridge at it
+ * @param {number} [options.intervalMs]     how often one request lifecycle is emitted
  * @param {(event: object) => void} [options.note] records what the app observed,
  *        in whatever form the caller's harness reports observations
- * @returns {Promise<{close: () => Promise<void>, stats: () => object}>}
+ * @returns {Promise<{port: number, close: () => Promise<void>, stats: () => object}>}
  */
-const startFakeRNApp = ({ port, intervalMs = 500, note = () => {} }) => {
+const startFakeRNApp = ({ port = 0, intervalMs = 500, note = () => {} }) => {
   const sockets = new Set();
   const commands = [];
   /** every requestId this app has announced, in order */
@@ -166,7 +168,9 @@ const startFakeRNApp = ({ port, intervalMs = 500, note = () => {} }) => {
           description: "delivery-fake-app [C++ connection]",
           appId: "delivery-fake-app",
           deviceName: "iPhone 17 Pro",
-          webSocketDebuggerUrl: `ws://127.0.0.1:${port}/inspector/debug?device=1&page=1`,
+          // The port actually bound, which is the only form that is correct when
+          // the caller passed 0 and let the OS choose.
+          webSocketDebuggerUrl: `ws://127.0.0.1:${server.address().port}/inspector/debug?device=1&page=1`,
         },
       ])
     );
@@ -263,6 +267,9 @@ const startFakeRNApp = ({ port, intervalMs = 500, note = () => {} }) => {
     server.once("error", reject);
     server.listen(port, "127.0.0.1", () =>
       resolve({
+        // The port actually bound. A caller that passed 0 has no other way to
+        // learn it, and the bridge has to dial exactly this one.
+        port: server.address().port,
         stats: () => ({
           commands: [...commands],
           enabled: commands.includes("Network.enable"),

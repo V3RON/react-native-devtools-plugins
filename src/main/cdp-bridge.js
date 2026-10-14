@@ -405,9 +405,14 @@ const createCdpBridge = (options = {}) => {
       );
       instance.once("listening", () => {
         server = instance;
+        // The port actually bound, not the one asked for: a caller may ask for an
+        // unused one (port 0), and a log line that then names port 0 describes a
+        // socket that does not exist. `address()` is only present on a socket ws
+        // created itself, which is the only shape this factory makes.
+        const boundPort = instance.address() ? instance.address().port : listenPort;
         log(
           "info",
-          `CDP bridge listening on ws://localhost:${listenPort} (Metro: ${metroHost}:${metroPort})`
+          `CDP bridge listening on ws://localhost:${boundPort} (Metro: ${metroHost}:${metroPort})`
         );
         attachLoop().catch((error) => log("error", `CDP bridge attach loop: ${error}`));
         resolve(true);
@@ -454,6 +459,12 @@ const createCdpBridge = (options = {}) => {
     sendCommand,
     onEvent,
     isAttached: () => isOpen(upstream),
+    /**
+     * The port the bridge's own socket bound, or null before `start()` (and after
+     * `stop()`). Callers that asked for port 0 have no other way to learn the number,
+     * and a number they invent is not the one a client would have to dial.
+     */
+    listenPort: () => (server && server.address() ? server.address().port : null),
     /** @returns {{attached: boolean, target: object|null, clients: number}} */
     status: () => ({ attached: isOpen(upstream), target, clients: clients.size }),
   };
@@ -482,5 +493,6 @@ module.exports = {
   sendCommand: bridge.sendCommand,
   onEvent: bridge.onEvent,
   isAttached: bridge.isAttached,
+  listenPort: bridge.listenPort,
   status: bridge.status,
 };

@@ -86,7 +86,10 @@ const optionsWindowMode = (arg("options-windows") || "record").toLowerCase();
 // Run the PRODUCTION CDP bridge against a FAKE inspected app that this harness
 // serves in its own process (tests/fake-rn-app.js). Off by default:
 // every pre-existing run stays exactly as it was, with no debugger session.
-// The two ports are allocated by the caller so a parallel test run cannot collide.
+// Both ports default to 0, which means "let the OS choose": the fake app binds an
+// ephemeral port and reports it on the `harness` line, so a parallel run cannot
+// collide and a developer's real Metro (8081) or bridge (9223) is never touched.
+// Naming a port is for pointing a real frontend at a manual run, never for a suite.
 const fakeRNApp = ["on", "true", "1"].includes(arg("fake-rn-app"));
 const fakeMetroPort = Number(arg("metro-port") || 0);
 const fakeCdpPort = Number(arg("cdp-port") || 0);
@@ -100,8 +103,6 @@ process.env.DEVTOOLS_EXTENSIONS_DIR = extensionsDir;
 // not ask macOS's firewall about it.
 process.env.DEVTOOLS_CDP_BRIDGE = fakeRNApp ? "on" : "off";
 if (fakeRNApp) {
-  process.env.DEVTOOLS_METRO_PORT = String(fakeMetroPort);
-  process.env.DEVTOOLS_CDP_PORT = String(fakeCdpPort);
   process.env.DEVTOOLS_CDP_HOST = "127.0.0.1";
 }
 process.env.DEVTOOLS_ALARM_CLOCK_SCALE = String(alarmClockScale);
@@ -113,8 +114,6 @@ if (userDataDir) {
 }
 
 const production = require("../src/main/extension-server");
-const { registerIpcHandlers } = require("../src/main/ipc");
-const cdpBridge = require("../src/main/cdp-bridge");
 const { frontendPreferences, extensionFramePreferences } = require("../src/main/frame-security");
 const config = require("../src/main/config");
 const { createBackgroundHost } = require("../src/main/background-host");
@@ -126,6 +125,52 @@ const optionsHost = require("../src/main/options-host");
 // Production privileges, once, before ready.
 production.registerExtensionSchemePrivileges();
 
+/**
+ * The fake inspected app, the resolved CDP ports, and the modules that consume
+ * them — required here rather than at the top of this file, and this is ordering
+ * with a reason, not tidiness.
+ *
+ * `src/main/config` reads DEVTOOLS_METRO_PORT / DEVTOOLS_CDP_PORT once, at its own
+ * module load, and normalises 0 to its defaults (8081 / 9223). A fake app that is
+ * asked for an ephemeral port cannot have a number until its `listen` callback has
+ * run, which is after that load — so the environment cannot carry it. The harness
+ * therefore writes the two resolved values into the one object the bridge singleton
+ * is built from (`config.cdpBridge`), which is exactly what the environment variable
+ * would have done had the ordering allowed it.
+ *
+ * Requiring `src/main/ipc` is what loads `src/main/cdp-bridge` and constructs that
+ * singleton, so nothing that can reach the bridge may be required before this
+ * returns. Getting that wrong is loud, not silent: the bridge would dial Metro's
+ * default port, never attach to the fake app, and any suite that depends on a
+ * debugger session fails its own premise assertion.
+ */
+const loadCdpConsumers = async () => {
+  let fakeApp = null;
+  if (fakeRNApp) {
+    const { startFakeRNApp } = require("./fake-rn-app");
+    fakeApp = await startFakeRNApp({
+      port: fakeMetroPort,
+      intervalMs: Number(arg("fake-app-interval") || 500),
+      note: (entry) => write(entry),
+    });
+    // The bridge dials the app, so it dials the port the app REPORTED — which is the
+    // one it bound, whether the caller named it or let the OS pick.
+    config.cdpBridge.metroPort = fakeApp.port;
+  }
+  if (fakeCdpPort) {
+    config.cdpBridge.listenPort = fakeCdpPort;
+  } else if (fakeRNApp) {
+    // An ephemeral bind asked for, and `config` cannot carry a 0 through from the
+    // environment (see above). 0 is what ws binds an unused port with.
+    config.cdpBridge.listenPort = 0;
+  }
+  return {
+    fakeApp,
+    cdpBridge: require("../src/main/cdp-bridge"),
+    registerIpcHandlers: require("../src/main/ipc").registerIpcHandlers,
+  };
+};
+
 const MARKER = "__ROZENITE_PROBE__";
 
 const write = (payload) => {
@@ -135,10 +180,14 @@ const write = (payload) => {
 app
   .whenReady()
   .then(async () => {
+    // First, because requiring src/main/ipc is what builds the CDP bridge singleton
+    // from config (see loadCdpConsumers). Store.initRenderer is what
+    // src/main/index.js does for electron-store's renderer adapter.
+    const { fakeApp, cdpBridge, registerIpcHandlers } = await loadCdpConsumers();
+
     // The production IPC substrate, unchanged: a frame's first act is
     // RUNTIME_GET_MANIFEST / RUNTIME_REGISTER, so without these handlers there is
-    // no extension frame to observe. Store.initRenderer is what
-    // src/main/index.js does for electron-store's renderer adapter.
+    // no extension frame to observe.
     Store.initRenderer();
     registerIpcHandlers();
     if (registerDelayMs > 0) {
@@ -300,20 +349,12 @@ app
 
     const policyFor = production.registerExtensionProtocol();
 
-    // The fake inspected app and the PRODUCTION CDP bridge in front of it
-    // (src/main/cdp-bridge.js, started by src/main/index.js the same way: after the
-    // IPC handlers and the protocol). With this pair running, a frame's network
-    // data arrives over a real debugger socket from an app that keeps reporting
-    // traffic — which is what makes "the live push reached the frame" observable at
-    // all (tests/delivery-scope.test.js).
-    let fakeApp = null;
-    if (fakeRNApp) {
-      const { startFakeRNApp } = require("./fake-rn-app");
-      fakeApp = await startFakeRNApp({
-        port: fakeMetroPort,
-        intervalMs: Number(arg("fake-app-interval") || 500),
-        note: (entry) => write(entry),
-      });
+    // The bridge sits in front of the fake app the same way src/main/index.js puts
+    // it there: after the IPC handlers and the protocol. With this pair running, a
+    // frame's network data arrives over a real debugger socket from an app that
+    // keeps reporting traffic — which is what makes "the live push reached the
+    // frame" observable at all (tests/delivery-scope.test.js).
+    if (fakeApp) {
       await cdpBridge.start();
     }
 
@@ -365,6 +406,7 @@ app
       height: 700,
       webPreferences: frontendPreferences({ preloadPath: config.preloadPath }),
     });
+
     if (panelBridge || frontendIsHost) {
       // The shared rule also checks the main frame is still on the frontend ORIGIN
       // (src/main/frontend-frame.js), so the configured frontend URL is this loopback page's.
@@ -459,11 +501,18 @@ app
       downloadsDir: downloadsDir || null,
       optionsWindows: optionsWindowMode,
       alarmClockScale,
-      // Whether this run had a debugger session at all. The app's own view of the
-      // session (the `Network.enable` it was sent, the requests it announced) is
-      // recorded at the END of the run as a `fake-app` line — this line happens
-      // before the page loads, so nothing has asked for a domain yet.
+      // Whether this run had a debugger session at all, and the two ports it holds.
+      // Both are ports ACTUALLY BOUND, reported by the thing that bound them: a run
+      // that asks for an unused port has no other way to learn the number, and a
+      // number the parent guessed would not be the one anything had to dial. The
+      // defaults this harness would otherwise inherit are Metro's 8081 and the port a
+      // real frontend dials (9223), so reporting them lets a suite prove it never
+      // grabbed either — attaching to a developer's own Metro would measure the wrong
+      // app, and failing to bind would measure nothing.
+      // `cdpListenPort` is null for a run that never started the bridge.
       fakeRNApp: Boolean(fakeApp),
+      fakeAppPort: fakeApp ? fakeApp.port : null,
+      cdpListenPort: fakeApp ? cdpBridge.listenPort() : null,
       electronVersion: process.versions.electron,
       chromeVersion: process.versions.chrome,
     });
@@ -531,6 +580,21 @@ app
       tracked: optionsHost.getOptionsHost().list(),
     });
     server.close();
+    // Close the things this harness opened BEFORE taking the process down. A bare
+    // app.exit() is a clean kill, which the run tolerates — what it would cost is
+    // the ability to tell a harness that released its sockets from one that leaked
+    // them, and the two look identical from the parent's side. Bounded, because a
+    // close that hangs must not turn a finished run into a timed-out one: the
+    // evidence is already on disk at this point.
+    await Promise.race([
+      (async () => {
+        if (fakeApp) {
+          await fakeApp.close();
+        }
+        await cdpBridge.stop();
+      })(),
+      new Promise((resolve) => setTimeout(resolve, 3000)),
+    ]);
     app.exit(0);
   })
   .catch((error) => {
