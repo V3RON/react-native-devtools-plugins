@@ -4,13 +4,37 @@
 // command id correlation, non-matching ids relayed untouched, notification
 // fan-out, the reconnect buffer, re-attach after an upstream drop, and the
 // request deadline.
+//
+// The second half is the access policy (docs/SECURITY-PLATFORM.md F3): who the
+// socket binds, which `Origin`s it accepts, and what happens to a client that
+// dials while the frontend owns the session. Those run against the REAL server
+// and real sockets too — a "peer from another machine" is a real socket dialled
+// from this machine's own LAN address, not a stubbed verifyClient.
 // Run: npm test
 const test = require("node:test");
 const assert = require("node:assert");
 const http = require("http");
+const os = require("os");
+const path = require("path");
+const { execFileSync } = require("child_process");
 const WebSocket = require("ws");
 
-const { createCdpBridge, HOST_ID_BASE } = require("../src/main/cdp-bridge");
+const {
+  createCdpBridge,
+  HOST_ID_BASE,
+  REFUSE_CLOSE_CODE,
+  DEFAULTS,
+  isLoopbackAddress,
+  upgradeAllowed,
+} = require("../src/main/cdp-bridge");
+
+// A source address that is NOT loopback, for the one test that has to prove what
+// a peer on another machine sees. Empty on a machine with no LAN interface.
+const lanAddress = () =>
+  (Object.values(os.networkInterfaces())
+    .flat()
+    .filter((entry) => entry && !entry.internal && entry.family === "IPv4")
+    .map((entry) => entry.address)[0] || "");
 
 // ── fake Metro: /json/list discovery + one /inspector/debug upstream ─────────
 function createFakeMetro({ targetAvailable = true } = {}) {
@@ -506,25 +530,35 @@ test("stopping while detached stays stopped — no late upstream attach", async 
   );
 });
 
-test("a second frontend connection replaces the first (one CDP session, one owner)", async (t) => {
-  const { bridge, listenPort } = await makeWorld(t, {});
+test("a second frontend connection is refused; the first keeps the one CDP session", async (t) => {
+  // This test used to pin the opposite ("the newer one owns it and the discarded
+  // socket is closed"). GitHub issue #23 says that rule is the vulnerability —
+  // eviction lets anything that dials the socket become the frontend — so the
+  // assertion is inverted rather than weakened: the invariant this test was
+  // really guarding (ONE CDP session, ONE owner, the app never sees a second
+  // debugger) still holds, it is now enforced by refusing the newcomer.
+  const { metro, bridge, listenPort } = await makeWorld(t, {});
   const first = connectFrontend(listenPort);
   await first.open();
   await waitFor(() => bridge.isAttached());
 
   const second = connectFrontend(listenPort);
   await second.open();
+  await waitFor(() => second.socket.readyState === second.socket.CLOSED);
 
-  // Two frontends cannot share one CDP session (both allocate ids from 1), so the
-  // newer one owns it and the discarded socket is closed.
-  await waitFor(() => bridge.status().clients === 1);
-  await waitFor(() => first.socket.readyState === first.socket.CLOSED);
-  second.send({ id: 7, method: "Runtime.enable" });
-  assert.deepStrictEqual(await second.next((m) => m.id === 7), {
+  assert.strictEqual(bridge.status().clients, 1, "still exactly one owner");
+  assert.strictEqual(
+    first.socket.readyState,
+    first.socket.OPEN,
+    "the frontend that was here first was not evicted"
+  );
+  first.send({ id: 7, method: "Runtime.enable" });
+  assert.deepStrictEqual(await first.next((m) => m.id === 7), {
     id: 7,
     result: { echo: "Runtime.enable" },
   });
-  await second.close();
+  assert.strictEqual(metro.accepted(), 1, "one debugger session on the app");
+  await first.close();
 });
 
 test("external relay mode binds nothing and refuses host commands", async (t) => {
@@ -542,4 +576,373 @@ test("external relay mode binds nothing and refuses host commands", async (t) =>
       }),
     /ECONNREFUSED|socket hang up|closed/i
   );
+});
+
+// ── who may talk to this socket (docs/SECURITY-PLATFORM.md F3) ───────────────
+// The socket IS the inspected app's debugger session, so these are the rules that
+// keep "a web page the developer happens to have open" and "a machine on the LAN"
+// from becoming the frontend. Everything below runs against the real server and
+// real sockets; a "remote peer" is a real socket dialled from this machine's own
+// non-loopback address.
+
+/** The `Origin` the production frontend sends: the origin of its own URL. */
+const FRONTEND_ORIGIN = "http://127.0.0.1:8081";
+
+/** Bridge + Metro with the frontend origin allowed; `bridge` extras per test. */
+async function makePolicyWorld(t, { bridge = {}, metro = {} } = {}) {
+  return makeWorld(t, {
+    bridge: { allowedOrigins: [FRONTEND_ORIGIN], probeTimeoutMs: 200, ...bridge },
+    metro,
+  });
+}
+
+const dial = (url, { origin, localAddress, autoPong = true } = {}) =>
+  new Promise((resolve, reject) => {
+    const socket = new WebSocket(url, {
+      headers: origin ? { Origin: origin } : {},
+      localAddress,
+      autoPong,
+    });
+    socket.once("error", reject);
+    socket.once("open", () => resolve(socket));
+  });
+
+let relayId = 500;
+
+/**
+ * Proves who owns the session: only the owner's frames are relayed upstream, so
+ * the one socket that gets an echo back is the frontend as far as the bridge is
+ * concerned. `open` alone proves nothing — a refused client sees `open` too,
+ * because the refusal is a close frame with an application code.
+ */
+const relays = (socket, { timeoutMs = 15000 } = {}) =>
+  new Promise((resolve, reject) => {
+    const id = ++relayId;
+    const timer = setTimeout(
+      () => reject(new Error("this socket is not the session owner")),
+      timeoutMs
+    );
+    const onMessage = (raw) => {
+      let parsed;
+      try {
+        parsed = JSON.parse(String(raw));
+      } catch {
+        return;
+      }
+      if (parsed.id !== id) {
+        return;
+      }
+      clearTimeout(timer);
+      socket.removeListener("message", onMessage);
+      resolve(parsed);
+    };
+    socket.on("message", onMessage);
+    socket.send(JSON.stringify({ id, method: "Runtime.enable" }));
+  });
+
+/** Dials and fails unless the socket ends up owning the session. */
+const dialOwner = async (t, url, options) => {
+  const socket = await dial(url, options);
+  t.after(() => socket.close());
+  await relays(socket);
+  return socket;
+};
+
+/** Dials and resolves with the refusal's `{code, reason}`; rejects if it wins. */
+const dialedButRefused = (url, options = {}) =>
+  new Promise((resolve, reject) => {
+    const socket = new WebSocket(url, {
+      headers: options.origin ? { Origin: options.origin } : {},
+      localAddress: options.localAddress,
+    });
+    const timer = setTimeout(
+      () => reject(new Error("the newcomer was never refused")),
+      15000
+    );
+    socket.once("error", (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+    socket.once("close", (code, reason) => {
+      clearTimeout(timer);
+      resolve({ code, reason: String(reason) });
+    });
+  });
+
+test("the default bind is loopback, and nothing else", async (t) => {
+  // `listenHost` is deliberately NOT passed: this test is about the default.
+  // The spy wraps the REAL `ws` server (so the bind itself is real) and records
+  // what was handed to it — the assertion the finding asks for is "which host
+  // went into `.listen`", and a bind to `undefined` would silently mean "every
+  // interface".
+  const listenCalls = [];
+  class SpyServer extends WebSocket.Server {
+    constructor(options) {
+      listenCalls.push(options);
+      super(options);
+    }
+  }
+  class SpyWebSocket extends WebSocket {
+    static Server = SpyServer;
+  }
+
+  const listenPort = await freePort();
+  const bridge = createCdpBridge({
+    metroHost: "127.0.0.1",
+    metroPort: await freePort(), // nothing is listening there: discovery just retries
+    listenPort,
+    pollIntervalMs: 20,
+    WebSocket: SpyWebSocket,
+    log: () => {},
+  });
+  await bridge.start();
+  t.after(() => bridge.stop());
+
+  assert.ok(listenCalls.length > 0, "start() called .listen at least once");
+  for (const call of listenCalls) {
+    assert.ok(
+      isLoopbackAddress(call.host),
+      `.listen was given a non-loopback host: ${JSON.stringify(call.host)}`
+    );
+  }
+  // Belt and braces: what the OS actually bound, not what was asked for.
+  const bound = bridge.listeningAddresses();
+  assert.ok(bound.length > 0);
+  for (const address of bound) {
+    assert.ok(
+      isLoopbackAddress(address.address),
+      `the socket is reachable on ${address.address}`
+    );
+    assert.strictEqual(address.port, listenPort);
+  }
+  // Both families: the frontend dials `?ws=localhost:…`, and `localhost` may
+  // resolve to either, so neither may be missing (SECURITY-PLATFORM.md §8).
+  assert.deepStrictEqual(
+    bound.map((address) => address.family).sort(),
+    ["IPv4", "IPv6"],
+    "the default binds 127.0.0.1 AND ::1"
+  );
+});
+
+test("an Origin outside the allowlist is refused and does not evict the frontend", async (t) => {
+  const { bridge, listenPort } = await makePolicyWorld(t);
+  const frontend = await dialOwner(t, `ws://127.0.0.1:${listenPort}`, {
+    origin: FRONTEND_ORIGIN,
+  });
+
+  await assert.rejects(
+    () => dial(`ws://127.0.0.1:${listenPort}`, { origin: "http://evil.example" }),
+    /403/
+  );
+
+  // The refusal happens at the upgrade, so the frontend never loses anything.
+  assert.strictEqual(frontend.readyState, WebSocket.OPEN, "the frontend survived");
+  assert.strictEqual(bridge.status().clients, 1);
+  await relays(frontend);
+});
+
+test("an Origin-less client is accepted from a loopback peer", async (t) => {
+  // The shape of `npm run rn-cdp`, a test, or curl: no browser can hide an
+  // Origin, so its absence from a local peer is a tool, not an attacker.
+  const { listenPort } = await makePolicyWorld(t);
+  const tool = await dialOwner(t, `ws://127.0.0.1:${listenPort}`);
+  assert.ok(isLoopbackAddress(tool._socket.remoteAddress));
+});
+
+test("an Origin-less client from a non-loopback peer is refused", async (t) => {
+  const peer = lanAddress();
+  if (!peer) {
+    t.skip("this machine has no non-loopback IPv4 address to dial from");
+    return;
+  }
+  // The finding's own scenario: the socket is reachable off-loopback. Only this
+  // test opts in to that, which is what DEVTOOLS_CDP_HOST is for. Binding both
+  // addresses lets the loopback case act as the control: same server, same
+  // Origin-less dial, and only the peer address differs.
+  const { bridge, listenPort } = await makePolicyWorld(t, {
+    bridge: { listenHost: [peer, "127.0.0.1"] },
+  });
+
+  await assert.rejects(
+    () => dial(`ws://${peer}:${listenPort}`, { localAddress: peer }),
+    /403/
+  );
+  assert.strictEqual(bridge.status().clients, 0, "the refused peer is not a client");
+
+  const control = await dialOwner(t, `ws://127.0.0.1:${listenPort}`);
+  assert.ok(isLoopbackAddress(control._socket.remoteAddress));
+});
+
+test("the Origin policy is the same rule for every peer (pure)", () => {
+  const allowedOrigins = new Set([FRONTEND_ORIGIN]);
+  const cases = [
+    // [origin, peer, expected]
+    [FRONTEND_ORIGIN, "127.0.0.1", true],
+    [FRONTEND_ORIGIN, "192.168.1.26", true], // remote-device dev, opt-in bind
+    ["http://evil.example", "127.0.0.1", false],
+    ["http://evil.example", "192.168.1.26", false],
+    [undefined, "127.0.0.1", true],
+    [undefined, "::1", true],
+    [undefined, "::ffff:127.0.0.1", true],
+    [undefined, "192.168.1.26", false],
+    [undefined, "10.0.0.5", false],
+    [undefined, undefined, false],
+  ];
+  for (const [origin, peerAddress, expected] of cases) {
+    assert.strictEqual(
+      upgradeAllowed({ origin, peerAddress, allowedOrigins }),
+      expected,
+      `Origin=${origin} peer=${peerAddress}`
+    );
+  }
+});
+
+test("a second client while one is attached is refused, not replacing it", async (t) => {
+  const { bridge, listenPort } = await makePolicyWorld(t);
+  const first = await dialOwner(t, `ws://127.0.0.1:${listenPort}`, {
+    origin: FRONTEND_ORIGIN,
+  });
+
+  const refused = await dialedButRefused(`ws://127.0.0.1:${listenPort}`, {
+    origin: FRONTEND_ORIGIN,
+  });
+  assert.strictEqual(refused.code, REFUSE_CLOSE_CODE, "the refusal has its own close code");
+  assert.match(refused.reason, /already owns the session/);
+
+  // First-wins means the owner keeps everything: still open, still relaying,
+  // still the only client.
+  assert.strictEqual(first.readyState, WebSocket.OPEN);
+  assert.strictEqual(bridge.status().clients, 1);
+  await relays(first);
+});
+
+test("a refused client cannot get a single CDP command upstream", async (t) => {
+  // Ownership is decided asynchronously (the liveness probe), so a newcomer's
+  // frames are staged until it wins or is refused. Otherwise a refused attacker
+  // would still get its `Runtime.evaluate` into the app before the close landed.
+  const { metro, bridge, listenPort } = await makePolicyWorld(t);
+  const owner = await dialOwner(t, `ws://127.0.0.1:${listenPort}`, {
+    origin: FRONTEND_ORIGIN,
+  });
+
+  const attacker = new WebSocket(`ws://127.0.0.1:${listenPort}`, {
+    headers: { Origin: FRONTEND_ORIGIN },
+  });
+  attacker.on("error", () => {});
+  await new Promise((resolve) => attacker.once("open", resolve));
+  attacker.send(
+    JSON.stringify({ id: 1, method: "Runtime.evaluate", params: { expression: "evil()" } })
+  );
+  await dialedButRefused(`ws://127.0.0.1:${listenPort}`, { origin: FRONTEND_ORIGIN });
+  await new Promise((resolve) => setTimeout(resolve, 100));
+
+  const methods = metro.commands().map((m) => m.method);
+  assert.ok(!methods.includes("Runtime.evaluate"), `staged frames escaped: ${methods}`);
+  assert.strictEqual(bridge.status().clients, 1);
+  attacker.close();
+  await relays(owner);
+});
+
+test("the frontend still reconnects after its socket closes", async (t) => {
+  // Refusal must not mean "wedged": the everyday frontend reload closes the old
+  // socket and dials again, and that reconnect has to win without waiting on a
+  // liveness timeout.
+  const { bridge, listenPort } = await makePolicyWorld(t);
+  const first = await dialOwner(t, `ws://127.0.0.1:${listenPort}`, {
+    origin: FRONTEND_ORIGIN,
+  });
+  const closed = new Promise((resolve) => first.once("close", resolve));
+  first.close();
+  await closed;
+
+  const reloaded = await dialOwner(t, `ws://127.0.0.1:${listenPort}`, {
+    origin: FRONTEND_ORIGIN,
+  });
+  assert.strictEqual(bridge.status().clients, 1, "exactly one owner again");
+});
+
+test("an owner that stops answering does not wedge the socket", async (t) => {
+  // The other half of the rule: `probeTimeoutMs` is what tells "the old socket
+  // just died" apart from "someone else, while the frontend is attached". A peer
+  // that never answers pings is unreachable — the shape of a half-open connection
+  // or a killed client (a merely busy frontend still pongs: control frames are
+  // answered below page JS, RFC 6455 §5.5.2).
+  const { bridge, listenPort } = await makePolicyWorld(t);
+  const zombie = await dialOwner(t, `ws://127.0.0.1:${listenPort}`, {
+    origin: FRONTEND_ORIGIN,
+    autoPong: false,
+  });
+
+  const t0 = Date.now();
+  const fresh = await dialOwner(t, `ws://127.0.0.1:${listenPort}`, {
+    origin: FRONTEND_ORIGIN,
+  });
+  assert.ok(
+    Date.now() - t0 >= 150,
+    "the takeover waited for the liveness probe instead of skipping it"
+  );
+  assert.strictEqual(bridge.status().clients, 1, "still one owner, now the newcomer");
+});
+
+test("an explicit listenHost is honoured (remote-device development)", async (t) => {
+  const peer = lanAddress();
+  if (!peer) {
+    t.skip("this machine has no non-loopback IPv4 address to bind");
+    return;
+  }
+  const { bridge } = await makePolicyWorld(t, { bridge: { listenHost: peer } });
+  assert.deepStrictEqual(
+    bridge.listeningAddresses().map((address) => address.address),
+    [peer]
+  );
+});
+
+test("DEVTOOLS_CDP_ALLOWED_ORIGINS is unset-by-default and additive", () => {
+  // src/main/config.js resolves this at LOAD time, so the env has to be set in a
+  // real child process — a mutated `process.env` here would not be the thing the
+  // shell actually reads.
+  const read = (env) => {
+    const childEnv = { ...process.env, ...env };
+    // "Unset by default" has to mean unset for the child too, even if whoever ran
+    // the suite happens to have one of these exported.
+    for (const name of [
+      "DEVTOOLS_CDP_ALLOWED_ORIGINS",
+      "DEVTOOLS_CDP_HOST",
+      "DEVTOOLS_FRONTEND_URL",
+    ]) {
+      if (!(name in env)) {
+        delete childEnv[name];
+      }
+    }
+    const out = execFileSync(
+      process.execPath,
+      [
+        "-e",
+        "process.stdout.write(JSON.stringify(require(process.argv[1]).cdpBridge))",
+        path.join(__dirname, "..", "src", "main", "config.js"),
+      ],
+      { env: childEnv, encoding: "utf8" }
+    );
+    return JSON.parse(out);
+  };
+
+  // Unset (and no DEVTOOLS_FRONTEND_URL): the frontend's own origin, and nothing
+  // else. This is the shipped default — the escape hatch adds, it does not replace.
+  const base = read({});
+  assert.deepStrictEqual(base.allowedOrigins, ["http://127.0.0.1:8081"]);
+  assert.strictEqual(
+    base.listenHost,
+    undefined,
+    "DEVTOOLS_CDP_HOST stays unset: the bridge's loopback default applies"
+  );
+
+  const withEnv = read({
+    DEVTOOLS_CDP_ALLOWED_ORIGINS: "http://host:1234 http://other:80",
+    DEVTOOLS_FRONTEND_URL: "http://192.168.1.5:3000/rozenite/rn_fusebox.html?ws=localhost:9223",
+  });
+  assert.deepStrictEqual(withEnv.allowedOrigins, [
+    "http://192.168.1.5:3000",
+    "http://host:1234",
+    "http://other:80",
+  ]);
 });

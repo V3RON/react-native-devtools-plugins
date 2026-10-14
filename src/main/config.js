@@ -23,6 +23,24 @@ const positiveNumber = (name, fallback) => {
   return Number.isFinite(value) && value > 0 ? value : fallback;
 };
 
+// Resolved once: the CDP socket's Origin allowlist below has to name the same
+// origin the frontend window actually loads (src/main/frontend-frame.js applies
+// the same rule to the IPC channels).
+const frontendURL = process.env.DEVTOOLS_FRONTEND_URL || DEFAULT_FRONTEND_URL;
+
+// The origin of the frontend URL, or null when it is not a valid absolute URL —
+// in which case there is no origin to allow and the bridge falls back to the
+// Origin-less-loopback rule (docs/SECURITY-PLATFORM.md F3).
+const originOf = (url) => {
+  try {
+    const { origin } = new URL(String(url));
+    return origin === "null" ? null : origin;
+  } catch {
+    return null;
+  }
+};
+const originOfFrontendURL = originOf(frontendURL);
+
 // What `chrome.tabs.create({url})` is allowed to do with the URL
 // (docs/features/SMALL-SHIMS.md, docs/LIMITATIONS.md).
 //
@@ -142,7 +160,7 @@ module.exports = {
 
   // The RN DevTools frontend, served by the patched fork's Metro dev server.
   // See docs/ARCHITECTURE.md — this coupling is a known limitation.
-  frontendURL: process.env.DEVTOOLS_FRONTEND_URL || DEFAULT_FRONTEND_URL,
+  frontendURL,
 
   // Root folder holding the unpacked extensions ("installed extensions").
   extensionsDir:
@@ -184,8 +202,22 @@ module.exports = {
     enabled: !bridgeDisabled,
     metroHost: process.env.DEVTOOLS_METRO_HOST || "127.0.0.1",
     metroPort: positiveNumber("DEVTOOLS_METRO_PORT", 8081),
+    // Unset = the bridge's own loopback default (docs/SECURITY-PLATFORM.md F3).
+    // Set it (e.g. to a LAN address) only for remote-device development.
     listenHost: process.env.DEVTOOLS_CDP_HOST || undefined,
     listenPort: positiveNumber("DEVTOOLS_CDP_PORT", 9223),
+    // Which browser origins may open the CDP socket. Always includes the
+    // frontend's own origin — it is the only browser document that dials the
+    // socket — and DEVTOOLS_CDP_ALLOWED_ORIGINS is the documented escape hatch
+    // for serving the frontend from another host. Unset by default, so nothing
+    // beyond the frontend gets in (src/main/cdp-bridge.js `verifyClient`).
+    allowedOrigins: [
+      originOfFrontendURL,
+      ...(process.env.DEVTOOLS_CDP_ALLOWED_ORIGINS || "")
+        .split(/[,\s]+/)
+        .map((origin) => origin.trim())
+        .filter((origin) => origin !== ""),
+    ].filter((origin) => origin !== null),
     app: process.env.DEVTOOLS_APP_FILTER || null,
     device: process.env.DEVTOOLS_DEVICE_FILTER || null,
     // chrome.devtools.inspectedWindow.eval waits at most this long for the app.
