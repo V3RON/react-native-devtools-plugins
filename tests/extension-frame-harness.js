@@ -93,6 +93,11 @@ const optionsWindowMode = (arg("options-windows") || "record").toLowerCase();
 const fakeRNApp = ["on", "true", "1"].includes(arg("fake-rn-app"));
 const fakeMetroPort = Number(arg("metro-port") || 0);
 const fakeCdpPort = Number(arg("cdp-port") || 0);
+// Record every host->frame network push as main actually sends it, on the frame it
+// is addressed to (`--observe-frame-sends=on`). Off by default: an extra NDJSON
+// line per delivery per frame is noise for every run that is not studying the
+// delivery path (tests/delivery-scope.test.js).
+const observeFrameSends = ["on", "true", "1"].includes(arg("observe-frame-sends"));
 
 // Must precede requiring config: it captures DEVTOOLS_EXTENSIONS_DIR at module
 // load and the file server resolves against it. Production code unchanged,
@@ -121,6 +126,7 @@ const { createInstallState } = require("../src/main/install-state");
 const notificationHost = require("../src/main/notification-host");
 const saveService = require("../src/main/save-service");
 const optionsHost = require("../src/main/options-host");
+const { NETWORK_DELIVER } = require("../src/shared/ipc");
 
 // Production privileges, once, before ready.
 production.registerExtensionSchemePrivileges();
@@ -407,6 +413,36 @@ app
       webPreferences: frontendPreferences({ preloadPath: config.preloadPath }),
     });
 
+    // `--observe-frame-sends=on`: record every host->frame network push at the one
+    // place main really puts it on the wire — the frame's own `send`. This exists
+    // because a delivery the delivery-scope filter REJECTS is invisible from the
+    // frame's side by construction (nothing arrives, and the reason for the nothing
+    // is the filter's `false`), and invisible-from-everywhere is exactly how issue
+    // #20 stayed hidden. Recording the passes lets a test name a drop: main pushed
+    // this payload kind, some frames were sent it, THIS frame was not.
+    //
+    // The patch is on WebFrameMain's prototype, obtained from a frame this window
+    // already has (Electron 38 does not export the class), and it holds for every
+    // frame in every window: Electron hands out the same instance per frame, so one
+    // wrapper sees all of them and `this.url` names the addressee.
+    if (observeFrameSends) {
+      const frameProto = Object.getPrototypeOf(win.webContents.mainFrame);
+      const originalSend = frameProto.send;
+      frameProto.send = function (channel, ...rest) {
+        if (channel === NETWORK_DELIVER) {
+          const payload = rest[0] && rest[0].payload;
+          write({
+            kind: "frame-send",
+            channel,
+            to: this.url,
+            payloadKind: payload && payload.kind,
+            requestId: payload && payload.record && payload.record.requestId,
+          });
+        }
+        return originalSend.apply(this, [channel, ...rest]);
+      };
+    }
+
     if (panelBridge || frontendIsHost) {
       // The shared rule also checks the main frame is still on the frontend ORIGIN
       // (src/main/frontend-frame.js), so the configured frontend URL is this loopback page's.
@@ -513,6 +549,7 @@ app
       fakeRNApp: Boolean(fakeApp),
       fakeAppPort: fakeApp ? fakeApp.port : null,
       cdpListenPort: fakeApp ? cdpBridge.listenPort() : null,
+      frameSendsObserved: observeFrameSends,
       electronVersion: process.versions.electron,
       chromeVersion: process.versions.chrome,
     });

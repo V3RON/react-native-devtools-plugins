@@ -27,18 +27,20 @@
 //    `chrome.webRequest` / `chrome.devtools.network` events a real `rozenite://`
 //    frame observed.
 //
-// The DENY half of the live path is deliberately not faked here: a frame's
-// `chrome.webRequest` listeners are withdrawn by the shim's own gate
-// (src/chrome-shim/permission-gate.js), so a permission-less frame cannot observe
-// main's filter separately from its own — that split is asserted where each half
-// lives (`tests/extension-frame-electron.test.js` for the shim, the matrix above
-// for main). What this file proves live is the direction that was broken: data
-// reaching a frame that IS entitled to it.
+// The DENY half of the live path is measured from BOTH sides, because each side
+// alone would be a claim: from the FRAME, a permission-less frame's `chrome.webRequest`
+// listeners are withdrawn by the shim's own gate (src/chrome-shim/permission-gate.js),
+// so it cannot observe a delivery even if main sent one; and from MAIN, the run
+// records every host->frame push the delivery-scope filter LET THROUGH, so a pre-
+// completion kind that the entitled frame was sent and this frame was not is the
+// filter's DROP decision, observed. The two halves are still separate assertions
+// where each half lives (`tests/extension-frame-electron.test.js` for the shim, the
+// matrix above for main's pure function); what the live run proves is that they
+// agree on one and the same request.
 // Run: npm test
 const test = require("node:test");
 const assert = require("node:assert");
 const fs = require("node:fs");
-const net = require("node:net");
 const os = require("node:os");
 const path = require("node:path");
 
@@ -63,6 +65,15 @@ const OTHER_KINDS = ["navigated", "status"];
 // onBeforeRedirect — the reason it is on the set even though it is not a top-level
 // kind of its own.
 const ALL_KINDS = [...RECORD_KINDS, ...OTHER_KINDS, "redirect"];
+
+// The webRequest-only kinds that can arrive as a payload of their own: what the
+// host broadcasts (`DELIVERED`) intersected with the protected set. `redirect` is on
+// the set but never arrives alone — network-service carries it inside the `request`
+// delivery's `extra` — so it is the filter's business, not the live push's. The live
+// assertions below can only be about what a push can actually be.
+const TOP_LEVEL_WEB_REQUEST_ONLY = [...WEB_REQUEST_ONLY].filter((kind) =>
+  RECORD_KINDS.includes(kind)
+);
 
 test("WEB_REQUEST_ONLY names exactly the pre-completion lifecycle steps", () => {
   // The set is the security claim: these are the payloads whose object is a
@@ -182,7 +193,7 @@ const binary = electronBinary();
 const suite = binary ? test : test.skip;
 
 const GRANTED_ID = "scope-granted.local";
-const UNGRANTED_ID = "scope-open.local";
+const UNGRANTED_ID = "scope-denied.local";
 
 const manifestFor = (id, permissions) =>
   JSON.stringify({
@@ -281,16 +292,11 @@ const panelHtml = `<!DOCTYPE html>
 <html><body><script src="/panel.js"></script></body></html>
 `;
 
-/** Ask the OS for a free loopback port (two calls; the race is unobservable here). */
-const freePort = () =>
-  new Promise((resolve, reject) => {
-    const probe = net.createServer();
-    probe.once("error", reject);
-    probe.listen(0, "127.0.0.1", () => {
-      const { port } = probe.address();
-      probe.close(() => resolve(port));
-    });
-  });
+// Both panel frames load the SAME script from their own extension folder, so the
+// URL main addresses a delivery to is `rozenite://<id>/panel.html` — the same string
+// the manifest is staged under, and the only thing a `frame-send` record carries
+// besides the payload kind.
+const panelUrlFor = (id) => `rozenite://${id}/panel.html`;
 
 suite(
   "a live CDP delivery reaches a subscribed extension frame",
@@ -313,7 +319,6 @@ suite(
       "panel.js": panelScript,
     });
 
-    const [metroPort, cdpPort] = await Promise.all([freePort(), freePort()]);
     const hostPage = `<!DOCTYPE html>
 <html><body>
   <iframe src="rozenite://${GRANTED_ID}/panel.html" width="600" height="400"></iframe>
@@ -326,15 +331,21 @@ suite(
       root: path.join(root, "run1"),
       extensionsDir,
       hostPage,
+      // Neither port is chosen here. The fake app binds an ephemeral port and the
+      // bridge dials what it got (tests/extension-frame-harness.js reports it on the
+      // `harness` line); asking the OS for a port here, closing it, and hoping it is
+      // still free when the child rebinds is a race this suite has no reason to run.
       // The fake app streams one request lifecycle every 400 ms, so a frame that is
       // entitled to data has seen a full cycle well before this settles.
       extraArgs: [
         "--fake-rn-app=on",
-        `--metro-port=${metroPort}`,
-        `--cdp-port=${cdpPort}`,
         "--fake-app-interval=400",
+        // Records every host->frame network push main actually put on a frame's
+        // channel, which is the only way to observe a delivery the grant filter
+        // DROPPED (assertion 5 below).
+        "--observe-frame-sends=on",
       ],
-      waitFor: "[scope-probe] reported scope-open.local",
+      waitFor: `[scope-probe] reported ${UNGRANTED_ID}`,
       timeoutMs: 150000,
       settleMs: 3000,
     });
@@ -344,12 +355,24 @@ suite(
     const granted = byId[GRANTED_ID];
     const ungranted = byId[UNGRANTED_ID];
     const fakeApp = (run.observed.find((line) => line.kind === "fake-app") || {}).stats || {};
+    const harnessLine = run.observed.find((line) => line.kind === "harness") || {};
+    // payload kind -> how often main sent it to THIS frame.
+    const sentTo = {};
+    for (const line of run.observed) {
+      if (line.kind !== "frame-send") {
+        continue;
+      }
+      const perFrame = (sentTo[line.to] = sentTo[line.to] || {});
+      perFrame[line.payloadKind] = (perFrame[line.payloadKind] || 0) + 1;
+    }
     const dump = () =>
       [
         `  exit=${run.code} probes=${probes.length}`,
         `  fake app: ${JSON.stringify(fakeApp)}`,
         `  granted: ${JSON.stringify(granted)}`,
         `  ungranted: ${JSON.stringify(ungranted)}`,
+        `  main sent (kind -> count): ${JSON.stringify(sentTo)}`,
+        `  harness: ${JSON.stringify({ fakeAppPort: harnessLine.fakeAppPort, cdpListenPort: harnessLine.cdpListenPort })}`,
         `  console: ${consoleLines(run.observed).slice(-15).join(" | ")}`,
         `  output tail: ${String(run.output).slice(-1500)}`,
       ].join("\n");
@@ -357,6 +380,25 @@ suite(
     // 0. The premise: the run really had a debugger session, and the fake app
     //    really served traffic through it. Without this, an empty event list below
     //    would be a passing "no data" test rather than a failing delivery test.
+    //
+    //    The two ports the harness reports are part of that premise, in this
+    //    direction: a run that bound Metro's 8081 would be attaching to whatever real
+    //    app a developer happens to be running, and measuring that instead of the fake
+    //    one is not a delivery test. Neither is asserted as a specific value: the suite
+    //    asks for no number, and demanding one would put the parent back in charge of
+    //    choosing it — the race this removed.
+    assert.ok(
+      harnessLine.fakeAppPort > 0 && harnessLine.fakeAppPort !== 8081,
+      `the fake app did not take Metro's port:${JSON.stringify({
+        fakeAppPort: harnessLine.fakeAppPort,
+      })}${dump()}`
+    );
+    assert.ok(
+      harnessLine.cdpListenPort > 0 && harnessLine.cdpListenPort !== 9223,
+      `the bridge did not take the port a real frontend dials:${JSON.stringify({
+        cdpListenPort: harnessLine.cdpListenPort,
+      })}${dump()}`
+    );
     assert.ok(
       fakeApp.enabled,
       `the model's lazy Network.enable reached the inspected app over the real bridge:${dump()}`
@@ -420,10 +462,15 @@ suite(
     );
 
     // 4. The frame-side half of the grant gate, observed from a frame that declares
-    //    nothing: its webRequest listeners are withdrawn, so it cannot receive the
-    //    lifecycle even though main is pushing to entitled frames. devtools.network
-    //    still works for it — Chrome needs no permission for that, and this is the
-    //    Altair case delivery-scope.js exists to protect.
+    //    nothing. What this proves, exactly: the shim's own gate WITHDREW the
+    //    listeners this frame registered (every webRequest event reports
+    //    `hasListeners() === false`), and the frame observed no webRequest event —
+    //    `leaked` is empty, where the only labels it could observe at all are
+    //    devtools.network's two. It does NOT on its own prove main withheld anything:
+    //    a frame with no listeners cannot tell a filter drop from a delivery, which
+    //    is precisely why assertion 5 reads main's side of the same run.
+    //    devtools.network still works for it — Chrome needs no permission for that,
+    //    and this is the Altair case delivery-scope.js exists to protect.
     assert.deepStrictEqual(
       {
         onBeforeRequest: granted.listeners.onBeforeRequest,
@@ -461,10 +508,57 @@ suite(
       `no webRequest event reaches a frame without the permission:${dump()}`
     );
 
-    // 5. And the delivery-scope filter ran for BOTH frames without throwing: a
-    //    ReferenceError on the push path is invisible in the NDJSON by design (that
-    //    is what the swallowed catch does), so the proof is that the frames' own
-    //    reports arrived with real grants attached.
+    // 5. MAIN's side of the same request, which is where the invisible half lives.
+    //    The filter's DROP decision is a `false` that makes the sender return before
+    //    `frame.send` — nothing crosses IPC, no log line, nothing the receiving frame
+    //    can report. That silence is what hid issue #20, and the file's own thesis
+    //    says an invisible drop needs a witness: `--observe-frame-sends=on` records
+    //    every push at the one place main puts it on the wire, so a kind that went to
+    //    the entitled frame and NOT to this one is the drop itself, observed.
+    const grantedSends = sentTo[panelUrlFor(GRANTED_ID)] || {};
+    const ungrantedSends = sentTo[panelUrlFor(UNGRANTED_ID)] || {};
+    // Precondition for the whole block: both frames were really addressed by main,
+    // so an absent kind below is a withheld payload and not a frame that never
+    // subscribed.
+    assert.ok(
+      Object.keys(grantedSends).length > 0 && Object.keys(ungrantedSends).length > 0,
+      `main addressed both frames, so the frame-send records can say anything:${dump()}`
+    );
+    // The ungranted frame is on the live stream — it was sent, repeatedly, the kind
+    // that feeds devtools.network. This is the difference between a filter and a dead
+    // channel, and it is what makes the absence below mean something.
+    assert.ok(
+      ungrantedSends.completed >= 2,
+      `main addressed the ungranted frame for several cycles, so the drops below are not a frame that never arrived:${dump()}`
+    );
+    for (const kind of TOP_LEVEL_WEB_REQUEST_ONLY) {
+      assert.ok(
+        grantedSends[kind] > 0,
+        `main pushed ${kind} (a webRequest-only kind) to the entitled frame:${dump()}`
+      );
+      assert.strictEqual(
+        ungrantedSends[kind],
+        undefined,
+        `the delivery-scope filter DROPPED every ${kind} push for the ungranted frame:${dump()}`
+      );
+    }
+    // The same statement from the other end, and the race-free form of it: across the
+    // whole run, not one webRequest-only payload was ever sent to this frame, while
+    // every kind that reached it is one Chrome needs no permission for. No timing
+    // assumption in this line — no subscription can be "too late" for it, which an
+    // equality between the two frames' counts would be.
+    const kindsSentToUngranted = Object.keys(ungrantedSends);
+    assert.deepStrictEqual(
+      kindsSentToUngranted.filter((kind) => WEB_REQUEST_ONLY.has(kind)),
+      [],
+      `everything main sent this frame is off the webRequest-only set: ${JSON.stringify(ungrantedSends)}${dump()}`
+    );
+
+    // 6. The filter ran for BOTH frames without throwing, and ran on real grants:
+    //    each frame's own report arrived with the permission list main read from its
+    //    manifest on disk. A ReferenceError on the push path is invisible in the
+    //    NDJSON by design (that is what the swallowed catch does), which is why
+    //    assertions 1 and 5 above read the pushes themselves rather than this.
     assert.deepStrictEqual(granted.permissions.permissions.sort(), ["webRequest"]);
     assert.deepStrictEqual(ungranted.permissions.permissions, []);
   }
