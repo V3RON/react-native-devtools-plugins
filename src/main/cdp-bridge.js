@@ -173,13 +173,47 @@ const createCdpBridge = (options = {}) => {
   // always sends `Origin` on a WebSocket upgrade and a page cannot forge it, so
   // this list is what separates the frontend from "some page the developer has
   // open" (docs/SECURITY-PLATFORM.md F3).
-  const origins = new Set(
-    (Array.isArray(allowedOrigins) ? allowedOrigins : [allowedOrigins])
-      .filter((origin) => typeof origin === "string")
-      .map((origin) => origin.trim())
-      .filter((origin) => origin !== "")
-  );
-
+  //
+  // Entries are normalized to what a browser actually sends — `Origin` is an origin
+  // and nothing else, so an operator who writes `http://host:1234/frontend/` means
+  // `http://host:1234` and would otherwise have typed an entry that can never match.
+  // An entry that does not name an origin cannot be normalized and is LEFT OUT of
+  // the set: keeping it as written would mean a peer that sent that exact string as
+  // its `Origin` got in, which is a door, not a typo. Dropping it fails closed, and
+  // the two lines below name both what is in effect and what was refused, so an
+  // operator is never left guessing why their frontend is rejected. The comparison
+  // itself stays exact and case-sensitive — a prefix rule here would be the same
+  // mistake in the other direction.
+  const originEntries = (
+    Array.isArray(allowedOrigins) ? allowedOrigins : [allowedOrigins]
+  )
+    .filter((origin) => typeof origin === "string")
+    .map((origin) => origin.trim())
+    .filter((origin) => origin !== "");
+  const origins = new Set();
+  const unusable = [];
+  for (const entry of originEntries) {
+    try {
+      const { origin } = new URL(entry);
+      // `new URL("file:///x").origin` is the string "null", which is what an opaque
+      // origin sends; it names no host, so it is not an allowlist entry either.
+      if (origin === "null") {
+        throw new Error("opaque origin");
+      }
+      origins.add(origin);
+    } catch {
+      unusable.push(entry);
+    }
+  }
+  if (originEntries.length > 0) {
+    log("info", `CDP bridge: allowed Origins — ${[...origins].join(", ") || "(none)"}`);
+  }
+  if (unusable.length > 0) {
+    log(
+      "warn",
+      `CDP bridge: ignored DEVTOOLS_CDP_ALLOWED_ORIGINS entries that name no origin: ${unusable.join(", ")}`
+    );
+  }
   const listenHosts = normalizeListenHosts(listenHost);
 
   /** @type {Map<number, {method: string, resolve: Function, reject: Function, timer: any}>} */

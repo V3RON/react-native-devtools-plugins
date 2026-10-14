@@ -950,6 +950,46 @@ test("a refused client cannot get a single CDP command upstream", async (t) => {
   await relays(owner);
 });
 
+test("allowlist entries are compared as origins, and one that names none grants nothing", async (t) => {
+  // Operators type a URL; a browser sends an origin. `http://host:1234/frontend/`
+  // has to mean `http://host:1234`, or the documented escape hatch does nothing at
+  // all and the developer just sees a 403. Both halves are checked over real
+  // upgrades, not against the internal Set.
+  const logs = [];
+  const { listenPort } = await makeWorld(t, {
+    bridge: {
+      allowedOrigins: ["http://127.0.0.1:8081/frontend/", "not-an-origin"],
+      probeTimeoutMs: 200,
+      log: (level, message) => logs.push(`${level}: ${message}`),
+    },
+  });
+
+  // The path is dropped...
+  await dialOwner(t, `ws://127.0.0.1:${listenPort}`, { origin: "http://127.0.0.1:8081" });
+  // ...and it is not part of the match either: `Origin` never carries one.
+  await assert.rejects(
+    () => dial(`ws://127.0.0.1:${listenPort}`, { origin: "http://127.0.0.1:8081/frontend/" }),
+    /403/
+  );
+  // Fails closed: an entry that names no origin admits no peer, including a peer
+  // crude enough to send that string as its `Origin` header — which is why the entry
+  // is dropped from the set rather than kept as written.
+  await assert.rejects(
+    () => dial(`ws://127.0.0.1:${listenPort}`, { origin: "not-an-origin" }),
+    /403/
+  );
+
+  // And the operator is told what is actually in force, both the normalized form and
+  // the entry that was discarded.
+  const listed = logs.find((line) => line.includes("allowed Origins"));
+  assert.ok(listed, `the effective allowlist is not logged: ${logs}`);
+  assert.ok(listed.includes("http://127.0.0.1:8081"), listed);
+  assert.ok(!listed.includes("not-an-origin"), listed);
+  const dropped = logs.find((line) => line.includes("name no origin"));
+  assert.ok(dropped, `the discarded entry is not reported: ${logs}`);
+  assert.ok(dropped.includes("not-an-origin"), dropped);
+});
+
 test("a malformed frame from a REFUSED client does not take the process down", async (t) => {
   // `ws` emits `error` on the SERVER-side socket when a peer breaks the protocol,
   // and an EventEmitter with no `error` listener throws — which in the shell means
