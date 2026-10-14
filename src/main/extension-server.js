@@ -3,7 +3,9 @@
 //
 // Security: both the extension id and the inner path derive from an
 // untrusted URL, so resolution is guarded against path traversal — a
-// request can never escape its own extension directory. Every response also
+// request can never escape its own extension directory, and neither can a
+// symlink planted inside it: containment is decided on `fs.realpath`, not on
+// path text (see `resolveInsideExtension`). Every response also
 // carries that extension's Content-Security-Policy (src/shared/csp.js), so an
 // extension page gets Chrome's `script-src 'self'` unless its own manifest
 // declares a policy.
@@ -48,6 +50,30 @@ const RESERVED_INNER_PATHS = new Set([BACKGROUND_BOOTSTRAP_PATH, I18N_BUNDLE_PAT
  * extension can never name a sibling's file — `/…/extensions/ab` does not start
  * with `/…/extensions/a/`), and the path must not be a reserved one.
  *
+ * Containment is then checked on RESOLVED paths, not on path text (finding F1,
+ * docs/SECURITY-PLATFORM.md §3.2). The string rule alone was not enough: every
+ * read that follows this guard (`fs.statSync`, `net.fetch(file://)`) FOLLOWS
+ * symlinks, so one link planted inside an extension folder — `stolen ->
+ * ~/.ssh/id_ed25519` — made the folder's own page read arbitrary files with a
+ * plain `fetch("stolen")`, no IPC and no prompt. So: one `lstat` says the root
+ * is not itself a link, one `realpath` says what the root and the target
+ * actually are, and the prefix rule is applied to those.
+ *
+ * Which is also where the two containment layers agree, stated once so nobody
+ * re-derives it: A SYMLINKED FOLDER IS NEVER AN EXTENSION ROOT. The discovery
+ * scan reaches folders through `readdir({ withFileTypes: true })` +
+ * `isDirectory()` (src/main/extensions.js), which never reports a link, and the
+ * server refuses a linked root for the same reason — otherwise the two would
+ * disagree about what an extension is, and the disagreement would be the
+ * permissive one. A link that stays INSIDE its extension folder keeps working:
+ * the rule is about where a path lands, not about which directory entries are links.
+ *
+ * Its one limit, stated rather than implied: the check happens at resolve time, so
+ * links swapped by another writer while a request is in flight are not atomically
+ * contained. Reaching that needs write access to the install folder — the
+ * developer's own `extensions/`, where anyone with it can rewrite the extension's
+ * files outright (docs/SECURITY-PLATFORM.md §7, item 7).
+ *
  * @returns {string|null} the absolute path, or null when the request is refused
  */
 const resolveInsideExtension = (extensionId, innerPath) => {
@@ -57,6 +83,40 @@ const resolveInsideExtension = (extensionId, innerPath) => {
   const root = path.resolve(config.extensionsDir, extensionId);
   const target = path.resolve(root, innerPath);
   if (target !== root && !target.startsWith(root + path.sep)) {
+    return null;
+  }
+  let isLink;
+  try {
+    isLink = fs.lstatSync(root).isSymbolicLink();
+  } catch {
+    // No such folder (or no permission to look): report the contained path and
+    // let the caller's own existence check answer "missing", which is what it did
+    // before this guard existed. Nothing can be read through a folder that is not
+    // there — and nothing through a dangling link below it either, because stat
+    // follows the link and fails.
+    return target;
+  }
+  if (isLink) {
+    return null; // the decided policy: see the docblock — the scanner skips it too
+  }
+  let realRoot;
+  let realTarget;
+  try {
+    realRoot = fs.realpathSync(root);
+    realTarget = fs.realpathSync(target);
+  } catch (error) {
+    // ENOENT / ENOTDIR mean nothing can be BEHIND this path — it does not exist, or
+    // a component of it is a plain file (a dangling link is ENOENT, and a link to a
+    // file with segments left is ENOTDIR, so an escape cannot hide in either). That
+    // is the caller's "does not exist" case, and it has to keep reporting the
+    // contained name: src/main/content-scripts.js tells a developer a manifest path
+    // that names no file is MISSING, and a blanket refusal would turn that honest
+    // message into a false accusation of escaping the folder.
+    // Any other failure (EACCES, ELOOP, …) is a path this server cannot say anything
+    // about, so it is refused rather than guessed.
+    return error && (error.code === "ENOENT" || error.code === "ENOTDIR") ? target : null;
+  }
+  if (realTarget !== realRoot && !realTarget.startsWith(realRoot + path.sep)) {
     return null;
   }
   return target;

@@ -576,6 +576,14 @@ suite(
     // worker's document, and `?script=` must not be able to name another
     // extension's file. Both are answered by the protocol handler's containment
     // rules, asserted here in the real process rather than only in a unit test.
+    //
+    // The same probe covers the symlink half of those rules (issue #21, finding F1
+    // of docs/SECURITY-PLATFORM.md): containment used to compare path TEXT while the
+    // read that followed it followed links, so one link planted inside a.local could
+    // hand that page a file from anywhere the developer can read — `fetch("stolen")`,
+    // with no IPC and no permission anywhere in the path. A unit test proves the
+    // guard's verdict; only a real renderer proves that verdict is what `fetch()` on
+    // `rozenite://` actually receives.
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "rozenite-bgsec-"));
     t.after(() => {
       fs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
@@ -606,6 +614,13 @@ suite(
           fetch("rozenite://b.local/secret.js", { cache: "no-store" })
             .then((r) => r.text().then((t) => ({ siblingStatus: r.status, body: t.slice(0, 80) })),
                   (e) => ({ siblingRejected: String(e.message) })),
+          // ── the symlink cases (issue #21) ──
+          grab("/stolen"),                       // a file link to outside
+          grab("/elsewhere/inside-dir.txt"),     // a directory link to outside
+          grab("/wide-open/id_ed25519"),         // a contained link, then ../ through it
+          grab("/alias.js"),                     // a link that stays inside (own.js)
+          grab("/shortcut/deep.js"),             // a directory link that stays inside
+          grab("rozenite://c.local/own.js"),     // a LINKED EXTENSION ROOT
         ]).then((results) => {
           console.log(MARKER + JSON.stringify({ results }));
           // The marker line becomes a probe record in the harness, so it is not
@@ -623,6 +638,26 @@ suite(
       path.join(extensionsDir, "a.local", "own.js"),
       "console.log('a-local-script');\n"
     );
+
+    // The outside world an escape would reach, and the links, as REAL links: a
+    // fixture that faked them would test nothing about the reads under fix.
+    const outside = path.join(root, "outside");
+    fs.mkdirSync(path.join(outside, "dir"), { recursive: true });
+    fs.writeFileSync(path.join(outside, "id_ed25519"), "OUTSIDE-PRIVATE-KEY-CONTENT");
+    fs.writeFileSync(path.join(outside, "dir/inside-dir.txt"), "OUTSIDE-VIA-DIRECTORY-LINK");
+    const aRoot = path.join(extensionsDir, "a.local");
+    fs.mkdirSync(path.join(aRoot, "inner"), { recursive: true });
+    fs.writeFileSync(path.join(aRoot, "inner/deep.js"), "console.log('in-folder-link-content');\n");
+    fs.symlinkSync(path.join(outside, "id_ed25519"), path.join(aRoot, "stolen"));
+    fs.symlinkSync(path.join(outside, "dir"), path.join(aRoot, "elsewhere"));
+    fs.symlinkSync(outside, path.join(aRoot, "wide-open"));
+    fs.symlinkSync(path.join(aRoot, "own.js"), path.join(aRoot, "alias.js"));
+    fs.symlinkSync(path.join(aRoot, "inner"), path.join(aRoot, "shortcut"));
+    // A folder whose whole "install" is a link to a real extension, sitting in the
+    // extensions dir itself: `readdir({ withFileTypes: true })` + `isDirectory()`
+    // never reports a link, so before the fix the file server was the only layer that
+    // treated it as an extension.
+    fs.symlinkSync(aRoot, path.join(extensionsDir, "c.local"));
 
     const run = await runHarness({
       binary,
@@ -642,7 +677,19 @@ suite(
     );
 
     assert.ok(data.results, `the probe reported (exit ${run.code})`);
-    const [shadowed, ownBootstrap, crossBootstrap, traversal, sibling] = data.results;
+    const [
+      shadowed,
+      ownBootstrap,
+      crossBootstrap,
+      traversal,
+      sibling,
+      stolenLink,
+      directoryLink,
+      linkThenEscape,
+      inFolderFileLink,
+      inFolderDirLink,
+      linkedRoot,
+    ] = data.results;
 
     // 1. The reserved path is reserved in BOTH directions: a folder that ships a
     //    real file named `__rozenite_background__` cannot pre-empt the host's own
@@ -689,5 +736,45 @@ suite(
       `recorded so the limitation stays visible: ${JSON.stringify(sibling)}`
     );
     assert.match(String(sibling.body || ""), /sibling-extension/, "the body really was read");
+
+    // 6. F1, closed: a link inside the folder that points outside is refused, and its
+    //    bytes never reach the page. All three shapes are ones the string check could
+    //    not see — a file link, a directory link, and a `..` that escapes only AFTER a
+    //    contained link has already been followed.
+    const refused = (record, label) => {
+      assert.equal(
+        record.status === 404 || Boolean(record.rejected),
+        true,
+        `${label} must not be served: ${JSON.stringify(record)}`
+      );
+      assert.ok(
+        !/OUTSIDE-/.test(String(record.body || "")),
+        `${label} must not carry the outside file's contents: ${JSON.stringify(record)}`
+      );
+    };
+    refused(stolenLink, "a file symlink pointing outside the folder");
+    refused(directoryLink, "a directory symlink pointing outside the folder");
+    refused(linkThenEscape, "a contained symlink with ../ through it");
+
+    // 7. And the rule is containment, not "no symlinks": links that stay inside the
+    //    folder serve exactly like any other file of the extension, so a legitimate
+    //    layout (shared assets, a vendored folder) is not collateral damage.
+    assert.equal(inFolderFileLink.status, 200, JSON.stringify(inFolderFileLink));
+    assert.match(String(inFolderFileLink.body || ""), /a-local-script/);
+    assert.equal(inFolderDirLink.status, 200, JSON.stringify(inFolderDirLink));
+    assert.match(String(inFolderDirLink.body || ""), /in-folder-link-content/);
+
+    // 8. A symlinked extension ROOT is refused by the server, which is what the
+    //    scanner already did — the two containment layers now agree, and the policy is
+    //    stated once in the guard's docblock (src/main/extension-server.js).
+    assert.equal(
+      linkedRoot.status === 404 || Boolean(linkedRoot.rejected),
+      true,
+      `a linked folder is not an extension root: ${JSON.stringify(linkedRoot)}`
+    );
+    assert.ok(
+      !/a-local-script/.test(String(linkedRoot.body || "")),
+      `nothing is served under a linked id: ${JSON.stringify(linkedRoot)}`
+    );
   }
 );
