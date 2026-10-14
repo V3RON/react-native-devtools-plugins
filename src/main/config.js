@@ -28,9 +28,15 @@ const positiveNumber = (name, fallback) => {
 // the same rule to the IPC channels).
 const frontendURL = process.env.DEVTOOLS_FRONTEND_URL || DEFAULT_FRONTEND_URL;
 
-// The origin of the frontend URL, or null when it is not a valid absolute URL —
-// in which case there is no origin to allow and the bridge falls back to the
-// Origin-less-loopback rule (docs/SECURITY-PLATFORM.md F3).
+// The origin of the frontend URL, or null when it is not a valid absolute URL or
+// carries an opaque origin (`file:`/`data:`, whose `URL.origin` is the literal
+// string "null"). In both cases there is no origin to put on the allowlist, and an
+// Origin-bearing frontend is then refused for the plain reason that no origin is
+// allowlisted — it does NOT fall through to the Origin-less-loopback rule, because
+// a browser always sends an `Origin` and a page cannot send an empty one. A
+// frontend like that has to name its origin in DEVTOOLS_CDP_ALLOWED_ORIGINS (an
+// opaque origin has none to name, so in practice it cannot use this socket at all).
+// Failing closed here is the point (docs/SECURITY-PLATFORM.md F3).
 const originOf = (url) => {
   try {
     const { origin } = new URL(String(url));
@@ -211,6 +217,9 @@ module.exports = {
     // socket — and DEVTOOLS_CDP_ALLOWED_ORIGINS is the documented escape hatch
     // for serving the frontend from another host. Unset by default, so nothing
     // beyond the frontend gets in (src/main/cdp-bridge.js `verifyClient`).
+    // Entries are taken as typed; the bridge normalizes each to an origin and logs
+    // what it ended up allowing, because this module is required by processes that
+    // read their stdout back as data.
     allowedOrigins: [
       originOfFrontendURL,
       ...(process.env.DEVTOOLS_CDP_ALLOWED_ORIGINS || "")

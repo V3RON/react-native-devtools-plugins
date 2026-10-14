@@ -767,6 +767,69 @@ test("the default bind is loopback, and nothing else", async (t) => {
     ["IPv4", "IPv6"],
     "the default binds 127.0.0.1 AND ::1"
   );
+
+  // And the literal the frontend dials has to work. `?ws=localhost:9223` becomes
+  // `ws://localhost:<port>`, and which family the resolver picks is its own mood —
+  // so all three spellings are dialled, `[::1]` being the one a `127.0.0.1`-only
+  // bind would have missed. This is the measurement SECURITY-PLATFORM.md §8 claims;
+  // until now no test had dialled `localhost` at all. One at a time, closed in
+  // between: the second would be refused for the seat, which is the right answer to
+  // a different question.
+  for (const [host, expectedFamily] of [
+    ["localhost", undefined], // either family is correct, connecting is the point
+    ["[::1]", "IPv6"],
+    ["127.0.0.1", "IPv4"],
+  ]) {
+    const peer = await dial(`ws://${host}:${listenPort}`);
+    // `dial` resolves on `open` and rejects on `error`, so reaching here is the
+    // assertion for `localhost`; the family is what pins the two literal binds,
+    // and it is what a `127.0.0.1`-only bind would have got wrong.
+    assert.ok(
+      isLoopbackAddress(peer._socket.remoteAddress),
+      `ws://${host}:${listenPort} reached a non-loopback socket`
+    );
+    if (expectedFamily) {
+      assert.strictEqual(
+        peer._socket.remoteFamily,
+        expectedFamily,
+        `ws://${host}:${listenPort} did not land on ${expectedFamily}`
+      );
+    }
+    await new Promise((resolve) => {
+      peer.once("close", resolve);
+      peer.close();
+    });
+  }
+});
+
+test("the startup line prints an address that can actually be dialled", async (t) => {
+  // The one line a developer copy-pastes was `ws://::1:9223` for the IPv6 bind, and
+  // no client on earth dials that — an IPv6 literal in a URL has to be bracketed.
+  // Loopback by default, so this covers the shipped shape too.
+  const lines = [];
+  const listenPort = await freePort();
+  const bridge = createCdpBridge({
+    metroHost: "127.0.0.1",
+    metroPort: await freePort(),
+    listenPort,
+    pollIntervalMs: 20,
+    log: (_level, message) => lines.push(message),
+  });
+  await bridge.start();
+  t.after(() => bridge.stop());
+
+  const line = lines.find((message) => message.includes("CDP bridge listening on"));
+  assert.ok(line, `no listening line in ${lines}`);
+  const printed = line.match(/ws:\/\/[^\s,]+/g);
+  assert.deepStrictEqual(printed, [
+    `ws://127.0.0.1:${listenPort}`,
+    `ws://[::1]:${listenPort}`,
+  ]);
+  // Every printed address must parse as a URL, i.e. be something `new WebSocket`
+  // accepts — the assertion that would have caught the unbracketed literal.
+  for (const url of printed) {
+    assert.strictEqual(new URL(url).port, String(listenPort), `not diallable: ${url}`);
+  }
 });
 
 test("an Origin outside the allowlist is refused and does not evict the frontend", async (t) => {

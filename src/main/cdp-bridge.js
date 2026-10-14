@@ -179,6 +179,7 @@ const createCdpBridge = (options = {}) => {
       .map((origin) => origin.trim())
       .filter((origin) => origin !== "")
   );
+
   const listenHosts = normalizeListenHosts(listenHost);
 
   /** @type {Map<number, {method: string, resolve: Function, reject: Function, timer: any}>} */
@@ -718,11 +719,13 @@ const createCdpBridge = (options = {}) => {
       }
     }
     servers = opened;
+    // `ws://[::1]:9223`, not `ws://::1:9223`: an unbracketed IPv6 literal is not a
+    // URL anybody can dial, and this line is what a developer copy-pastes.
     log(
       "info",
       `CDP bridge listening on ${listenHosts
         .slice(0, opened.length)
-        .map((host) => `ws://${host}:${listenPort}`)
+        .map((host) => `ws://${net.isIPv6(host) ? `[${host}]` : host}:${listenPort}`)
         .join(", ")} (Metro: ${metroHost}:${metroPort})${
         failure ? " — see the warning above" : ""
       }`
