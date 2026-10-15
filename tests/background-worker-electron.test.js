@@ -576,6 +576,14 @@ suite(
     // worker's document, and `?script=` must not be able to name another
     // extension's file. Both are answered by the protocol handler's containment
     // rules, asserted here in the real process rather than only in a unit test.
+    //
+    // The same probe covers the symlink half of those rules (issue #21, finding F1
+    // of docs/SECURITY-PLATFORM.md): containment used to compare path TEXT while the
+    // read that followed it followed links, so one link planted inside a.local could
+    // hand that page a file from anywhere the developer can read — `fetch("stolen")`,
+    // with no IPC and no permission anywhere in the path. A unit test proves the
+    // guard's verdict; only a real renderer proves that verdict is what `fetch()` on
+    // `rozenite://` actually receives.
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "rozenite-bgsec-"));
     t.after(() => {
       fs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
@@ -583,7 +591,14 @@ suite(
 
     const extensionsDir = path.join(root, "extensions");
     stageExtension(extensionsDir, "a.local", {
-      "manifest.json": JSON.stringify({ name: "A", version: "1", manifest_version: 3 }),
+      // `default_locale` makes the host build this folder's message bundle, which is
+      // the read the `_locales` link below aims at (see the assertion on `i18nBundle`).
+      "manifest.json": JSON.stringify({
+        name: "A",
+        version: "1",
+        manifest_version: 3,
+        default_locale: "en",
+      }),
       "__rozenite_background__": "<html><body>SHADOWED</body></html>",
       "probe.html": `<!DOCTYPE html><html><body><script src="/probe.js"></script></body></html>`,
       "probe.js": `
@@ -606,6 +621,32 @@ suite(
           fetch("rozenite://b.local/secret.js", { cache: "no-store" })
             .then((r) => r.text().then((t) => ({ siblingStatus: r.status, body: t.slice(0, 80) })),
                   (e) => ({ siblingRejected: String(e.message) })),
+          // ── the symlink cases (issue #21) ──
+          grab("/stolen"),                       // a file link to outside
+          grab("/elsewhere/inside-dir.txt"),     // a directory link to outside
+          grab("/wide-open/id_ed25519"),         // a contained link, then ../ through it
+          grab("/alias.js"),                     // a link that stays inside (own.js)
+          grab("/shortcut/deep.js"),             // a directory link that stays inside
+          grab("rozenite://c.local/own.js"),     // a LINKED EXTENSION ROOT
+          // The host-side i18n route: the bundle is built from the _locales folder by
+          // MAIN, from a path that never passes the request guard (see the _locales
+          // link staged below). The bundle is several KB of predefined messages, so the probe reports what
+          // matters about the WHOLE body rather than a truncated slice of it — a leak
+          // must not be able to hide past a body cap.
+          fetch("/__rozenite_i18n__", { cache: "no-store" }).then(
+            (r) => r.text().then((t) => ({
+              url: "/__rozenite_i18n__",
+              status: r.status,
+              bodyLength: t.length,
+              outsideContents: /OUTSIDE-/.test(t),
+              // Case-insensitive because the compiled bundle keys are LOWERCASED
+              // (compiled[name.toLowerCase()] in src/shared/i18n.js), so a leak of the
+              // catalog staged below arrives as "extname", never "extName". Matching
+              // the capitalised name asserted what this probe cannot observe.
+              outsideMessage: /extname/i.test(t),
+            })),
+            (e) => ({ url: "/__rozenite_i18n__", rejected: String(e.message) })
+          ),
         ]).then((results) => {
           console.log(MARKER + JSON.stringify({ results }));
           // The marker line becomes a probe record in the harness, so it is not
@@ -623,6 +664,35 @@ suite(
       path.join(extensionsDir, "a.local", "own.js"),
       "console.log('a-local-script');\n"
     );
+
+    // The outside world an escape would reach, and the links, as REAL links: a
+    // fixture that faked them would test nothing about the reads under fix.
+    const outside = path.join(root, "outside");
+    fs.mkdirSync(path.join(outside, "dir"), { recursive: true });
+    fs.writeFileSync(path.join(outside, "id_ed25519"), "OUTSIDE-PRIVATE-KEY-CONTENT");
+    fs.writeFileSync(path.join(outside, "dir/inside-dir.txt"), "OUTSIDE-VIA-DIRECTORY-LINK");
+    // A whole message catalog outside the folder, reachable only as `_locales`.
+    fs.mkdirSync(path.join(outside, "locales/en"), { recursive: true });
+    fs.writeFileSync(
+      path.join(outside, "locales/en/messages.json"),
+      JSON.stringify({ extName: { message: "OUTSIDE-BUNDLE-SECRET" } })
+    );
+    const aRoot = path.join(extensionsDir, "a.local");
+    fs.mkdirSync(path.join(aRoot, "inner"), { recursive: true });
+    fs.writeFileSync(path.join(aRoot, "inner/deep.js"), "console.log('in-folder-link-content');\n");
+    fs.symlinkSync(path.join(outside, "id_ed25519"), path.join(aRoot, "stolen"));
+    fs.symlinkSync(path.join(outside, "dir"), path.join(aRoot, "elsewhere"));
+    fs.symlinkSync(outside, path.join(aRoot, "wide-open"));
+    // The whole `_locales` folder as a link — the shape the host's own bundle read used
+    // to follow, because a path this file derives never passes the request guard.
+    fs.symlinkSync(path.join(outside, "locales"), path.join(aRoot, "_locales"));
+    fs.symlinkSync(path.join(aRoot, "own.js"), path.join(aRoot, "alias.js"));
+    fs.symlinkSync(path.join(aRoot, "inner"), path.join(aRoot, "shortcut"));
+    // A folder whose whole "install" is a link to a real extension, sitting in the
+    // extensions dir itself: `readdir({ withFileTypes: true })` + `isDirectory()`
+    // never reports a link, so before the fix the file server was the only layer that
+    // treated it as an extension.
+    fs.symlinkSync(aRoot, path.join(extensionsDir, "c.local"));
 
     const run = await runHarness({
       binary,
@@ -642,7 +712,20 @@ suite(
     );
 
     assert.ok(data.results, `the probe reported (exit ${run.code})`);
-    const [shadowed, ownBootstrap, crossBootstrap, traversal, sibling] = data.results;
+    const [
+      shadowed,
+      ownBootstrap,
+      crossBootstrap,
+      traversal,
+      sibling,
+      stolenLink,
+      directoryLink,
+      linkThenEscape,
+      inFolderFileLink,
+      inFolderDirLink,
+      linkedRoot,
+      i18nBundle,
+    ] = data.results;
 
     // 1. The reserved path is reserved in BOTH directions: a folder that ships a
     //    real file named `__rozenite_background__` cannot pre-empt the host's own
@@ -689,5 +772,70 @@ suite(
       `recorded so the limitation stays visible: ${JSON.stringify(sibling)}`
     );
     assert.match(String(sibling.body || ""), /sibling-extension/, "the body really was read");
+
+    // 6. F1, closed: a link inside the folder that points outside is refused, and its
+    //    bytes never reach the page. All three shapes are ones the string check could
+    //    not see — a file link, a directory link, and a `..` that escapes only AFTER a
+    //    contained link has already been followed.
+    // The answer this server gives for a refused path is its own 404, which is what
+    // every other refusal here asserts (the reserved-path check above). The probe also
+    // records a fetch REJECTION (`rejected`) — Chromium's network layer refusing the
+    // request rather than this server answering it. Nothing is served either way, so it
+    // is allowed as an explicit fallback, but the status is not merely "404 or
+    // rejected": a guard that stopped answering 404 must not pass on the fallback.
+    const refused = (record, label) => {
+      // The bytes rule is the actual security property, and it holds whichever layer
+      // refused, so it is asserted unconditionally.
+      assert.ok(
+        !/OUTSIDE-/.test(String(record.body || "")),
+        `${label} must not carry the outside file's contents: ${JSON.stringify(record)}`
+      );
+      if (record.rejected !== undefined) {
+        assert.ok(record.rejected, `${label} must not be served: ${JSON.stringify(record)}`);
+        return;
+      }
+      assert.equal(record.status, 404, `${label} must be refused with a 404: ${JSON.stringify(record)}`);
+    };
+    refused(stolenLink, "a file symlink pointing outside the folder");
+    refused(directoryLink, "a directory symlink pointing outside the folder");
+    refused(linkThenEscape, "a contained symlink with ../ through it");
+
+    // 7. And the rule is containment, not "no symlinks": links that stay inside the
+    //    folder serve exactly like any other file of the extension, so a legitimate
+    //    layout (shared assets, a vendored folder) is not collateral damage.
+    assert.equal(inFolderFileLink.status, 200, JSON.stringify(inFolderFileLink));
+    assert.match(String(inFolderFileLink.body || ""), /a-local-script/);
+    assert.equal(inFolderDirLink.status, 200, JSON.stringify(inFolderDirLink));
+    assert.match(String(inFolderDirLink.body || ""), /in-folder-link-content/);
+
+    // 8. A symlinked extension ROOT is refused by the server, which is what the
+    //    scanner already did — the two containment layers now agree, and the policy is
+    //    stated once in the guard's docblock (src/main/extension-server.js).
+    //    Held to the same standard as `refused` above: the bytes rule always, the
+    //    network-layer rejection only as an explicit fallback.
+    assert.ok(
+      !/a-local-script/.test(String(linkedRoot.body || "")),
+      `nothing is served under a linked id: ${JSON.stringify(linkedRoot)}`
+    );
+    if (linkedRoot.rejected !== undefined) {
+      assert.ok(linkedRoot.rejected, `a linked folder is not an extension root: ${JSON.stringify(linkedRoot)}`);
+    } else {
+      assert.equal(linkedRoot.status, 404, `a linked folder is not an extension root: ${JSON.stringify(linkedRoot)}`);
+    }
+
+    // 9. The host-side i18n route, which is NOT a file the guard resolves: the bundle
+    //    is assembled by MAIN from `_locales/en/messages.json` under the root, a path
+    //    src/main/i18n-host.js builds itself. One link at `_locales` therefore reached
+    //    the page through `__rozenite_i18n__` while the equivalent file request was
+    //    correctly refused. The answer here is legitimately a 200 (a folder with no
+    //    usable catalog still gets a bundle of predefined messages), so what is
+    //    asserted is the thing that must never happen — the probe's own scan of the
+    //    FULL body for the outside catalog's contents and message names.
+    assert.ok(i18nBundle, "the i18n bundle request was attempted");
+    if (i18nBundle.rejected === undefined) {
+      assert.ok(i18nBundle.bodyLength > 0, `a bundle came back: ${JSON.stringify(i18nBundle)}`);
+      assert.equal(i18nBundle.outsideContents, false, `an escaping _locales must not reach the message bundle: ${JSON.stringify(i18nBundle)}`);
+      assert.equal(i18nBundle.outsideMessage, false, `and neither may its message names: ${JSON.stringify(i18nBundle)}`);
+    }
   }
 );

@@ -19,63 +19,38 @@ const { createNetworkService } = require("../src/main/network-service");
 const { createNetworkBridge } = require("../src/chrome-shim/network-bridge");
 const { createChromeNamespace } = require("../src/chrome-shim");
 const { createMemoryBackend, createExtensionStorage } = require("../src/chrome-shim/storage");
+const { cdpRequestLifecycle } = require("./fake-rn-app");
 
 // ── fake RN app: /json/list plus one /inspector/debug socket ─────────────────
 const GraphQLUrl = "https://countries.trevorblades.com/";
 const GraphQLBody = '{"data":{"country":{"name":"Brazil"}}}';
 const GraphQLQuery = '{"query":"{ country(code: \\"BR\\") { name } }"}';
 
-/** The notifications a real RN app produces for one successful XHR. */
-const graphqlExchange = () => [
-  {
-    method: "Network.requestWillBeSent",
-    params: {
-      requestId: "fetch-1",
-      loaderId: "loader-1",
-      documentURL: "rn://devtools-poc",
-      timestamp: 100.5,
+/**
+ * The notifications a real RN app produces for one successful XHR. The SHAPE is the
+ * one tests/fake-rn-app.js documents for the same protocol (one home for it, so the
+ * two suites cannot drift into describing different backends); every number below is
+ * this file's own, because the assertions further down read them back — timings out of
+ * `timings`, `_transferSize` out of `encodedDataLength`, the HAR's content-length out
+ * of `dataLength`, and the body `createFakeApp` serves for `requestId`.
+ */
+const graphqlExchange = () =>
+  cdpRequestLifecycle({
+    requestId: "fetch-1",
+    loaderId: "loader-1",
+    documentURL: "rn://devtools-poc",
+    url: GraphQLUrl,
+    postData: GraphQLQuery,
+    userAgent: "com.example.app/1.0",
+    timings: {
+      started: 100.5,
       wallTime: 1700000000.5,
-      type: "XHR",
-      request: {
-        url: GraphQLUrl,
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        postData: '{"query":"{ country(code: \\"BR\\") { name } }"}',
-        hasPostData: true,
-      },
-      initiator: { type: "fetch", stack: { callFrames: [] } },
+      response: 100.9,
+      data: 100.95,
+      finished: 101.1,
     },
-  },
-  {
-    method: "Network.requestWillBeSentExtraInfo",
-    params: {
-      requestId: "fetch-1",
-      headers: { "content-type": "application/json", "user-agent": "com.example.app/1.0" },
-    },
-  },
-  {
-    method: "Network.responseReceived",
-    params: {
-      requestId: "fetch-1",
-      type: "XHR",
-      timestamp: 100.9,
-      response: {
-        url: GraphQLUrl,
-        status: 200,
-        statusText: "",
-        httpVersion: "HTTP/1.1",
-        mimeType: "application/json",
-        headers: { "content-type": "application/json", "content-length": "37" },
-        protocol: "http/1.1",
-      },
-    },
-  },
-  {
-    method: "Network.dataReceived",
-    params: { requestId: "fetch-1", timestamp: 100.95, dataLength: 37, encodedDataLength: 138 },
-  },
-  { method: "Network.loadingFinished", params: { requestId: "fetch-1", timestamp: 101.1, encodedDataLength: 138 } },
-];
+    bytes: { dataLength: GraphQLBody.length, encodedDataLength: 138 },
+  });
 
 function createFakeApp() {
   const sockets = new Set();

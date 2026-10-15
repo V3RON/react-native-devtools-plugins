@@ -104,7 +104,9 @@
   a side effect nobody asked for. Even under `external`, only `http:`/`https:` URLs reach
   `shell.openExternal` (`src/main/external-open.js`, shared with
   `InspectorFrontendHost.openInNewTab`): a `file:`/`smb:`/custom-scheme URL is refused, since
-  the OS would launch whatever application is registered for it.
+  the OS would launch whatever application is registered for it. `window` filters through the
+  same check before it creates a window, plus this shell's own `rozenite://<id>/` pages — so
+  `create` is not a route to the `file://` origin either.
 - **Test seams are environment variables, off by default, and ignored by a packaged build.** `DEVTOOLS_TEST_OPEN_LOG`
   (record instead of opening a browser) and `DEVTOOLS_TEST_SAVE_DIALOG` (auto-answer the save
   dialog) exist so a headless run can prove `openInNewTab` / `save` end to end
@@ -152,6 +154,20 @@
   multi-target/device multiplexing (`src/tools/fake-cdp.js` likewise proxies exactly one
   Chrome tab). Target *selection* is filterable (`DEVTOOLS_APP_FILTER` /
   `DEVTOOLS_DEVICE_FILTER`), multiplexing is not.
+  Note that `src/tools/fake-cdp.js` is a plain proxy: it does **not** inherit the F3 access
+  rules below (dev-only tool; a follow-up ticket will cover it).
+- The CDP socket has **one owner**, and a second client is *refused* rather than taking
+  over (`close 4001` + a warning in the shell's terminal). That is a divergence from
+  Chrome, where a second DevTools page evicts the first: here eviction was the attack
+  ([SECURITY-PLATFORM.md](SECURITY-PLATFORM.md) F3), so takeover is a visible refusal.
+  A frontend **reload** still reattaches — the old socket's close frees the seat, and an
+  owner that stops answering pings loses it after the bridge's liveness probe times out
+  (~1 s). There is no shared session and no way to ask politely for the seat.
+- That socket is bound to loopback only and accepts the frontend's own `Origin` (plus
+  `DEVTOOLS_CDP_ALLOWED_ORIGINS`) or no `Origin` at all from a local peer. Consequences:
+  a non-browser tool on this machine connects freely, a web page on any other origin
+  cannot, and serving the frontend from another host needs an explicit
+  `DEVTOOLS_CDP_ALLOWED_ORIGINS` (or `DEVTOOLS_CDP_HOST` to bind elsewhere at all).
 - Because the frontend URL carries `?ws=`, the frontend build talks to the socket itself
   and `InspectorFrontendHost.sendMessageToBackend` is never called — that Chrome escape
   hatch is structurally unavailable here, and the host reaches the backend on the socket
@@ -190,7 +206,8 @@
 - **The `rozenite://` scheme has no per-extension origin isolation, and that is measured, not
   assumed.** The traversal guard stops a path from escaping its own folder inside one request,
   asserted from inside a real extension frame (`../` → 404; a bootstrap `?script=../sibling/x`
-  → 404). It was never a same-origin check: a page in extension A can
+  → 404; a symlink out of the folder → 404, resolved on `fs.realpath` —
+  `tests/extension-symlink-containment.test.js`). It was never a same-origin check: a page in extension A can
   `fetch("rozenite://B/file.js")` and read the body. Verified under BOTH the old
   `registerFileProtocol` handler and the current `protocol.handle` one — identical 200 with the
   real contents — so the migration did not open this. Closing it needs per-origin isolation for
@@ -203,7 +220,19 @@
   not declare gets a failing call (`runtime.lastError` + rejected promise) and, for
   `webRequest`, no deliveries at all — enforced twice, in main (`src/main/delivery-scope.js`
   decides from the manifest **on disk**, so a frame cannot talk itself into data) and in the
-  shim (`src/chrome-shim/permission-gate.js`). Deviation from Chrome, stated: Chrome omits
+  shim (`src/chrome-shim/permission-gate.js`). Both halves are measured, in one live run of
+  the production shell with a CDP session (`tests/delivery-scope.test.js`), and each is
+  measured by the observation that can actually see it: an entitled panel frame receives
+  every `chrome.webRequest` step and `devtools.network`'s finished event; for a frame with
+  no permission, the shim half is its own report that the listeners it registered were
+  withdrawn (`hasListeners()` false) and that nothing but devtools.network's two events ever
+  arrived, while main's half is the drop itself — the run records every push main addressed
+  to a frame, and no `request` / `sendHeaders` / `response` push was ever addressed to that
+  frame while `completed` was, for every cycle. (The main half had better be measured: it
+  shipped **broken and silent** for its whole life — the filter was never imported, and the
+  swallowed exception in the delivery fan-out meant no live push reached any frame.
+  Issue #20, `docs/SECURITY-PLATFORM.md` F6.)
+  Deviation from Chrome, stated: Chrome omits
   an undeclared namespace entirely, this shell keeps the namespace and fails the call
   (shape-first rule, [OVERVIEW.md](OVERVIEW.md)).
 - **`chrome.notifications` is real, with three gaps.** It shows an Electron

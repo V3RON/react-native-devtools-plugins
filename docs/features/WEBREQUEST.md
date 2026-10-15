@@ -103,7 +103,12 @@ over time.
 Covered by [tests/web-request.test.js](../../tests/web-request.test.js),
 [network-bridge.test.js](../../tests/network-bridge.test.js), and the real-socket
 [end-to-end test](../../tests/network-end-to-end.test.js); the claims about the backend are
-read out of this repo's vendored RN. Not run against a device from this checkout — hence 🟨,
+read out of this repo's vendored RN. The delivery side is covered separately: the grant matrix
+per payload kind and a live push arriving at a real subscribed frame are asserted in
+[tests/delivery-scope.test.js](../../tests/delivery-scope.test.js), in the production shell
+with the real CDP bridge fed by a fake inspected app — that path shipped silently dead once
+(issue #20), so "an event arrives" is now an assertion and not an assumption. Still not run
+against a device from this checkout — hence 🟨,
 not ✅. The device run listed in DEVTOOLS-NETWORK.md covers this namespace too: the sample
 panel logs every `onBeforeRequest` it sees with URL, method and type.
 
