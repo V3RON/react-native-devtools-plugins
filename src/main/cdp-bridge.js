@@ -754,12 +754,19 @@ const createCdpBridge = (options = {}) => {
     }
     servers = opened;
     // `ws://[::1]:9223`, not `ws://::1:9223`: an unbracketed IPv6 literal is not a
-    // URL anybody can dial, and this line is what a developer copy-pastes.
+    // URL anybody can dial, and this line is what a developer copy-pastes. The
+    // address AND port come from `instance.address()`, not from the requested
+    // `listenHost`/`listenPort`: `listenPort: 0` asks for any free port, and a line
+    // that echoed it back would print `ws://127.0.0.1:0` while the socket sat on an
+    // ephemeral one. Same source as `listeningAddresses()` below, so the line cannot
+    // disagree with what the tests (and anything else) read back.
     log(
       "info",
-      `CDP bridge listening on ${listenHosts
-        .slice(0, opened.length)
-        .map((host) => `ws://${net.isIPv6(host) ? `[${host}]` : host}:${listenPort}`)
+      `CDP bridge listening on ${opened
+        .map((instance) => {
+          const address = instance.address();
+          return `ws://${net.isIPv6(address.address) ? `[${address.address}]` : address.address}:${address.port}`;
+        })
         .join(", ")} (Metro: ${metroHost}:${metroPort})${
         failure ? " — see the warning above" : ""
       }`

@@ -801,6 +801,12 @@ test("the default bind is loopback, and nothing else", async (t) => {
   }
 });
 
+/** The URL list `start()` prints for a set of `server.address()` results. */
+const listeningLine = (addresses) =>
+  addresses.map(
+    ({ address, port }) => `ws://${net.isIPv6(address) ? `[${address}]` : address}:${port}`
+  );
+
 test("the startup line prints an address that can actually be dialled", async (t) => {
   // The one line a developer copy-pastes was `ws://::1:9223` for the IPv6 bind, and
   // no client on earth dials that — an IPv6 literal in a URL has to be bracketed.
@@ -829,6 +835,53 @@ test("the startup line prints an address that can actually be dialled", async (t
   for (const url of printed) {
     assert.strictEqual(new URL(url).port, String(listenPort), `not diallable: ${url}`);
   }
+  // And it is the same list the socket reports, not a reconstruction of what was
+  // asked for — the next test is where that distinction matters.
+  assert.deepStrictEqual(printed, listeningLine(bridge.listeningAddresses()));
+});
+
+test("the startup line prints the port the socket HAS, not the one it was asked for", async (t) => {
+  // `listenPort: 0` means "any free port", and the two default binds on it are each
+  // given their own ephemeral port. A line built from the REQUESTED port printed
+  // `ws://127.0.0.1:0, ws://[::1]:0` — not a socket anybody can dial, copy-pasted
+  // into a browser. Found by the reviewer probing the factory, not by a shipped
+  // config (the shell and the CLI always pass a port), which is why it needs its own
+  // test rather than riding along on the pinned-port one above.
+  const lines = [];
+  const bridge = createCdpBridge({
+    metroHost: "127.0.0.1",
+    metroPort: await freePort(),
+    listenPort: 0,
+    pollIntervalMs: 20,
+    log: (_level, message) => lines.push(message),
+  });
+  // Unpinned on both sides: nothing is bound before `start()` and nothing survives
+  // `stop()`, so this test can neither leak a socket nor hide one behind a stub.
+  assert.deepStrictEqual(bridge.listeningAddresses(), [], "something was bound before start()");
+  t.after(() => bridge.stop());
+  await bridge.start();
+
+  const bound = bridge.listeningAddresses();
+  assert.deepStrictEqual(
+    bound.map((address) => (net.isIPv6(address.address) ? "::1" : "127.0.0.1")),
+    ["127.0.0.1", "::1"],
+    "the ephemeral bind did not use both loopbacks"
+  );
+  const ports = bound.map((address) => address.port);
+  assert.ok(ports.every((port) => port > 0), `the OS did not give an ephemeral port: ${ports}`);
+  assert.strictEqual(ports.length, 2);
+  assert.notStrictEqual(ports[0], ports[1], "the two binds were given one port");
+
+  const line = lines.find((message) => message.includes("CDP bridge listening on"));
+  assert.ok(line, `no listening line in ${lines}`);
+  const printed = line.match(/ws:\/\/[^\s,]+/g);
+  // The line IS the addresses the socket reports — same values, same order, IPv6
+  // bracketed. Under the old line this compared `ws://127.0.0.1:0, ws://[::1]:0`
+  // against the real ports and failed on both counts.
+  assert.deepStrictEqual(printed, listeningLine(bound));
+  assert.ok(!printed.some((url) => url.endsWith(":0")), `port 0 printed: ${printed}`);
+
+  await bridge.stop();  assert.deepStrictEqual(bridge.listeningAddresses(), [], "still bound after stop()");
 });
 
 test("an Origin outside the allowlist is refused and does not evict the frontend", async (t) => {
