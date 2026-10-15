@@ -259,11 +259,20 @@ suite("a symlinked extension root is refused by the server and skipped by the sc
   withTree(
     {
       "extensions/real.ext/manifest.json": {
-        name: "Real",
+        name: "__MSG_extName__",
         version: "1",
         manifest_version: 3,
+        default_locale: "en",
         devtools_page: "devtools.html",
         background: { service_worker: "bg.js" },
+      },
+      // A catalog the target really has: without it, "a linked root serves nothing"
+      // would pass even with the refusal removed (an extension with no `_locales`
+      // serves nothing either), which is exactly the vacuity this round exists to
+      // catch. With it, a host that trusts a linked root produces a bundle with
+      // messages in it, and the assertion below can see the difference.
+      "extensions/real.ext/_locales/en/messages.json": {
+        extName: { message: "Real EN" },
       },
       "extensions/real.ext/devtools.html": "<html></html>",
       "extensions/real.ext/bg.js": "console.log('bg');",
@@ -289,6 +298,37 @@ suite("a symlinked extension root is refused by the server and skipped by the sc
       // `loadManifest` reads through: a linked id gets no manifest, so no CSP, no
       // panel page, no options URL, no registration.
       assert.deepStrictEqual(loadManifest("linked.ext"), {});
+
+      // And the same refusal applies to i18n-host HANDED the linked path directly —
+      // doctrine in the module, not only in its callers (src/main/i18n-host.js's
+      // `containmentFor` lstats the root it receives). A future caller that forgot to
+      // check would otherwise get a full bundle out of a folder the scanner refuses to
+      // even list, and the two layers' disagreement would be the permissive one.
+      const linkedRoot = path.join(config.extensionsDir, "linked.ext");
+      const { log, warnings } = quiet();
+      const bundle = i18nHost.loadBundle({
+        root: linkedRoot,
+        extensionId: "linked.ext",
+        uiLocaleOverride: "en",
+        log,
+      });
+      assert.deepStrictEqual(bundle.messages, {}, "a linked root serves no messages to i18n-host alone");
+      assert.ok(
+        warnings.some((w) => /refused|cannot be resolved/.test(w)),
+        `and the refusal is reported, not silent: ${JSON.stringify(warnings)}`
+      );
+      assert.deepStrictEqual(
+        i18nHost.localizeManifest({
+          manifest: { name: "__MSG_extName__" },
+          rawText: '{"name":"__MSG_extName__"}',
+          root: linkedRoot,
+          extensionId: "linked.ext",
+          uiLocaleOverride: "en",
+          log,
+        }).name,
+        "__MSG_extName__",
+        "the marker stays unresolved under a linked root too"
+      );
 
       assert.ok(extensionFolders().includes("real.ext"), "the real folder is discovered");
       assert.ok(!extensionFolders().includes("linked.ext"), "the linked folder is not");
@@ -350,6 +390,19 @@ suite("the reserved inner paths keep their rules, and main-side reads still reso
       // A stylesheet the CSS-localisation path will read through an in-folder link.
       "extensions/reserved/styles/panel.css": "a{content:'__MSG_hello__'}\n",
       "extensions/reserved/styles-link": { link: "styles" },
+      // A manifest that is ITSELF a link staying inside the folder (a real build
+      // layout: ship the real file under `dist/`, link it at the top): the root both
+      // manifest-localization and the served bundle anchor on must survive it.
+      "extensions/linked-manifest/dist/manifest.json": {
+        name: "__MSG_extName__",
+        version: "1",
+        manifest_version: 3,
+        default_locale: "en",
+      },
+      "extensions/linked-manifest/manifest.json": { link: "dist/manifest.json" },
+      "extensions/linked-manifest/_locales/en/messages.json": {
+        extName: { message: "Linked Manifest EN" },
+      },
     },
     ({ extensionsDir }) => {
       for (const reserved of [BACKGROUND_BOOTSTRAP_PATH, I18N_BUNDLE_PATH]) {
@@ -440,6 +493,29 @@ suite("the reserved inner paths keep their rules, and main-side reads still reso
         }),
         "a{content:'Hello'}\n",
         "and it is localized from the linked bundle"
+      );
+
+      // 4d. The root the manifest-localization anchors on must be the EXTENSION
+      //     folder, not `path.dirname` of the manifest's realpath: for a manifest
+      //     that is itself a contained link (`manifest.json -> dist/manifest.json`)
+      //     the dirname is `…/dist`, where there is no `_locales`. That split the
+      //     two readers of one extension's messages — `getManifest().name` kept the
+      //     literal `__MSG_extName__` (no default_locale seen under `dist/`) while
+      //     the `__rozenite_i18n__` bundle the frame loaded DID resolve it, and the
+      //     bundle cache held two entries for one folder. The pin: what the host
+      //     reports and what the frame is served must be the same string.
+      const linkedManifest = loadManifest("linked-manifest");
+      const linkedBundle = i18nHost.loadBundle({
+        root: resolveInsideExtension("linked-manifest", ""),
+        extensionId: "linked-manifest",
+        uiLocaleOverride: "en",
+        log,
+      });
+      assert.strictEqual(linkedManifest.name, "Linked Manifest EN");
+      assert.strictEqual(
+        i18n.getMessage(linkedBundle, ["extName"]),
+        linkedManifest.name,
+        "chrome.runtime.getManifest().name and the served bundle agree"
       );
     }
   );
@@ -642,6 +718,7 @@ suite("the i18n and CSS-localisation reads are contained too: an escaping _local
       assert.strictEqual(i18n.getMessage(bundle, ["hello"]), "Olá", "the contained catalog still is");
     }
   );
+
 });
 
 if (!symlinksAvailable) {
