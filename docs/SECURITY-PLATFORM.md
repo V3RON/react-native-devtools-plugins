@@ -57,6 +57,26 @@ doc, and `catch {}` in a notification fan-out turns its absence into silence. Th
 recorded here: a guard whose only evidence is a unit test of the *pure function* is not a
 guard — something has to observe the value arriving.
 
+**F6 — `tabs.create` under `DEVTOOLS_TABS_OPEN=window` loaded any scheme, and is fixed.**
+Crosses line (b) like F1 and F2, but needs the non-default policy, so it is listed apart from
+both tables above. The `window` branch of `tab-host.js` called `win.loadURL(url)` with no
+scheme filter while its sibling `external` branch filtered through `openableUrl`, so
+`create({url: "file:///Users/me/Downloads/x.html"})` put a page under the `file://` origin in
+a shell window — chained with a download that leaves a file in `~/Downloads` and
+`downloads.search`'s absolute path, that is a read of anything that origin can fetch. The
+chain itself is [inferred]; the missing filter was [code].
+
+Fixed at the policy boundary: `openableWindowUrl` (`src/main/tab-host.js`) applies the same
+`openableUrl` the external branch applies, before a window is created, and additionally allows
+`rozenite://<id>/…` — this shell's own protocol, which is what `create` of a relative path
+resolves to, so an extension opening its own page still works. A refused URL throws the same
+message either policy gives, so the frame's shim reports one shape for "nothing opened"
+regardless of which policy is set. Asserted in `tests/tabs.test.js` and, through the real
+`attachTabHost` wiring, in `tests/frontend-host-electron.test.js`. What this does **not** do is
+guard the window it opens — the `tabs.create` `window`-policy window, now named in F4's `L4` row
+alongside the worker and options windows — no navigation guard, no `setWindowOpenHandler`. That
+is `L4`, not this fix.
+
 ### 1.2 What is NOT there (also the answer)
 
 - **No route from extension page code to Node.** The page world has no `require` / `process` /
@@ -195,7 +215,7 @@ host then acts on.
 | `EXT_PANEL_CREATE` | principal; page must be a file of *this* extension (`ipcMain.handle(EXT_PANEL_CREATE)` in `ipc.js`) | page path inside own folder (guarded by realpath, see F1) | Sound |
 | `DEVTOOLS_EVAL`, `DEVTOOLS_RELOAD` | principal **only** | expression / `injectedScript` (consented capability) | **F5**: no DevTools-context or `devtools_page` check |
 | `NETWORK_SUBSCRIBE/GET_HAR/GET_STATUS/GET_BODY` | principal; `webRequest`-only kinds filtered (`delivery-scope.js`) | `requestId` | **F5** for bodies and HAR from non-DevTools contexts |
-| `TABS_TARGET_INFO/OPEN/CLOSE/SEND_TO_APP` | principal + `tabs` | URL (policy `none` by default; `external` = http(s) allowlist); window handle | Sound. Under `DEVTOOLS_TABS_OPEN=window` the URL is not scheme-filtered and the window has no guards (`tab-host.js:146-150`); it gets Electron's default sandboxed, preload-less prefs [inferred] |
+| `TABS_TARGET_INFO/OPEN/CLOSE/SEND_TO_APP` | principal + `tabs` | URL (policy `none` by default; `external` = http(s) allowlist; `window` = the same allowlist plus this shell's own `rozenite://<id>/`); window handle | Sound. Both open policies decide with `openableUrl` before anything opens, so `file:` and unknown schemes are refused under either (F6) [test: `tests/tabs.test.js`, `tests/frontend-host-electron.test.js`]. The window `window` creates still has no guards and gets Electron's default sandboxed, preload-less prefs — that half is F4/L4 [inferred] |
 | `NOTIFICATION_*` | principal + `notifications` | id (owner from frame) | Sound |
 | `DOWNLOAD_*` | principal + `downloads`; owner from frame | `url`, `filename` | **F2**; ledger scoped per extension |
 | `OPTIONS_OPEN` | frame URL host; page contained | nothing | Sound; the opened window lacks guards (F4) |
@@ -234,7 +254,7 @@ Goal state, one sentence per asset:
 
 | **L2 save broker invariant** | Write to a sibling temp file, then `rename`. Create the final name with exclusive-create (`wx`) and Chrome's ` (1)` uniquify on `EEXIST`. Cleanup only ever touches the temp file. `fixedPath` (frontend re-save) uses the same temp + rename. Do not implement `conflictAction:"overwrite"` for extensions (keep reporting it). Fix the `"unique"` → `"uniquify"` spelling. | `fs.promises.open(…, "wx")`, `rename` | ~30 lines + test edits | **Worth doing, first** |
 | **L3 IPC broker** | Already in place: identity from frame, principal pinning, double permission enforcement, `isFrontendFrame` on file channels. **Add:** (i) `isFrontendFrame` on `PREF_*`, `WINDOW_*`, `SHOW_CONTEXT_MENU`; (ii) a `devtoolsCaller(event)` = registered principal **and** `event.sender === getFrontendContents()` **and** the manifest declares `devtools_page`, required by `DEVTOOLS_EVAL/RELOAD`, `NETWORK_GET_BODY`, and by `NETWORK_SUBSCRIBE/GET_HAR/GET_STATUS` unless the frame holds `webRequest`; (iii) delete the unused `Store.initRenderer()`. Keep the namespaces (shape-first rule); fail the call with lastError. | `ipcMain.handle`, `WebFrameMain` | ~25 lines | **Worth doing** |
-| **L4 extension windows** | Worker and options windows: `setWindowOpenHandler(() => ({action: "deny"}))`, plus `will-navigate` / `will-redirect` allowing only `rozenite://<same id>/`. Reuse the `guardNavigation` shape from `frontend-frame.js:69-78`. Optional: route an http(s) link to `tabs-host` policy instead of dropping it. | `webContents.setWindowOpenHandler`, `will-navigate`, `will-redirect` | ~15 lines | **Worth doing** |
+| **L4 extension windows** | Worker, options, and `tabs.create`'s `window`-policy windows (the `Extension tab` `BrowserWindow` in `tab-host.js`'s `openWindow`): `setWindowOpenHandler(() => ({action: "deny"}))`, plus `will-navigate` / `will-redirect` allowing only `rozenite://<same id>/`. Reuse the `guardNavigation` shape from `frontend-frame.js:69-78`. Optional: route an http(s) link to `tabs-host` policy instead of dropping it. | `webContents.setWindowOpenHandler`, `will-navigate`, `will-redirect` | ~15 lines | **Worth doing** |
 | **L5 CDP socket** | Default `listenHost` to loopback (`127.0.0.1` and `::1`, or switch the default `?ws=` to `127.0.0.1`). Add `verifyClient`: accept a missing `Origin` (non-browser local tools) or exactly the frontend's origin; reject everything else. `DEVTOOLS_CDP_HOST` stays the explicit opt-in for LAN use. **Landed (issue #23):** both loopbacks, `verifyClient` on the frontend origin + `DEVTOOLS_CDP_ALLOWED_ORIGINS` (unset by default), Origin-less accepted from a loopback peer only, and a second client refused instead of evicting the first. | `ws` `verifyClient`, `host` | ~10 lines | **DONE** (F3) |
 | **L6 per-extension origin for reads** | `session.defaultSession.webRequest.onBeforeRequest({urls: ["rozenite://*/*"]})`: for non-navigation resource types whose `details.frame.url` is another extension's `rozenite://`, cancel unless the path matches the target's `web_accessible_resources`. Navigations and frontend-origin requests pass. Caveat: Electron keeps one `onBeforeRequest` listener per session, so a future user must share it. | `session.webRequest`, `details.frame` (both measured to fire for the scheme) | ~30 lines | **Defer**: cheap, but low value — it protects other extensions' bundled files, not the user's |
 

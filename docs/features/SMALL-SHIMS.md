@@ -100,9 +100,15 @@ opens a marketing URL and Altair opens one from `notifications.onClicked`. Launc
 user's real browser because a devtools session started — or because a notification they
 never clicked was created — is a side effect no extension asked this host for, and the
 user cannot take it back. Whichever policy is set, the Tab descriptor says what really
-happened, so nothing is claimed that did not occur. Under `external` only `http(s)` URLs are
-handed to the OS (`src/main/external-open.js`, the allowlist `InspectorFrontendHost.openInNewTab`
-shares); anything else opens nothing: `create` still resolves with `openedVia: null` (Chrome has
+happened, so nothing is claimed that did not occur. **What a policy may open does not depend
+on which policy is set:** `external` hands only `http(s)` to the OS (`src/main/external-open.js`,
+the allowlist `InspectorFrontendHost.openInNewTab` shares), and `window` filters through the
+same function before it creates a window, so one URL cannot be openable one way and refused the
+other. `window` additionally accepts `rozenite://<extension-id>/…`, this shell's own protocol:
+that is the URL a relative `create` path resolves to, so Altair's
+`create({url: "altair-app/index.html"})` still opens its own page (issue #26 closed the gap
+where `window` loaded any scheme, `file://` included — docs/SECURITY-PLATFORM.md's F6). Anything
+else opens nothing: `create` still resolves with `openedVia: null` (Chrome has
 no refusal to model) and the calling frame logs `[chrome.tabs] tabs.create opened nothing: <reason>`.
 
 **`tabs.sendMessage` goes to the app, and only to a script that was opted in.** Its receiver
