@@ -1,5 +1,6 @@
 // Who may call the frontend-only IPC channels (InspectorFrontendHost.save / append /
-// close / openInNewTab / getHostConfig, THEME_REPORT, ...), in one place.
+// close / openInNewTab / getHostConfig, THEME_REPORT, the PREF_* / WINDOW_* /
+// SHOW_CONTEXT_MENU family, ...), in one place.
 //
 // "The sender is the frontend" is three facts, all required:
 //
@@ -13,8 +14,14 @@
 //      reach channels that write files or open URLs. `guardNavigation` also stops the
 //      navigation itself; this check is what remains true if something slips past it.
 //
+// Fact 3 is the shared rule in src/shared/frontend-identity.js, because the preload applies
+// the same test to decide which surface a frame gets (F4): what may CALL the frontend's
+// channels and what may HOLD the frontend's host object are one question.
+//
 // The frontend WebContents is injectable (`setFrontendContents`, called by
 // src/main/window.js) so the rule runs against a loopback page in the Electron tests.
+const { isFrontendUrl } = require("../shared/frontend-identity");
+
 let frontendContents = null;
 
 const setFrontendContents = (contents) => {
@@ -22,15 +29,6 @@ const setFrontendContents = (contents) => {
 };
 
 const getFrontendContents = () => frontendContents;
-
-const originOf = (url) => {
-  try {
-    const { origin } = new URL(String(url));
-    return origin === "null" ? null : origin;
-  } catch {
-    return null;
-  }
-};
 
 /** Facts 1 and 2: the event came from `contents`' own main frame. */
 const isMainFrameOf = (contents, event) =>
@@ -52,15 +50,12 @@ const isFrontendFrame = (event, options = {}) => {
   if (!isMainFrameOf(contents, event)) {
     return false;
   }
-  const expected = originOf(options.frontendURL || require("./config").frontendURL);
-  return expected !== null && originOf(event.senderFrame.url) === expected;
+  return isFrontendUrl(event.senderFrame.url, options.frontendURL || require("./config").frontendURL);
 };
 
 /** Whether the frontend window may navigate to `url` (same origin only). */
-const navigationAllowed = (url, frontendURL = require("./config").frontendURL) => {
-  const expected = originOf(frontendURL);
-  return expected !== null && originOf(url) === expected;
-};
+const navigationAllowed = (url, frontendURL = require("./config").frontendURL) =>
+  isFrontendUrl(url, frontendURL);
 
 /**
  * Deny top-level navigations of the frontend window away from the frontend's origin.
