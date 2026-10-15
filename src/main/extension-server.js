@@ -242,7 +242,17 @@ const loadManifest = (extensionId) => {
       return i18nHost.localizeManifest({
         manifest,
         rawText,
-        root: path.dirname(filePath),
+        // The EXTENSION's folder, not `path.dirname(filePath)`. `filePath` is the
+        // realpath the guard handed back, so for a manifest that is itself a link
+        // staying inside the folder (`manifest.json -> dist/manifest.json`) its dirname
+        // is `…/ext/dist` — which would anchor the i18n reads at a subfolder, find no
+        // `_locales` there, and split the bundle cache: `getManifest().name` would
+        // disagree with the `__rozenite_i18n__` bundle the frame loads from the same
+        // extension. The root is what both routes must agree on; `resolveInsideExtension
+        // (id, "")` is the same call `serveI18nBundle` and `serveLocalizedCss` make, and
+        // the dirname is the fallback for a root that cannot be named (it cannot happen
+        // for a path that just resolved, but a reader must never be handed `""`).
+        root: resolveInsideExtension(extensionId, "") || path.dirname(filePath),
         extensionId,
         uiLocaleOverride: config.uiLocale,
       });
