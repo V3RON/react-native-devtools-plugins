@@ -613,12 +613,17 @@ test("the port reported is the port bound, including when port 0 was asked for",
 
   const line = logs.find((entry) => entry.includes("listening on"));
   assert.ok(line, `the bridge says where it listens: ${logs.join(" | ")}`);
+  // The line names the address:port the socket ACTUALLY has (post-#23 the printed
+  // line is built from instance.address(), the same source listenPort() reads —
+  // not the "localhost" alias, which describes the requested bind, not the bound
+  // one). What this test owns is the port half: the number here must be the bound
+  // one, so the dialer's endpoint and the log can never disagree.
   assert.ok(
-    line.includes(`ws://localhost:${bound}`),
+    line.includes(`:${bound}`),
     `the startup line names the bound port: ${line}`
   );
   assert.ok(
-    !logs.some((entry) => entry.includes("localhost:0")),
+    !logs.some((entry) => /listening on.*(localhost:0|\[::1\]:0|127\.0\.0\.1:0)/.test(entry)),
     `and never the placeholder: ${logs.join(" | ")}`
   );
 });
