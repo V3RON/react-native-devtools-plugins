@@ -719,6 +719,53 @@ suite("the i18n and CSS-localisation reads are contained too: an escaping _local
     }
   );
 
+  // 6d. The linked directory that stays INSIDE. `Dirent.isDirectory()` reads the
+  // directory ENTRY, so it is false for every symlink: under an entry-type rule alone
+  // a contained `_locales/en -> vendor/en` is silently skipped — no catalog, no
+  // warning — and the per-entry `contain()` in `localeDirectories` has no reachable
+  // input (a real directory and a link cannot share one name), which is why removing
+  // that check survived all 638 tests. This fixture kills both mutants: with the
+  // entry-type rule alone, the contained `en` vanishes and `hello` goes unanswered;
+  // with the check removed, the escaped `_locales/de` drops out of the listing UNSAID
+  // (its bytes would still be refused later by the read's own check — what the
+  // per-entry check owns is the REPORT). Same doctrine as suite 2: containment, not
+  // "no symlinks".
+  withTree(
+    {
+      ...OUTSIDE_BUNDLE,
+      "extensions/linked-locale/manifest.json": {
+        name: "Linked Locale",
+        version: "1",
+        manifest_version: 3,
+        default_locale: "en",
+      },
+      "extensions/linked-locale/vendor/en/messages.json": { hello: { message: "Hello" } },
+      "extensions/linked-locale/_locales/en": { link: "../vendor/en" },
+      // An escaped locale directory: readdir sees the LINK, so the only line between
+      // this name and the outside catalog's KEY NAMES is the per-entry check, which
+      // warns — the escape must arrive reported, never served.
+      "extensions/linked-locale/_locales/de": { link: "../../../outside/locales" },
+    },
+    () => {
+      const { log, warnings } = quiet();
+      const bundle = i18nHost.loadBundle({
+        root: resolveInsideExtension("linked-locale", ""),
+        extensionId: "linked-locale",
+        uiLocaleOverride: "en",
+        log,
+      });
+      assert.strictEqual(
+        i18n.getMessage(bundle, ["hello"]),
+        "Hello",
+        "a contained linked locale directory is read like any other"
+      );
+      assert.ok(
+        warnings.some((w) => /_locales\/de is refused/.test(w)),
+        `the escaped linked locale directory is refused AND reported: ${JSON.stringify(warnings)}`
+      );
+      assert.ok(!/OUTSIDE-/.test(JSON.stringify(bundle)), "and its catalog never enters the bundle");
+    }
+  );
 });
 
 if (!symlinksAvailable) {

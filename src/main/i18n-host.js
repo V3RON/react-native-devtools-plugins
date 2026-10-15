@@ -177,17 +177,44 @@ const localeDirectories = (root, contain, warn = () => {}) => {
   }
   try {
     for (const entry of fs.readdirSync(localesDir, { withFileTypes: true })) {
-      const locale = entry.isDirectory() ? i18n.normalizeLocale(entry.name) : "";
+      // `Dirent.isDirectory()` reads the directory ENTRY, so it is false for a symlink —
+      // which would make a contained `_locales/en -> ../vendor/en` invisible here while
+      // every other contained link of the folder still works (suite 2: the rule is about
+      // where a path lands, not which entries are links). A link is therefore a
+      // candidate, and what decides it is the containment check below plus a `stat` AFTER
+      // it on the real path that check returned: a link to a folder inside counts, one
+      // that escapes is refused and reported, one to a plain file is skipped like any
+      // other non-directory. This is also what makes the per-entry check load-bearing:
+      // under the entry-type rule alone the check has no reachable input (a real
+      // directory and a link cannot share one name), and its removal survived all 638
+      // tests — see 6d in tests/extension-symlink-containment.test.js.
+      const candidate = entry.isDirectory() || entry.isSymbolicLink();
+      const locale = candidate ? i18n.normalizeLocale(entry.name) : "";
       // `_locales/pt_br` is accepted for `pt_BR`; an exact name wins over a mis-cased one.
       if (!locale) {
         continue;
       }
+      let directory;
       try {
-        contain(path.join(LOCALES_DIR, entry.name));
+        directory = contain(path.join(LOCALES_DIR, entry.name));
       } catch (error) {
         if (error.refused) {
           warn(`${LOCALES_DIR}/${entry.name} is ${error.message}`);
         }
+        continue;
+      }
+      // Stat AFTER the containment check, on the path it returned: a name that is not a
+      // folder — a plain file, or a link that became one — is not a locale directory,
+      // and this runs for untrusted names under a folder that changes under us (§7,
+      // item 7). A swap between the check and here can only COST a locale, never smuggle
+      // one: the catalog read below re-checks the file it opens anyway.
+      let isFolder = false;
+      try {
+        isFolder = fs.statSync(directory).isDirectory();
+      } catch {
+        // it went away between the check and here: not a locale folder
+      }
+      if (!isFolder) {
         continue;
       }
       if (found[locale] === undefined || entry.name === locale) {
