@@ -768,6 +768,99 @@ suite("the i18n and CSS-localisation reads are contained too: an escaping _local
   );
 });
 
+// ── 7. the bundle-cache signature's stamp reads ──────────────────────────────
+suite("the cache signature stamps the contained path, so a relink cannot keep a stale bundle alive", { timeout: 60000 }, () => {
+  // The signature beside the cache is built from `stat` of the SAME contained paths the
+  // bundle reads (statStamp in src/main/i18n-host.js). Stamping the raw join instead
+  // survives all 638 tests, because its exact failure was never observed: an escaped
+  // input reports the OUTSIDE file's mtime and size, so a swap that keeps both
+  // identical — byte-identical content, mtime forged with utimes — keeps the stale
+  // bundle cached forever, and a plain touch of the outside target churns the host's
+  // cache from OUTSIDE the folder. A refused input stamps "-": the old entry can never
+  // collide with it, so the swap forces the rebuild, and the rebuild reports.
+  withTree(
+    {
+      "outside/identical/messages.json": { hello: { message: "Hello" } },
+      "extensions/stamper/manifest.json": {
+        name: "Stamper",
+        version: "1",
+        manifest_version: 3,
+        default_locale: "en",
+      },
+      "extensions/stamper/_locales/en/messages.json": { hello: { message: "Hello" } },
+    },
+    ({ root }) => {
+      const target = path.join(root, "outside/identical/messages.json");
+      const realFile = path.join(root, "extensions/stamper/_locales/en/messages.json");
+      // Forge the invisibility of the swap BEFORE anything is cached: identical bytes
+      // (the fixture wrote the same JSON to both), and an mtime set to the same value
+      // on both sides — the whole-millisecond granularity the stamp commits to
+      // (src/main/i18n-host.js). The comparison is between the two stats rather than
+      // against the Date handed to utimes, because what a filesystem stores from a
+      // Date is its own business (APFS reads back `…510.000` as `…509.999`); equal
+      // inputs must produce equal stamps, and these assertions fail HERE — rather than
+      // as a vacuous cache pass later — if they do not.
+      const forged = new Date(Date.now());
+      fs.utimesSync(realFile, forged, forged);
+      fs.utimesSync(target, forged, forged);
+      const stamp = fs.statSync(realFile);
+      const lookalike = fs.statSync(target);
+      assert.ok(stamp.mtimeMs > 0 && Number.isFinite(stamp.mtimeMs), "the stamp is a real timestamp");
+      assert.strictEqual(lookalike.mtimeMs, stamp.mtimeMs, "a raw join cannot tell the two apart");
+      assert.strictEqual(lookalike.size, stamp.size, "on either half of the stamp");
+      assert.ok(fs.readFileSync(target).equals(fs.readFileSync(realFile)), "byte-identical");
+
+      const extRoot = resolveInsideExtension("stamper", "");
+      const load = (logs) =>
+        i18nHost.loadBundle({
+          root: extRoot,
+          extensionId: "stamper",
+          uiLocaleOverride: "en",
+          log: logs.log,
+        });
+
+      const clean = quiet();
+      const first = load(clean);
+      assert.strictEqual(i18n.getMessage(first, ["hello"]), "Hello");
+      assert.deepStrictEqual(clean.warnings, [], "a clean folder builds clean");
+      assert.strictEqual(load(clean), first, "and the steady state is the cache");
+
+      // The swap: contained name, outside target, identical forged stamp.
+      fs.rmSync(realFile);
+      fs.symlinkSync(path.relative(path.dirname(realFile), target), realFile);
+
+      // "-" (the refusal's stamp) can never equal `<mtime>:<size>`, so the next load
+      // rebuilds — and the rebuild reports. Under a raw-join stamp NOTHING happens
+      // here: the stale entry keeps being served, in silence.
+      const after = quiet();
+      const rebuilt = load(after);
+      assert.notStrictEqual(rebuilt, first, "the relink forces a rebuild, identical stamp or not");
+      assert.ok(
+        after.warnings.some((w) => /_locales\/en\/messages\.json unreadable/.test(w)),
+        `and the refused rebuild is reported: ${JSON.stringify(after.warnings)}`
+      );
+      assert.strictEqual(i18n.getMessage(rebuilt, ["hello"]), "", "the refused catalog contributes nothing");
+
+      // The other half of the same rule: while the refusal STANDS, the outside file
+      // has no path into the signature at all. Repeated loads hit the cache — the
+      // refusal's loudness is per rebuild, not per access (src/main/i18n-host.js) —
+      // and touching the OUTSIDE target changes nothing the host can see. A raw join
+      // would churn and re-report on every touch, from outside the folder.
+      const stable = quiet();
+      assert.strictEqual(load(stable), rebuilt, "the refused input holds the cache stable");
+      assert.deepStrictEqual(stable.warnings, [], "said once, with its rebuild, not per access");
+      const later = new Date(Date.now() + 5000);
+      fs.utimesSync(target, later, later);
+      assert.strictEqual(
+        load(stable),
+        rebuilt,
+        "touching ONLY the outside target cannot invalidate or churn the host's cache"
+      );
+      assert.deepStrictEqual(stable.warnings, [], "and cannot make the host report again");
+    }
+  );
+});
+
 if (!symlinksAvailable) {
   test("symlink containment could not be exercised on this platform", () => {
     // Keeps the skip visible: the rule above is untested when unprivileged symlink
