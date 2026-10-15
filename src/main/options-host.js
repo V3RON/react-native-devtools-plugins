@@ -124,6 +124,9 @@ const attachOptionsHost = (deps = {}) => {
   const { BrowserWindow } = require("electron");
   const config = require("./config");
   const { extensionFramePreferences } = require("./frame-security");
+  // The same guard the hidden worker windows get: an options page is a top-level extension
+  // document with the production preload, so it needs it for the same reason (GitHub issue #24).
+  const { guardExtensionWindow } = require("./extension-window-policy");
   const { buildExtensionURL } = require("../shared/protocol");
   const { createOptionsHost: build } = require("./options-host");
 
@@ -146,6 +149,10 @@ const attachOptionsHost = (deps = {}) => {
         // extension page, not a privileged one (src/main/frame-security.js).
         webPreferences: extensionFramePreferences({ preloadPath: config.preloadPath }),
       });
+      // Guarded against the URL this window is about to load, so the policy is the owning
+      // extension's own origin: the page can move its window inside that extension, and
+      // nowhere else. `window.open` is denied, like every other window this shell owns.
+      guardExtensionWindow(win.webContents, url, "options");
       win.loadURL(url).catch(() => {});
       return win.id;
     },
