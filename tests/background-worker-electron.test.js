@@ -639,7 +639,11 @@ suite(
               status: r.status,
               bodyLength: t.length,
               outsideContents: /OUTSIDE-/.test(t),
-              outsideMessage: /extName/.test(t),
+              // Case-insensitive because the compiled bundle keys are LOWERCASED
+              // (compiled[name.toLowerCase()] in src/shared/i18n.js), so a leak of the
+              // catalog staged below arrives as "extname", never "extName". Matching
+              // the capitalised name asserted what this probe cannot observe.
+              outsideMessage: /extname/i.test(t),
             })),
             (e) => ({ url: "/__rozenite_i18n__", rejected: String(e.message) })
           ),

@@ -94,6 +94,10 @@ const containmentFor = (root) => {
       wrapped.refused = !missing;
       throw wrapped;
     }
+    // The rule: the real path must BE the root or sit under it plus a separator.
+    // Its teeth were verified by bypassing exactly this line: with the check forced
+    // never to refuse, the probe in tests/background-worker-electron.test.js reports
+    // BOTH outsideContents and outsideMessage true, so neither assertion is vacuous.
     if (real !== realRoot && !real.startsWith(realRoot + path.sep)) {
       const error = new Error("refused: it resolves outside the extension folder");
       error.refused = true;
