@@ -95,10 +95,27 @@ const RESERVED_INNER_PATHS = new Set([BACKGROUND_BOOTSTRAP_PATH, I18N_BUNDLE_PAT
  * claimed here; the point is that the remaining window needs the same privilege as
  * the thing we already accept.
  *
- * Scope of the platform behaviour: verified on macOS and Linux. On Windows,
- * `lstatSync().isSymbolicLink()` is false for NTFS junctions and other reparse
- * points, and the realpath prefix compare is case-sensitive on a case-insensitive
- * filesystem, so neither is covered by this rule or by these tests.
+ * What that window does NOT include, stated honestly: HARDLINKS are invisible to
+ * every check here. A hardlink is not a link to them — `lstatSync().isSymbolicLink()`
+ * is false and `realpathSync` reports the name's own path — so a file hardlinked
+ * INTO an extension folder passes containment as one of its own. What keeps that
+ * from being an escape is where Unix permissions live: on the INODE. `link()` is
+ * permissive (measured on macOS: even a root-owned 0600 file the developer cannot
+ * read hardlinks fine), but every read through the new name fails EACCES exactly as
+ * the old name did — the mode and owner came with the inode. This server reads with
+ * no more privilege than the developer's own shell, and creating the hardlink took
+ * write access to this folder, which §7 item 7 already treats as full developer
+ * control; so the residual is at most "one file this process could already read
+ * gains a servable name", never the arbitrary read a symlink made. Directory
+ * hardlinks are not creatable at all (measured: EPERM).
+ *
+ * Scope of the platform behaviour: everything above was MEASURED on macOS; the
+ * Linux equivalents are claimed BY CONSTRUCTION (`lstat`/`realpath` with the same
+ * semantics, no directory hardlinks, permissions equally per-inode) because no CI
+ * here runs them. On Windows, `lstatSync().isSymbolicLink()` is false for NTFS
+ * junctions and other reparse points, and the realpath prefix compare is
+ * case-sensitive on a case-insensitive filesystem, so neither is covered by this
+ * rule or by these tests.
  *
  * @returns {string|null} the real (link-free) path for anything that exists, the
  * text-contained path for a name with nothing behind it (so a caller can still

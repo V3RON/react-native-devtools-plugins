@@ -284,6 +284,16 @@ const bundleCache = new Map(); // root -> { signature, bundle }
  * follows links too, so stamping a raw joined name would let a linked catalog report
  * an outside file's mtime and size to whoever can time a rebuild. Refused or missing
  * both stamp "-", which is what "no such input" already meant.
+ *
+ * The granularity this accepts, stated: a relink from one CONTAINED file to another
+ * with an identical whole-millisecond mtimeMs AND identical size keeps serving the
+ * cached bundle until some other input changes. Containment-only cost (both files
+ * are inside the folder), no confidentiality one, and the window closes on the next
+ * cache miss for any other edit; the alternative is hashing contents on every frame
+ * load. Across the boundary that matters — a relink to OUTSIDE — there is no
+ * granularity to speak of: the refusal stamps "-", which no file's stamp can equal,
+ * so the swap always forces the rebuild. Suite 7 of
+ * tests/extension-symlink-containment.test.js forges exactly that collision.
  */
 const statStamp = (contain, innerPath) => {
   let file;
@@ -310,6 +320,17 @@ const loadBundle = ({ root, extensionId, uiLocaleOverride = "", log = console })
   // through it anyway).
   const contain = containmentFor(root);
   const directories = localeDirectories(root, contain);
+  // The silent listing is deliberate, and it is the refusal's loudness rule: this
+  // signature pass lists `_locales` WITHOUT a warn, so an escaping entry is reported
+  // only when the bundle is actually (re)built below — a persistent escape says it
+  // once per rebuild, not once per frame load. That is acceptable because the cache
+  // cannot be poisoned: a refused input stamps "-", so a byte-identical outside
+  // catalog (same size, same whole-ms mtime) can never produce a stamp that matches
+  // the entry made while the file was contained — the check fails closed on the
+  // refusal itself, and the bundle behind the cache entry is one where the read was
+  // refused. Any later miss both rebuilds and reports again. Suite 7 of
+  // tests/extension-symlink-containment.test.js asserts both halves: the swap
+  // rebuilds and reports, and the standing refusal stays quiet per access.
   const signature = [
     extensionId,
     uiLocale,
