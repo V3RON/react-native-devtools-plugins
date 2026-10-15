@@ -163,8 +163,10 @@ const createDevtools = ({
       return Promise.resolve(panel); // promise style (MV3, no callback)
     },
     elements: {
-      // [STUB] sidebar panes await inspectedWindow eval + element selection
-      // (docs/features/DEVTOOLS-PANELS.md, INSPECTED-WINDOW.md).
+      // [STUB, permanent] No anchor: these panes render under the Elements panel, which React
+      // Native DevTools does not have (no DOM, no element selection). Inert shape only, so a
+      // Redux-family panel still loads — docs/OVERVIEW.md (the anchor list),
+      // docs/features/DEVTOOLS-PANELS.md.
       createSidebarPane(title, cb) {
         const pane = {
           title: title || "",

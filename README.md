@@ -97,3 +97,7 @@ docs/           documentation — start at docs/README.md or docs/STRUCTURE.md
   analysis, roadmap.
 - Start with [docs/OVERVIEW.md](docs/OVERVIEW.md) (the idea + what was achieved) and
   [docs/features/README.md](docs/features/README.md) (status of each functionality).
+- Want the remaining work, with anything that can't exist in React Native DevTools already
+  removed? [docs/ROADMAP.md → "What we can actually implement"](docs/ROADMAP.md#what-we-can-actually-implement-the-pruned-list).
+  APIs marked 🚷 there and across the docs have no anchor in RN DevTools (no Elements panel,
+  no DOM, no page, no browser chrome) and are closed, not deferred.

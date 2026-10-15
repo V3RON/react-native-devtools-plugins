@@ -6,6 +6,11 @@
 | **Tier** | 1 |
 | **Blocked by** | RN network inspection (the CDP transport exists: [src/main/cdp-bridge.js](../../src/main/cdp-bridge.js)) |
 
+The remaining open work here is one thing: **the device run** from this checkout
+([../ROADMAP.md](../ROADMAP.md#what-we-can-actually-implement-the-pruned-list), item 1). What
+this namespace can *never* do — blocking, and the two events with no CDP counterpart — is 🚷
+and covered in [WEBREQUEST.md](WEBREQUEST.md).
+
 ## Chrome surface
 
 - `devtools.network.onRequestFinished(listener)` — listener receives a `Request` object:

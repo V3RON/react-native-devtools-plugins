@@ -37,8 +37,8 @@ bodies are gone.
 | `onResponseStarted` | yes | `Network.responseReceived` (non-3xx) |
 | `onCompleted` | yes | `Network.loadingFinished` |
 | `onErrorOccurred` | yes | `Network.loadingFailed` |
-| `onHeadersReceived` | **no** | no CDP counterpart on this backend |
-| `onAuthRequired` | **no** | no CDP counterpart on this backend |
+| `onHeadersReceived` | **no** 🚷 | no CDP counterpart on this backend |
+| `onAuthRequired` | **no** 🚷 | no CDP counterpart on this backend |
 
 The two silent ones are still registrable — Chrome's shape, `hasListener`/`removeListener`
 included — so feature detection and cleanup code keeps working; they simply never fire
@@ -79,8 +79,8 @@ real Chrome value instead of an invented one.
 
 ### Blocking: not feasible, and it says so
 
-RN implements no CDP `Fetch` domain, so nothing here can cancel, redirect, or rewrite a
-request. `addListener(cb, filters, ["blocking"])` registers normally — extensions do not
+🚷 **No anchor, not an open item.** RN implements no CDP `Fetch` domain, so nothing here can
+cancel, redirect, or rewrite a request. `addListener(cb, filters, ["blocking"])` registers normally — extensions do not
 crash — and the frame logs one sentence, once: *"this host is observe-only … a listener can
 never block, cancel or rewrite a request"*. Listeners must not expect a blocking return
 value. The read-only hints Chrome documents (`requestBody`, `responseHeaders`) are answered
