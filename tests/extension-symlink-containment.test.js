@@ -17,9 +17,11 @@
 //      an escape reached by joining segments on AFTER the link was followed;
 //   2. a link that stays inside the folder still RESOLVES — containment is about where
 //      a path lands, not about which directory entries happen to be links;
-//   3. a symlinked extension ROOT is refused by the server AND skipped by the scan:
-//      the two containment layers agree on what an extension is, and that agreement is
-//      stated in the guard's docblock (src/main/extension-server.js);
+//   3. a symlinked extension ROOT is refused by the server AND skipped by the scan —
+//      and the same refusal now lives inside `i18n-host.containmentFor` itself, so
+//      handing it a linked root directly serves nothing either. The two containment
+//      layers agree on what an extension is, and that agreement is stated in the
+//      guard's docblock (src/main/extension-server.js);
 //   4. the RESERVED inner paths keep their rules in both directions, and the main-side
 //      reads they exist for still work — the background bootstrap's script and the
 //      chrome.i18n bundle, which read the root and `_locales/` rather than a
@@ -30,7 +32,10 @@
 //      under the root (`_locales/<locale>/messages.json`) and therefore never pass a
 //      page-facing resolver — are contained by the same rule, inside
 //      `src/main/i18n-host.js`. That is what makes the claim above ("every caller
-//      inherits it") true rather than aspirational.
+//      inherits it") true rather than aspirational;
+//   7. the bundle cache's signature STATS go through the same containment — the one
+//      place a refused input's mtime and size could still be read — pinned by forging
+//      the collision a raw join would walk into.
 //
 // The folder is a temp dir and `config.extensionsDir` is redirected at CALL time — the
 // technique tests/extensions-scan.test.js and tests/content-scripts-registry.test.js
