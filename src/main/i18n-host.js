@@ -64,15 +64,32 @@ const readJson = (file) => {
  * not allowed here (as opposed to simply not being there)
  */
 const containmentFor = (root) => {
-  let realRoot = "";
+  // The linked-root refusal lives HERE as well as in the request guard, not only in the
+  // callers: the doctrine "a symlinked folder is never an extension root" is a property
+  // of THIS module's reads, and until now it held only because every caller (
+  // src/main/extension-server.js) had refused a linked root before handing it in. A
+  // caller that forgot would get a bundle out of a folder the scanner would not even
+  // list — the permissive disagreement the guard's docblock rules out. `lstat` decides,
+  // because `realpath` resolves the link and would make a linked root look ordinary.
+  let rootIsLink = true;
   try {
-    realRoot = fs.realpathSync(root);
+    rootIsLink = fs.lstatSync(root).isSymbolicLink();
   } catch {
-    // The root itself cannot be resolved: this file can say nothing about any path
-    // under it, so every read is refused rather than trusted. A folder that is not
-    // there has no messages either way.
-    realRoot = null;
+    // Cannot even look at the entry: nothing under it can be vouched for either.
   }
+  let realRoot = null;
+  if (!rootIsLink) {
+    try {
+      realRoot = fs.realpathSync(root);
+    } catch {
+      // The root itself cannot be resolved: this file can say nothing about any path
+      // under it, so every read is refused rather than trusted.
+      realRoot = null;
+    }
+  }
+  // A root that is a link, or cannot be resolved, leaves `realRoot` null and so refuses
+  // every read below rather than being trusted. A folder that is not there has no
+  // messages either way, and a linked folder is not an extension at all.
   const contain = (innerPath) => {
     if (realRoot === null) {
       const error = new Error("the extension folder cannot be resolved");
@@ -140,10 +157,16 @@ const systemLocale = (override = "") => {
 /** Directory names under `_locales`, as { normalized name -> real directory name }. */
 const localeDirectories = (root, contain, warn = () => {}) => {
   const found = {};
-  // The directory itself first: a linked `_locales` is exactly the shape that made
-  // this file read outside the folder, and listing it is already a read of it.
+  // The directory itself first: a linked `_locales` is exactly the shape that made this
+  // file read outside the folder, and listing it is already a read of it.
+  // The listing then reads what that check RETURNED rather than re-joining the text
+  // path: readdir follows links too, so between the check and the readdir a swapped-in
+  // `_locales` would put an outside folder's ENTRY NAMES into the warnings below. No
+  // bytes leak — the per-entry check under it refuses each escaped entry — but a name is
+  // still information, and a check whose answer is thrown away is not a check.
+  let localesDir;
   try {
-    contain(LOCALES_DIR);
+    localesDir = contain(LOCALES_DIR);
   } catch (error) {
     if (error.refused) {
       warn(`${LOCALES_DIR} is ${error.message}`);
@@ -153,7 +176,7 @@ const localeDirectories = (root, contain, warn = () => {}) => {
     return found;
   }
   try {
-    for (const entry of fs.readdirSync(path.join(root, LOCALES_DIR), { withFileTypes: true })) {
+    for (const entry of fs.readdirSync(localesDir, { withFileTypes: true })) {
       const locale = entry.isDirectory() ? i18n.normalizeLocale(entry.name) : "";
       // `_locales/pt_br` is accepted for `pt_BR`; an exact name wins over a mis-cased one.
       if (!locale) {
