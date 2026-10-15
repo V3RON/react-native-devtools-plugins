@@ -881,7 +881,8 @@ test("the startup line prints the port the socket HAS, not the one it was asked 
   assert.deepStrictEqual(printed, listeningLine(bound));
   assert.ok(!printed.some((url) => url.endsWith(":0")), `port 0 printed: ${printed}`);
 
-  await bridge.stop();  assert.deepStrictEqual(bridge.listeningAddresses(), [], "still bound after stop()");
+  await bridge.stop();
+  assert.deepStrictEqual(bridge.listeningAddresses(), [], "still bound after stop()");
 });
 
 test("an Origin outside the allowlist is refused and does not evict the frontend", async (t) => {
