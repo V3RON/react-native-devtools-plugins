@@ -73,7 +73,11 @@ into the frontend's main world, never `require`d at runtime.
 - `extension-server.js` — registers the privileged custom scheme **`rozenite://`**
   mapping `rozenite://<extension-id>/<path>` → `extensions/<extension-id>/<path>`,
   guarded against path traversal. **Installing an extension = dropping its unpacked
-  folder into `extensions/`.** Every response carries that extension's CSP
+  folder into `extensions/`.** Containment is decided on `fs.realpath` of both the folder
+  and the target, so a symlink planted inside an extension cannot point outside it, and a
+  symlinked folder is never an extension root — the same verdict the scan reaches, because
+  `readdir` + `isDirectory()` never reports a link
+  (`tests/extension-symlink-containment.test.js`). Every response carries that extension's CSP
   (`src/shared/csp.js`): its own `content_security_policy`, or Chrome's MV3 default.
   The handler is **`protocol.handle`**, not the deprecated `registerFileProtocol`, because
   one response kind has no bytes on disk: the reserved path

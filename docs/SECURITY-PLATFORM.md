@@ -192,7 +192,7 @@ host then acts on.
 | `RUNTIME_GET_MANIFEST`, `RUNTIME_REGISTER` | frame URL host | nothing | Sound |
 | `RUNTIME_SEND_MESSAGE/RESPONSE/CONNECT/PORT_*` | registered principal | port / request ids, router-scoped | Sound [test: messaging-frames] |
 | `STORAGE_CALL` | principal + `storage` grant | area (validated), keys | Sound |
-| `EXT_PANEL_CREATE` | principal; page must be a file of *this* extension (`ipcMain.handle(EXT_PANEL_CREATE)` in `ipc.js`) | page path inside own folder | Sound (but see F1 for "inside") |
+| `EXT_PANEL_CREATE` | principal; page must be a file of *this* extension (`ipcMain.handle(EXT_PANEL_CREATE)` in `ipc.js`) | page path inside own folder (guarded by realpath, see F1) | Sound |
 | `DEVTOOLS_EVAL`, `DEVTOOLS_RELOAD` | principal **only** | expression / `injectedScript` (consented capability) | **F5**: no DevTools-context or `devtools_page` check |
 | `NETWORK_SUBSCRIBE/GET_HAR/GET_STATUS/GET_BODY` | principal; `webRequest`-only kinds filtered (`delivery-scope.js`) | `requestId` | **F5** for bodies and HAR from non-DevTools contexts |
 | `TABS_TARGET_INFO/OPEN/CLOSE/SEND_TO_APP` | principal + `tabs` | URL (policy `none` by default; `external` = http(s) allowlist); window handle | Sound. Under `DEVTOOLS_TABS_OPEN=window` the URL is not scheme-filtered and the window has no guards (`tab-host.js:146-150`); it gets Electron's default sandboxed, preload-less prefs [inferred] |

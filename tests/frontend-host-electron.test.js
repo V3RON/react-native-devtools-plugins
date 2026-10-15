@@ -33,7 +33,13 @@ const run = () =>
       [path.join(__dirname, "frontend-host-harness.js"), `--out=${out}`, `--user-data-dir=${path.join(root, "ud")}`],
       {
         stdio: ["ignore", "pipe", "pipe"],
-        env: { ...process.env, DEVTOOLS_TEST_OPEN_LOG: openLog, DEVTOOLS_TEST_SAVE_DIALOG: saved },
+        // ELECTRON_RUN_AS_NODE stripped for the reason tests/electron-runner.js spells out.
+        env: {
+          ...process.env,
+          DEVTOOLS_TEST_OPEN_LOG: openLog,
+          DEVTOOLS_TEST_SAVE_DIALOG: saved,
+          ELECTRON_RUN_AS_NODE: undefined,
+        },
       }
     );
     let output = "";

@@ -6,11 +6,16 @@
 // `chrome.i18n.getMessage` at the top of their first script, so the answer has to exist
 // before any page script runs. Every IPC channel here is async (src/shared/ipc.js — no
 // sendSync), and an async answer would arrive after the first call. The extension
-// protocol is already the one sanctioned way for a frame to read its own files, it
-// already carries the path-containment guard, and a synchronous XMLHttpRequest to the
-// frame's OWN origin reads it without any new channel (src/preload/extension-frame.js).
+// protocol is already the one sanctioned way for a frame to read its own files, and a
+// synchronous XMLHttpRequest to the frame's OWN origin reads it without any new
+// channel (src/preload/extension-frame.js).
 // The frame decides nothing: the extension id is the request's own hostname, the UI
-// locale is the host's, and every file read happens here under the containment guard.
+// locale is the host's, and every file read happens here under a containment check —
+// but NOT under the protocol server's guard. That guard decides containment for the
+// path a REQUEST names; the paths in this file are built here from the root it was
+// handed, so `containmentFor` below applies the same realpath rule to them. Reading
+// the server's "every read goes through the guard" as covering these derived paths is
+// how an escaping `_locales` once reached a bundle (docs/SECURITY-PLATFORM.md §3.2).
 const fs = require("fs");
 const path = require("path");
 const i18n = require("../shared/i18n");
@@ -27,6 +32,102 @@ const readJson = (file) => {
   }
   return JSON.parse(fs.readFileSync(file, "utf8").replace(/^﻿/, ""));
 };
+
+/**
+ * The realpath rule, applied HERE rather than left to the caller.
+ *
+ * `src/main/extension-server.js` decides containment for the path a REQUEST names,
+ * but the reads in this file are for paths this file DERIVES — `manifest.json`,
+ * `_locales/<locale>/messages.json` — and a derived path never passes that guard.
+ * One `victim/_locales -> outside` link therefore left the message bundle reading
+ * outside the folder while `resolveExtensionFile("victim",
+ * "_locales/en/messages.json")` correctly answered null: the guard looked closed
+ * because the request it refused was not the request being read. So containment is
+ * decided again here, on every path derived from `root`, and every caller of this
+ * file inherits it — the protocol handler, the manifest reader, and the CSS
+ * localisation alike.
+ *
+ * The anchor is `fs.realpathSync(root)`, i.e. the root this file was handed after the
+ * caller's own check, and the rule is the guard's: the real path of the derived name
+ * must be the root or start with it plus a separator (docs/SECURITY-PLATFORM.md §3.2).
+ *
+ * That rule therefore exists twice: `resolveInsideExtension` in
+ * src/main/extension-server.js, and `containmentFor` here. It cannot be shared,
+ * because extension-server requires THIS module and a shared guard would close the
+ * cycle in the wrong direction — so the two are deliberately the same rule, and a
+ * change to one is a change to the other. It is not one rule enforced in two places by
+ * accident; it is one rule with two enforcement points because one of the readers
+ * derives paths the request-time guard never sees.
+ *
+ * @returns {((innerPath: string) => string) & { realRoot: string }} the REAL path to
+ * read, throwing an `Error` whose `refused` flag says whether the path exists but is
+ * not allowed here (as opposed to simply not being there)
+ */
+const containmentFor = (root) => {
+  // The linked-root refusal lives HERE as well as in the request guard, not only in the
+  // callers: the doctrine "a symlinked folder is never an extension root" is a property
+  // of THIS module's reads, and until now it held only because every caller (
+  // src/main/extension-server.js) had refused a linked root before handing it in. A
+  // caller that forgot would get a bundle out of a folder the scanner would not even
+  // list — the permissive disagreement the guard's docblock rules out. `lstat` decides,
+  // because `realpath` resolves the link and would make a linked root look ordinary.
+  let rootIsLink = true;
+  try {
+    rootIsLink = fs.lstatSync(root).isSymbolicLink();
+  } catch {
+    // Cannot even look at the entry: nothing under it can be vouched for either.
+  }
+  let realRoot = null;
+  if (!rootIsLink) {
+    try {
+      realRoot = fs.realpathSync(root);
+    } catch {
+      // The root itself cannot be resolved: this file can say nothing about any path
+      // under it, so every read is refused rather than trusted.
+      realRoot = null;
+    }
+  }
+  // A root that is a link, or cannot be resolved, leaves `realRoot` null and so refuses
+  // every read below rather than being trusted. A folder that is not there has no
+  // messages either way, and a linked folder is not an extension at all.
+  const contain = (innerPath) => {
+    if (realRoot === null) {
+      const error = new Error("the extension folder cannot be resolved");
+      error.refused = true;
+      throw error;
+    }
+    let real;
+    try {
+      real = fs.realpathSync(path.resolve(root, innerPath));
+    } catch (error) {
+      // ENOENT/ENOTDIR are the ordinary "this extension has no such file" case (no
+      // `_locales`, or no catalog for this locale); anything else is a path this file
+      // cannot say anything about. Both end the read; only the `refused` flag differs,
+      // and it decides whether the caller stays quiet or reports the path.
+      const missing = error && (error.code === "ENOENT" || error.code === "ENOTDIR");
+      const wrapped = missing
+        ? new Error("no such file")
+        : new Error(`unreadable (${error && error.code})`);
+      wrapped.refused = !missing;
+      throw wrapped;
+    }
+    // The rule: the real path must BE the root or sit under it plus a separator.
+    // Its teeth were verified by bypassing exactly this line: with the check forced
+    // never to refuse, the probe in tests/background-worker-electron.test.js reports
+    // BOTH outsideContents and outsideMessage true, so neither assertion is vacuous.
+    if (real !== realRoot && !real.startsWith(realRoot + path.sep)) {
+      const error = new Error("refused: it resolves outside the extension folder");
+      error.refused = true;
+      throw error;
+    }
+    return real;
+  };
+  contain.realRoot = realRoot === null ? root : realRoot;
+  return contain;
+};
+
+/** A read of one file under `root`, or the refusal that stopped it. */
+const readUnderRoot = (contain, innerPath) => readJson(contain(innerPath));
 
 /**
  * The host's UI locale and the user's preferred languages.
@@ -54,18 +155,74 @@ const systemLocale = (override = "") => {
 };
 
 /** Directory names under `_locales`, as { normalized name -> real directory name }. */
-const localeDirectories = (root) => {
+const localeDirectories = (root, contain, warn = () => {}) => {
   const found = {};
+  // The directory itself first: a linked `_locales` is exactly the shape that made this
+  // file read outside the folder, and listing it is already a read of it.
+  // The listing then reads what that check RETURNED rather than re-joining the text
+  // path: readdir follows links too, so between the check and the readdir a swapped-in
+  // `_locales` would put an outside folder's ENTRY NAMES into the warnings below. No
+  // bytes leak — the per-entry check under it refuses each escaped entry — but a name is
+  // still information, and a check whose answer is thrown away is not a check.
+  let localesDir;
   try {
-    for (const entry of fs.readdirSync(path.join(root, LOCALES_DIR), { withFileTypes: true })) {
-      const locale = entry.isDirectory() ? i18n.normalizeLocale(entry.name) : "";
+    localesDir = contain(LOCALES_DIR);
+  } catch (error) {
+    if (error.refused) {
+      warn(`${LOCALES_DIR} is ${error.message}`);
+    }
+    // Not refused: it is simply not there, which is the ordinary case for an
+    // extension with no catalog and must stay silent.
+    return found;
+  }
+  try {
+    for (const entry of fs.readdirSync(localesDir, { withFileTypes: true })) {
+      // `Dirent.isDirectory()` reads the directory ENTRY, so it is false for a symlink —
+      // which would make a contained `_locales/en -> ../vendor/en` invisible here while
+      // every other contained link of the folder still works (suite 2: the rule is about
+      // where a path lands, not which entries are links). A link is therefore a
+      // candidate, and what decides it is the containment check below plus a `stat` AFTER
+      // it on the real path that check returned: a link to a folder inside counts, one
+      // that escapes is refused and reported, one to a plain file is skipped like any
+      // other non-directory. This is also what makes the per-entry check load-bearing:
+      // under the entry-type rule alone the check has no reachable input (a real
+      // directory and a link cannot share one name), and its removal survived all 638
+      // tests — see 6d in tests/extension-symlink-containment.test.js.
+      const candidate = entry.isDirectory() || entry.isSymbolicLink();
+      const locale = candidate ? i18n.normalizeLocale(entry.name) : "";
       // `_locales/pt_br` is accepted for `pt_BR`; an exact name wins over a mis-cased one.
-      if (locale && (found[locale] === undefined || entry.name === locale)) {
+      if (!locale) {
+        continue;
+      }
+      let directory;
+      try {
+        directory = contain(path.join(LOCALES_DIR, entry.name));
+      } catch (error) {
+        if (error.refused) {
+          warn(`${LOCALES_DIR}/${entry.name} is ${error.message}`);
+        }
+        continue;
+      }
+      // Stat AFTER the containment check, on the path it returned: a name that is not a
+      // folder — a plain file, or a link that became one — is not a locale directory,
+      // and this runs for untrusted names under a folder that changes under us (§7,
+      // item 7). A swap between the check and here can only COST a locale, never smuggle
+      // one: the catalog read below re-checks the file it opens anyway.
+      let isFolder = false;
+      try {
+        isFolder = fs.statSync(directory).isDirectory();
+      } catch {
+        // it went away between the check and here: not a locale folder
+      }
+      if (!isFolder) {
+        continue;
+      }
+      if (found[locale] === undefined || entry.name === locale) {
         found[locale] = entry.name;
       }
     }
   } catch {
-    // no _locales folder: a bundle with only the predefined messages
+    // unreadable listing: a bundle with only the predefined messages
   }
   return found;
 };
@@ -78,15 +235,22 @@ const localeDirectories = (root) => {
  * @param {object} [input.log]
  */
 const buildFromDisk = ({ root, extensionId, uiLocale, preferredLanguages, log }) => {
+  const contain = containmentFor(root);
   let defaultLocale = "";
   try {
-    const manifest = readJson(path.join(root, "manifest.json"));
+    const manifest = readUnderRoot(contain, "manifest.json");
     defaultLocale = typeof manifest.default_locale === "string" ? manifest.default_locale : "";
-  } catch {
-    // unreadable manifest: no default locale
+  } catch (error) {
+    // An unreadable or absent manifest means no default locale. A REFUSED one is
+    // reported: a manifest the host is not allowed to read is not the same fact as a
+    // manifest that is not there, and silence here would make the first look like the
+    // second (docs/SECURITY-PLATFORM.md §3.2).
+    if (error.refused) {
+      log.warn(`[i18n] ${extensionId}: manifest.json is ${error.message}`);
+    }
   }
-  const directories = localeDirectories(root);
   const warn = (message) => log.warn(`[i18n] ${extensionId}: ${message}`);
+  const directories = localeDirectories(root, contain, warn);
   if (Object.keys(directories).length > 0 && !i18n.normalizeLocale(defaultLocale)) {
     warn(
       "has a _locales folder but no valid default_locale in manifest.json (Chrome refuses to load it); " +
@@ -101,7 +265,7 @@ const buildFromDisk = ({ root, extensionId, uiLocale, preferredLanguages, log })
       continue;
     }
     try {
-      catalogs[locale] = readJson(path.join(root, LOCALES_DIR, directories[locale], "messages.json"));
+      catalogs[locale] = readUnderRoot(contain, path.join(LOCALES_DIR, directories[locale], "messages.json"));
     } catch (error) {
       warn(`_locales/${directories[locale]}/messages.json unreadable (${error.message}); skipped`);
     }
@@ -115,7 +279,29 @@ const buildFromDisk = ({ root, extensionId, uiLocale, preferredLanguages, log })
 // would be the common case; stat()ing the inputs is the cheap way to know it is still
 // valid, and it keeps "edit messages.json, reload the frame" working without a restart.
 const bundleCache = new Map(); // root -> { signature, bundle }
-const statStamp = (file) => {
+/**
+ * The signature reads go through the same containment as the bundle reads: `stat`
+ * follows links too, so stamping a raw joined name would let a linked catalog report
+ * an outside file's mtime and size to whoever can time a rebuild. Refused or missing
+ * both stamp "-", which is what "no such input" already meant.
+ *
+ * The granularity this accepts, stated: a relink from one CONTAINED file to another
+ * with an identical whole-millisecond mtimeMs AND identical size keeps serving the
+ * cached bundle until some other input changes. Containment-only cost (both files
+ * are inside the folder), no confidentiality one, and the window closes on the next
+ * cache miss for any other edit; the alternative is hashing contents on every frame
+ * load. Across the boundary that matters — a relink to OUTSIDE — there is no
+ * granularity to speak of: the refusal stamps "-", which no file's stamp can equal,
+ * so the swap always forces the rebuild. Suite 7 of
+ * tests/extension-symlink-containment.test.js forges exactly that collision.
+ */
+const statStamp = (contain, innerPath) => {
+  let file;
+  try {
+    file = contain(innerPath);
+  } catch {
+    return "-";
+  }
   try {
     const stat = fs.statSync(file);
     return `${stat.mtimeMs}:${stat.size}`;
@@ -126,20 +312,39 @@ const statStamp = (file) => {
 
 const loadBundle = ({ root, extensionId, uiLocaleOverride = "", log = console }) => {
   const { uiLocale, preferredLanguages } = systemLocale(uiLocaleOverride);
-  const directories = localeDirectories(root);
+  // The signature covers only directories containment allowed, so an entry can never
+  // carry a locale that was refused here, and the cache is keyed on the REAL root: two
+  // names for one folder are one folder, and an entry must not be reachable under a
+  // path whose containment verdict differs (`contain.realRoot` falls back to the text
+  // root when the root cannot be resolved, which is the case where nothing is readable
+  // through it anyway).
+  const contain = containmentFor(root);
+  const directories = localeDirectories(root, contain);
+  // The silent listing is deliberate, and it is the refusal's loudness rule: this
+  // signature pass lists `_locales` WITHOUT a warn, so an escaping entry is reported
+  // only when the bundle is actually (re)built below — a persistent escape says it
+  // once per rebuild, not once per frame load. That is acceptable because the cache
+  // cannot be poisoned: a refused input stamps "-", so a byte-identical outside
+  // catalog (same size, same whole-ms mtime) can never produce a stamp that matches
+  // the entry made while the file was contained — the check fails closed on the
+  // refusal itself, and the bundle behind the cache entry is one where the read was
+  // refused. Any later miss both rebuilds and reports again. Suite 7 of
+  // tests/extension-symlink-containment.test.js asserts both halves: the swap
+  // rebuilds and reports, and the standing refusal stays quiet per access.
   const signature = [
     extensionId,
     uiLocale,
     preferredLanguages.join(","),
-    statStamp(path.join(root, "manifest.json")),
-    ...Object.values(directories).map((dir) => `${dir}=${statStamp(path.join(root, LOCALES_DIR, dir, "messages.json"))}`),
+    statStamp(contain, "manifest.json"),
+    ...Object.values(directories).map((dir) => `${dir}=${statStamp(contain, path.join(LOCALES_DIR, dir, "messages.json"))}`),
   ].join("|");
-  const cached = bundleCache.get(root);
+  const cacheKey = contain.realRoot;
+  const cached = bundleCache.get(cacheKey);
   if (cached && cached.signature === signature) {
     return cached.bundle;
   }
   const bundle = buildFromDisk({ root, extensionId, uiLocale, preferredLanguages, log });
-  bundleCache.set(root, { signature, bundle });
+  bundleCache.set(cacheKey, { signature, bundle });
   return bundle;
 };
 

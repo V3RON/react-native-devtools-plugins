@@ -20,8 +20,15 @@ exposes them at `chrome-extension://<id>/`, and drives each declared execution c
   ([DEVTOOLS-PANELS.md](DEVTOOLS-PANELS.md)).
 - "Install" = drop the folder in `extensions/`; the frontend picks it up on (re)load.
   The `rozenite://` protocol blindly maps
-  `rozenite://<dir-name>/<path>` → `extensions/<dir-name>` (with a path-traversal
-  guard; see `src/main/extension-server.js`).
+  `rozenite://<dir-name>/<path>` → `extensions/<dir-name>` (with a containment guard; see
+  `src/main/extension-server.js`). That guard decides containment on **resolved** paths —
+  `fs.realpath` of the folder and of the target — so a symlink inside an extension folder
+  cannot hand its pages a file from elsewhere on the machine, while links that stay inside
+  the folder keep working. A **symlinked folder is never an extension root**: `readdir` +
+  `isDirectory()` does not report links, so the scan skips it, and the file server refuses
+  the same id rather than disagreeing with the scan. Both halves are asserted in
+  `tests/extension-symlink-containment.test.js` (and the escape/refusal is asserted again as
+  a real renderer's `fetch()` in `tests/background-worker-electron.test.js`).
 - Extension id == directory name (works, and `runtime.getURL` consumers like Altair's
   `tabs.js` depend on hostname == id — keep it).
 - **Per-extension CSP**: `src/shared/csp.js` turns `content_security_policy` into the
