@@ -29,6 +29,14 @@ Altair panels; the sample extension's **Osudio** panel asserts
 
 Notes:
 
+- **The lockfile is security-relevant:** `npm ci` installs exactly what `package-lock.json`
+  resolves, so an ageing lock is an n-day exposure, not stale metadata. Refresh `electron` at least
+  when the minor moves and run the suite — to the newest patch of the pinned major, and into
+  Electron's supported window (the latest three majors), since past that no patch is released at
+  all. The pinned 38 major already sits outside that window (38.8.6 is its terminal patch), so the
+  jump to a supported major is tracked as its own issue — within-major refresh is the floor, not
+  the goal. A Dependabot/Renovate rule scoped to `electron` is the durable version of this
+  sentence.
 - `app/` needs a *debuggable* connection to Metro (dev build; Dev Menu →
   "Connect to debugger" if the app doesn't show up in Metro's `/json/list`).
 - The shell runs the CDP bridge in-process (`src/main/cdp-bridge.js`): it discovers the
