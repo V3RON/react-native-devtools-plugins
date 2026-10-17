@@ -282,6 +282,52 @@ const resolveFrameKey = (event) => {
   return principals.get(key) === event.senderFrame ? key : null;
 };
 
+// ── sender gates ─────────────────────────────────────────────────────────────
+//
+// `REFUSED` is what a channel answers a sender it does not know: a value with a reason,
+// not a thrown error, so a caller cannot read a channel failure as a claim about the host.
+// `failed` turns a rejected service call into the same shape.
+const REFUSED = { ok: false, error: "not the DevTools frontend" };
+const failed = (error) => ({ ok: false, error: (error && error.message) || "the call failed" });
+
+/**
+ * Wrap a handler so it runs only when EVERY sender check accepts the event, and answers
+ * `refused` otherwise. The checks read the event, never the payload: identity is who called
+ * (src/main/frontend-frame.js), which is the one input a page cannot assert about itself.
+ *
+ * The checks are variadic on purpose: a channel that needs a second kind of answer passes
+ * another predicate rather than re-writing the gate — the chrome.devtools.* channels get "is
+ * this a DevTools page context" from issue #25 that way, composed with these rather than
+ * beside them.
+ *
+ * `channel` is a parameter because the event does not carry one: measured on Electron 38,
+ * an `ipcMain.handle` event's own keys are `_replyChannel, frameId, frameTreeNodeId,
+ * processId, sender, senderFrame, type` — there is no `event.channel` on the invoke event,
+ * so a refusal log built from it would name nothing.
+ */
+const senderOnly =
+  (refused, ...checks) =>
+  (channel, handler) =>
+  (event, ...args) => {
+    for (const check of checks) {
+      if (!check(event)) {
+        // Loud, because after issue #24 nothing legitimate is left to trip this: the surface
+        // that calls these channels installs only in the frontend's own main frame
+        // (src/preload/index.js), so a refusal is an anomaly, not background noise.
+        console.warn(`[ipc] refused ${channel}: ${refused.error}`);
+        return refused;
+      }
+    }
+    return handler(event, ...args);
+  };
+
+/**
+ * The gate for channels only the DevTools frontend may call. The channel is named twice on
+ * purpose (once to `ipcMain.handle`, once here): it keeps `ipcMain.handle` visible at every
+ * registration, so the grep that finds an ungated channel still finds all of them.
+ */
+const frontendOnly = senderOnly(REFUSED, isFrontendFrame);
+
 const registerIpcHandlers = () => {
   // chrome.storage persists write-behind (src/main/storage-service.js): whatever is still
   // waiting for its debounce goes to disk before the shell goes away.
@@ -290,27 +336,54 @@ const registerIpcHandlers = () => {
 
   // ── async channels (the house rule; there is nothing else) ───────────────
 
-  ipcMain.handle(SHOW_CONTEXT_MENU, (_event, { x, y, items }) => {
-    showContextMenu(windowOps.getCurrentWindow(), { x, y, items });
-  });
+  // These nine are `InspectorFrontendHost`'s own channels — the frontend preload's
+  // `showContextMenuAtPoint`, preferences, `bringToFront` and `closeWindow`
+  // (src/preload/frontend-host.js). They used to be the ungated remainder of the trust model
+  // (F4): every HOST_* and devtools channel asked who was calling and these did not, so any
+  // frame that reached the channel names — a remote page in a navigated extension window,
+  // which the old preload handed that very surface — could rewrite the user's persisted
+  // preferences, close or raise the DevTools window, and pop native menus. Same rule as the
+  // file channels, one gate: the frontend's WebContents, its main frame, still on the
+  // frontend origin.
+  ipcMain.handle(
+    SHOW_CONTEXT_MENU,
+    frontendOnly(SHOW_CONTEXT_MENU, (_event, { x, y, items }) => {
+      showContextMenu(windowOps.getCurrentWindow(), { x, y, items });
+    })
+  );
 
-  ipcMain.handle(PREF_REGISTER, (_event, name, options) => {
-    preferences.register(name, options);
-  });
-  ipcMain.handle(PREF_GET, (_event, name) => preferences.get(name));
-  ipcMain.handle(PREF_GET_ALL, () => preferences.getAll());
-  ipcMain.handle(PREF_SET, (_event, name, value) => {
-    preferences.set(name, value);
-  });
-  ipcMain.handle(PREF_REMOVE, (_event, name) => {
-    preferences.remove(name);
-  });
-  ipcMain.handle(PREF_CLEAR, () => {
-    preferences.clear();
-  });
+  ipcMain.handle(
+    PREF_REGISTER,
+    frontendOnly(PREF_REGISTER, (_event, name, options) => {
+      preferences.register(name, options);
+    })
+  );
+  ipcMain.handle(
+    PREF_GET,
+    frontendOnly(PREF_GET, (_event, name) => preferences.get(name))
+  );
+  ipcMain.handle(PREF_GET_ALL, frontendOnly(PREF_GET_ALL, () => preferences.getAll()));
+  ipcMain.handle(
+    PREF_SET,
+    frontendOnly(PREF_SET, (_event, name, value) => {
+      preferences.set(name, value);
+    })
+  );
+  ipcMain.handle(
+    PREF_REMOVE,
+    frontendOnly(PREF_REMOVE, (_event, name) => {
+      preferences.remove(name);
+    })
+  );
+  ipcMain.handle(
+    PREF_CLEAR,
+    frontendOnly(PREF_CLEAR, () => {
+      preferences.clear();
+    })
+  );
 
-  ipcMain.handle(WINDOW_BRING_TO_FRONT, () => windowOps.bringToFront());
-  ipcMain.handle(WINDOW_CLOSE, () => windowOps.closeWindow());
+  ipcMain.handle(WINDOW_BRING_TO_FRONT, frontendOnly(WINDOW_BRING_TO_FRONT, () => windowOps.bringToFront()));
+  ipcMain.handle(WINDOW_CLOSE, frontendOnly(WINDOW_CLOSE, () => windowOps.closeWindow()));
 
   // chrome.runtime.getManifest: the extension id is taken from the calling
   // frame's URL — never from message arguments (trust boundary).
@@ -814,12 +887,11 @@ const registerIpcHandlers = () => {
   });
 
   // `InspectorFrontendHost.save/append/close/openInNewTab/getHostConfig` — channels for
-  // the DevTools frontend's own main frame only (src/main/frontend-frame.js: its
-  // WebContents, its main frame, still on the frontend origin). An extension page, a
-  // background window, a popup or a navigated-away frontend that reached these names is
-  // refused: identity is the sender, never anything in the payload.
-  const REFUSED = { ok: false, error: "not the DevTools frontend" };
-  const failed = (error) => ({ ok: false, error: (error && error.message) || "the call failed" });
+  // the DevTools frontend's own main frame only, through the same `frontendOnly` gate the
+  // nine above use (src/main/frontend-frame.js: its WebContents, its main frame, still on the
+  // frontend origin). An extension page, a background window, a popup or a navigated-away
+  // frontend that reached these names is refused: identity is the sender, never anything in
+  // the payload.
 
   // The frontend's file key (`url`) is echoed back verbatim on savedURL /
   // canceledSaveURL / appendedToURL: its FileManager matches the reply to the pending

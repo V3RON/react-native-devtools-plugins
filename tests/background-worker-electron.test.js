@@ -216,6 +216,66 @@ console.log("THROWER:before-throw");
 throw new Error("fixture worker throws at load");
 `;
 
+// ── F4: the worker window is a guarded window (docs/SECURITY-PLATFORM.md §5, row S2/⁵) ──
+//
+// The other suite's fixture pins what the worker DOES; this one pins what it can no longer
+// do, because that is the part no unit test can prove: that `will-navigate` really fires for a
+// navigation a page starts inside a `rozenite://` main frame, and that `preventDefault` really
+// holds the document. Both were measured before this test existed (a cross-scheme navigation
+// from a real extension frame commits, and with the guard installed it is denied and the URL
+// stays on the bootstrap) — a test in the repo is what keeps that true.
+//
+// The navigation target is a `blob:` URL the page mints from its own document. Chosen by
+// measurement, from the candidates a fixture can reach with no extra server:
+//   blob:<same host>  commits unguarded (a real navigation, `will-navigate` fires), and the
+//                     guard denies it — it is not a `rozenite://` URL, so it leaves the
+//                     extension like any other scheme does;
+//   about:blank       also commits unguarded, but Chromium does not fire `will-navigate` for
+//                     it, so no guard can hold it. That makes it the proof of the OTHER half
+//                     of F4 — identity-based preload dispatch has to hold on its own — so it
+//                     is asserted here too, as the last step, after everything that needs the
+//                     document.
+const GUARD_ID = "guarded.local";
+
+const guardWorkerScript = `
+const report = (message) => console.log("GUARD:" + message);
+
+// (1) which preload branch this window got, and (2) what it can call. The worker is a MAIN
+// frame, which is exactly the shape the old dispatch mistook for the frontend; it must have
+// the chrome.* shim and NOT the frontend's host surface.
+report(
+  "surface:" +
+    JSON.stringify({
+      frontend: typeof window.InspectorFrontendHostElectron,
+      shim: typeof window.chromeElectron,
+      url: location.href.slice(0, 60),
+    })
+);
+
+// (3) window.open: the return value is the page's own view of the handler's answer —
+// a WindowProxy when a window is created, null when the open is denied.
+const opened = window.open("about:blank", "f4-popup");
+report("open:" + (opened ? "window-created" : "denied"));
+if (opened) {
+  try { opened.close(); } catch (e) {}
+}
+
+// (4) a navigation attempt. The line AFTER it is the assertion: post-fix the document
+// survives and the line is logged with the URL still on the bootstrap; pre-fix the document
+// is replaced and the line never runs at all.
+report("pre:" + location.href.slice(0, 60));
+const blob = URL.createObjectURL(new Blob(["<!doctype html><title>landed</title>"], { type: "text/html" }));
+location.href = blob;
+setTimeout(() => report("post:" + location.href.slice(0, 60)), 400);
+`;
+
+// What this fixture does NOT try is the `about:blank` shape: it is a navigation no
+// will-navigate guard can see (measured — the event never fires for it), and the new document
+// has no script of ours to report which surface it was given, so nothing asserted from inside
+// the worker would mean anything. The live proof of that half of F4 — a main frame, the
+// production preload, not the frontend's origin, given no host surface — is
+// tests/frontend-host-electron.test.js, which can look at such a window from the outside.
+
 const binary = electronBinary();
 const suite = binary ? test : test.skip;
 
@@ -837,5 +897,111 @@ suite(
       assert.equal(i18nBundle.outsideContents, false, `an escaping _locales must not reach the message bundle: ${JSON.stringify(i18nBundle)}`);
       assert.equal(i18nBundle.outsideMessage, false, `and neither may its message names: ${JSON.stringify(i18nBundle)}`);
     }
+  }
+);
+
+// ── F4: the worker window cannot be moved or popped out of (GitHub issue #24) ────────────
+suite(
+  "a worker window stays on its own extension and opens no window",
+  { timeout: 180000 },
+  async (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "rozenite-guard-"));
+    t.after(() => {
+      fs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    });
+
+    const extensionsDir = path.join(root, "extensions");
+    stageExtension(extensionsDir, GUARD_ID, {
+      "manifest.json": JSON.stringify({
+        name: "Guard Fixture",
+        version: "1.0.0",
+        manifest_version: 3,
+        background: { service_worker: "bg.js" },
+      }),
+      "bg.js": guardWorkerScript,
+    });
+
+    // The production background host, in the production harness: the window this run
+    // observes is the one src/main/background-host.js made, with the production preload and
+    // the production guard installed by the production factory.
+    const run = await runHarness({
+      binary,
+      root,
+      extensionsDir,
+      hostPage: "<!DOCTYPE html><html><body>no extension frames</body></html>",
+      backgroundHost: true,
+      waitFor: "GUARD:post:",
+      settleMs: 900,
+      timeoutMs: 90000,
+    });
+
+    const said = run.observed
+      .filter(
+        (line) =>
+          (line.kind === "worker-console" && line.extensionId === GUARD_ID) ||
+          (line.kind === "background-log" && /window|open/.test(String(line.message || "")))
+      )
+      .map((line) => String(line.message || ""));
+    const line = (prefix) => said.filter((m) => m.startsWith(prefix)).map((m) => m.slice(prefix.length));
+    console.log(`  [electron/window-guards] ${JSON.stringify(said)}`);
+
+    // 1. which preload branch the worker's MAIN frame got. The old dispatch installed the
+    //    frontend's host surface here on any main frame that was not `rozenite:` — the point
+    //    of the whole finding is that a worker window IS a main frame; it has always been
+    //    rozenite:, so this half is the regression guard for the other direction.
+    const surface = JSON.parse(line("GUARD:surface:")[0] || "null");
+    assert.ok(surface, `the worker reported its surface: ${said.join(" | ")}`);
+    assert.strictEqual(
+      surface.frontend,
+      "undefined",
+      "a worker window has no InspectorFrontendHost surface to call the frontend's channels with"
+    );
+    assert.strictEqual(surface.shim, "object", "and it does have the chrome.* shim it is for");
+    assert.match(
+      surface.url,
+      new RegExp(`^rozenite://${GUARD_ID}/__rozenite_background__`),
+      "the document is the bootstrap"
+    );
+
+    // 2. window.open: the page's own view (null when denied) and main's, from the handler the
+    //    guard installed. Either alone would be one reporter; both agree or the test says so.
+    assert.deepStrictEqual(
+      line("GUARD:open:"),
+      ["denied"],
+      `window.open from a worker creates no window (page's view): ${said.join(" | ")}`
+    );
+    assert.ok(
+      run.observed.filter((entry) => entry.kind === "window-created").length === 0,
+      "the harness saw no new BrowserWindow either"
+    );
+
+    // 3. the navigation attempt was refused, from both sides.
+    assert.deepStrictEqual(line("GUARD:pre:").length, 1, "the attempt was reached");
+    assert.match(line("GUARD:pre:")[0], /^rozenite:\/\//, "from the bootstrap document");
+    assert.deepStrictEqual(
+      line("GUARD:post:").length,
+      1,
+      "the document survived the attempt — pre-fix it was replaced and this line never ran"
+    );
+    assert.match(
+      line("GUARD:post:")[0],
+      new RegExp(`^rozenite://${GUARD_ID}/__rozenite_background__`),
+      "and it is still the bootstrap: the guard's preventDefault held it"
+    );
+    assert.ok(
+      said.some((m) => /blocked a navigation of the worker window/.test(m)),
+      `main's guard reported the refusal: ${said.join(" | ")}`
+    );
+    assert.ok(
+      said.some((m) => /denied window.open from the worker window/.test(m)),
+      `main's guard reported the open denial too: ${said.join(" | ")}`
+    );
+
+    // 4. the window the host still owns is the same window, on the same URL.
+    const windows = run.observed.filter((entry) => entry.kind === "background-windows").pop();
+    const mine = (windows && windows.windows || []).filter((w) => w.extensionId === GUARD_ID);
+    assert.strictEqual(mine.length, 1, "one worker window, the one the host made");
+    assert.match(mine[0].url, new RegExp(`^rozenite://${GUARD_ID}/__rozenite_background__`));
+    assert.strictEqual(mine[0].visible, false, "and it is still the hidden window it was");
   }
 );

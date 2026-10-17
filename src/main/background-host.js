@@ -27,6 +27,9 @@ const config = require("./config");
 const { scanBackgroundExtensions } = require("./extensions");
 const { BACKGROUND_BOOTSTRAP_PATH, loadManifest } = require("./extension-server");
 const { extensionFramePreferences } = require("./frame-security");
+// One guard for every window that hosts an extension's own top-level document, so the
+// worker's and the options page's policy cannot drift apart (F4).
+const { guardExtensionWindow } = require("./extension-window-policy");
 const { installReasonFor } = require("./install-state");
 /**
  * The default observer source. Required lazily, inside attach(): `./ipc` pulls in
@@ -143,9 +146,15 @@ const createBackgroundHost = ({
     title: `Background: ${entry.name}`,
   });
 
-  const makeWindow = (entry) => {
+  const makeWindow = (entry, url) => {
     const options = windowOptions(entry);
     const win = createWindow ? createWindow(options, entry) : new BrowserWindow(options);
+    // The worker window is hidden, which is not the same as harmless: it is a MAIN frame
+    // running the production preload on an extension origin, and an extension can move it
+    // with `location.href`. Denied unless it stays inside its own extension, and `window.open`
+    // denied outright — the two hooks the frontend window has had since F4 and this one never
+    // did (src/main/extension-window-policy.js).
+    guardExtensionWindow(win.webContents, url, "worker", line);
     // A worker that dies must be reported, never swallowed: these three events
     // are the only way the failure is visible at all, because there is no window
     // to look at.
@@ -194,14 +203,18 @@ const createBackgroundHost = ({
         continue;
       }
       let win;
+      let url;
       try {
-        win = makeWindow(entry);
+        // The URL is decided before the window exists, because it is also the window's
+        // navigation policy (makeWindow guards it) and the entry the host remembers.
+        url = backgroundURL(entry);
+        win = makeWindow(entry, url);
       } catch (error) {
         line(`${entry.extensionId}: could not create the hidden window: ${error.message}`);
         continue;
       }
-      windows.set(entry.extensionId, { win, entry, url: backgroundURL(entry) });
-      win.loadURL(backgroundURL(entry)).catch((error) => {
+      windows.set(entry.extensionId, { win, entry, url });
+      win.loadURL(url).catch((error) => {
         // did-fail-load already reported it; this keeps the rejection from
         // escaping as an unhandled error inside the main process.
         line(`${entry.extensionId}: loadURL rejected: ${error.message}`);

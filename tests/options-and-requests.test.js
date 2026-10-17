@@ -10,6 +10,8 @@
 // GitHub issue #4; docs/features/SMALL-SHIMS.md.
 const test = require("node:test");
 const assert = require("node:assert");
+const fs = require("node:fs");
+const path = require("node:path");
 
 const {
   NO_PAGE,
@@ -143,6 +145,57 @@ test("a second open focuses the tracked window instead of stacking a second one"
   assert.deepEqual(host.list(), []);
   host.closeAll();
   assert.deepEqual(closed, [101], "twice is harmless");
+});
+
+// ── F4: the options window is a guarded window too ───────────────────────────
+//
+// Same hole as the worker window, in a window the user can actually see: the Electron
+// opener in src/main/options-host.js did a raw `new BrowserWindow` + `loadURL` with the
+// production preload and no `will-navigate` guard and no `setWindowOpenHandler`, so an
+// options page could move its own window to any URL and keep the preload. The guard is
+// applied where the window is made, so the pin belongs at that factory: this asserts the
+// real policy module is wired into it, against a source read of the module that owns the
+// window (the idiom tests/tabs.test.js and tests/security.test.js use for the hop no unit
+// test can cross — here, a real BrowserWindow).
+//
+// It is a source pin rather than a live run because the harness that could open an options
+// window does not use this factory: `--options-windows=real` in
+// tests/extension-frame-harness.js builds its own BrowserWindow, so driving it would observe
+// the harness, not the production opener. What is proven live is the shared guard itself,
+// through the worker window, which IS the production factory
+// (tests/background-worker-electron.test.js: a real `location.href` attempt and a real
+// `window.open`).
+test("the options window installs the shared extension-window guard", () => {
+  const source = fs.readFileSync(
+    path.join(__dirname, "..", "src", "main", "options-host.js"),
+    "utf8"
+  );
+  const attach = source.slice(source.indexOf("const attachOptionsHost"));
+  assert.match(attach, /guardExtensionWindow/, "the window is guarded at the factory");
+  assert.match(
+    attach,
+    /guardExtensionWindow\(\s*win\.webContents,\s*url/,
+    "guarded against the very URL it is about to load, so the policy is the extension's own"
+  );
+  // The guard is the shared one — not a second copy that could drift from the worker's.
+  assert.match(attach, /require\("\.\/extension-window-policy"\)/);
+});
+
+test("a guard refusal is visible in main's own log, not only in the window", () => {
+  // The shared guard's reporting rule, asserted once for the factory both hosts use.
+  const { guardExtensionWindow } = require("../src/main/extension-window-policy");
+  const handlers = {};
+  const lines = [];
+  guardExtensionWindow(
+    { on: (event, fn) => (handlers[event] = fn), setWindowOpenHandler: () => {} },
+    "rozenite://altair/options.html",
+    "options",
+    (message) => lines.push(message)
+  );
+  let prevented = false;
+  handlers["will-navigate"]({ preventDefault: () => (prevented = true) }, "https://evil.test/x");
+  assert.strictEqual(prevented, true);
+  assert.ok(lines.some((l) => /options/.test(l) && /evil\.test/.test(l)), lines.join(" | "));
 });
 
 test("the Electron-backed options host is never built by this suite", () => {
