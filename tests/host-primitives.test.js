@@ -62,11 +62,32 @@ test("the opener hands only allowed URLs to openExternal and reports refusals", 
 });
 
 // ── save / append / close ────────────────────────────────────────────────────
-const makeFiles = (dialogAnswers) => {
+/**
+ * `options.failWriteOn = n` makes the n-th write of the save service die the way a full
+ * disk does on a real filesystem: the name is really created, some bytes really land, and
+ * then the write throws. A cleanup that only passes when nothing reached the disk is worth
+ * little; this leaves a real half-written file of the service's own behind, so the test
+ * measures what it removes and what it leaves.
+ */
+const makeFiles = (dialogAnswers, options = {}) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "host-files-"));
   const events = [];
   const dialogs = [];
   const answers = [...dialogAnswers];
+  let writes = 0;
+  const writeFile = async (target, data, fsOptions) => {
+    writes++;
+    if (options.failWriteOn === writes) {
+      const handle = await fs.promises.open(
+        target,
+        fsOptions && fsOptions.flag ? fsOptions.flag : "w"
+      );
+      await handle.writeFile("partial-bytes", "utf8");
+      await handle.close();
+      throw Object.assign(new Error("ENOSPC: no space left on device"), { code: "ENOSPC" });
+    }
+    return fs.promises.writeFile(target, data, fsOptions);
+  };
   const saveService = createSaveService({
     showSaveDialog: async (options) => {
       dialogs.push(options.defaultPath);
@@ -77,7 +98,9 @@ const makeFiles = (dialogAnswers) => {
     fetchUrl: async () => {
       throw new Error("a frontend save must never fetch");
     },
-    writeFile: (target, data, options) => fs.promises.writeFile(target, data, options),
+    writeFile,
+    rename: (from, to) => fs.promises.rename(from, to),
+    lstat: (target) => fs.promises.lstat(target),
     unlink: (target) => fs.promises.unlink(target),
     downloadsDir: () => dir,
   });
@@ -183,6 +206,77 @@ test("base64 content is decoded to bytes, and a failed write settles the fronten
   assert.strictEqual(failed.canceled, false);
   assert.deepStrictEqual(events.map((e) => e[0]), ["savedURL", "canceledSaveURL"]);
   assert.match(logs[0], /InspectorFrontendHost\.save\(bad\)/);
+});
+
+// The sharp edge `docs/SECURITY-PLATFORM.md` §3.1 listed for F2: the bytes used to be
+// written onto the remembered path directly — truncating it first — so a re-save that died
+// partway cost the user whatever was already there, and the service then unlinked that
+// name too. Staged and renamed, the same failure can only ever reach a partial file of the
+// service's own. Against the pre-fix code this test authentic-fails: the remembered path
+// is gone by the time the reply arrives.
+test("a re-save whose write dies mid-way keeps the earlier file and removes only its own partial", async () => {
+  const { dir, files, events } = makeFiles(["log.txt"], { failWriteOn: 2 });
+  const url = "console.log";
+  await files.save({ url, content: "the first save\n" });
+  const target = path.join(dir, "log.txt");
+
+  const reply = await files.save({ url, content: "the second save\n" });
+
+  assert.strictEqual(reply.ok, false);
+  assert.strictEqual(reply.canceled, false, "a failed write is a failure, not a cancel");
+  assert.deepStrictEqual(events.map((e) => e[0]), ["savedURL", "canceledSaveURL"]);
+  assert.strictEqual(
+    fs.readFileSync(target, "utf8"),
+    "the first save\n",
+    "the earlier contents survive a re-save that never finished"
+  );
+  assert.deepEqual(
+    fs.readdirSync(dir),
+    ["log.txt"],
+    "the half-written partial this run created is gone, and no other name appeared"
+  );
+});
+
+test("a re-save whose rename cannot happen reports the failure and removes only its own partial", async () => {
+  const { dir, files, events } = makeFiles(["log.txt"]);
+  const url = "console.log";
+  await files.save({ url, content: "the first save\n" });
+  const target = path.join(dir, "log.txt");
+
+  // Something that cannot be renamed over, so the failure lands after the bytes are staged.
+  // `chmod` would not do this reliably — root ignores a mode it is told to honour.
+  fs.rmSync(target);
+  fs.mkdirSync(target);
+
+  const reply = await files.save({ url, content: "the second save\n" });
+
+  assert.strictEqual(reply.ok, false);
+  assert.strictEqual(reply.canceled, false, "a rename that cannot happen is a failure, not a cancel");
+  assert.deepStrictEqual(events.map((e) => e[0]), ["savedURL", "canceledSaveURL"]);
+  assert.deepEqual(
+    fs.readdirSync(dir),
+    ["log.txt"],
+    "the partial this run created is gone, and the name the download wanted is untouched"
+  );
+  assert.strictEqual(fs.statSync(target).isDirectory(), true);
+});
+
+test("a re-save refuses a symlink at the remembered path instead of writing through it", async () => {
+  const { dir, files, events } = makeFiles(["log.txt"]);
+  const url = "console.log";
+  await files.save({ url, content: "the first save\n" });
+  const target = path.join(dir, "log.txt");
+  const elsewhere = path.join(dir, "someone-elses-file.txt");
+  fs.writeFileSync(elsewhere, "bytes this shell never wrote\n");
+  fs.rmSync(target);
+  fs.symlinkSync(elsewhere, target);
+
+  const reply = await files.save({ url, content: "the second save\n" });
+
+  assert.strictEqual(reply.ok, false, "a link standing at the path is refused, not followed");
+  assert.deepStrictEqual(events.map((e) => e[0]), ["savedURL", "canceledSaveURL"]);
+  assert.strictEqual(fs.readFileSync(elsewhere, "utf8"), "bytes this shell never wrote\n");
+  assert.strictEqual(fs.lstatSync(target).isSymbolicLink(), true, "and the link is left as it was found");
 });
 
 test("save and append reject a non-string url", async () => {
