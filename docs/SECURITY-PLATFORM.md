@@ -32,13 +32,22 @@ When a fix is too expensive or impossible, we live with the gap and say so in
 
 ### 1.1 The short answer
 
-**Two filesystem gaps are reachable from ordinary extension code today.** Both cross line (b),
-and both are cheap to close. **No route from extension page code to Node was found.**
+**Two filesystem gaps were reachable from ordinary extension code.** Both crossed line (b),
+and both were cheap to close. **F2 — the delete and the overwrite — is closed (issue #22)**,
+which is line (b)'s write side. **No route from extension page code to Node was found.**
+
+> One correction the reader needs before trusting F1's row below: it still says the read gap is
+> open, and that is stale. The guard it asks for exists (`resolveInsideExtension`,
+> `src/main/extension-server.js`, on `fs.realpath`) and is tested
+> (`tests/extension-symlink-containment.test.js`); the prose recording it was closed was dropped
+> when `sec/issue-21-symlink-read` was merged into the stack (`72e04ff`), whose conflict
+> resolution took the older file for `docs/SECURITY-PLATFORM.md`. It needs re-landing on that
+> link, so it is called out here rather than rewritten from this one.
 
 | # | Finding | Line | Evidence | Fix (estimate) |
 | --- | --- | --- | --- | --- |
 | F1 | `rozenite://` containment is checked on the path string only, not on the resolved path. A symlink inside an extension folder is followed. | (b) read | [measured] | ~6 lines |
-| F2 | A failed or cancelled `chrome.downloads.download` removes the target path, even when that file existed before. | (b) delete | [measured] | ~30 lines |
+| F2 | A failed or cancelled `chrome.downloads.download` removed the target path, even when that file existed before, and a write onto an existing name silently overwrote it or followed a symlink standing there. **Fixed (issue #22):** the bytes are staged in a `.rozenite-partial` file the download creates with an exclusive create and renamed onto the final name only on success, so the only unlink this service can issue is on its own partial file; the default conflict action is Chrome's `uniquify` (`name (1).ext`), `overwrite` is honored only when the caller asks by name, and a symlink at the target is refused rather than followed. | (b) delete | was [measured] delete-after-fetch-failure, silent overwrite, symlink followed; closed by [test: `tests/save-service.test.js` (including the two against a real disk), `tests/host-primitives.test.js`, `tests/tier2-worker-electron.test.js` (the real-process save)] | ~30 lines — **done** |
 
 Three more findings are ambient authority rather than filesystem. They are listed here because
 they are equally cheap:
@@ -86,7 +95,16 @@ is `L4`, not this fix.
   [code + test: `tests/security.test.js`].
 - **No write outside `~/Downloads` or a path the user picked in a dialog.** `safeName` drops
   every directory component [measured, §3.3]. `fixedPath` is reachable only from the frontend
-  [code, §3.3].
+  [code, §3.3]. And since issue #22 the stronger version holds on the write side too: a save
+  creates a new file, or goes where the user pointed a dialog, or is refused. It cannot modify
+  or delete a pre-existing file *without consent*: no failure — a 404, a bad `data:`, a full
+  disk, a cancel — can reach one, because the bytes are staged in the download's own partial
+  file and the final name appears only through `rename` on success; a taken name is uniquified
+  rather than overwritten; and a symlink at the target is refused instead of followed. The one
+  replacement that remains is a path the user aimed the dialog at (or the remembered path that
+  dialog produced), which is consent itself — and even that one leaves the earlier bytes intact
+  if the save fails [test: `tests/save-service.test.js`, the F2 cases against the real `fs`;
+  `tests/host-primitives.test.js`].
 - **No path traversal through `rozenite://`.** `../` and `?script=../` both return 404
   [test: `tests/background-worker-electron.test.js:604-677`]. F1 is the symlink case, which
   that guard never covered.
@@ -102,8 +120,8 @@ is `L4`, not this fix.
 | --- | --- | --- |
 | 1 | IPC is an allowlist of named channels with frame-derived identity, not "full filesystem via IPC" | **Confirmed** for extension frames. Two corrections. The filesystem gap that exists runs through the **protocol** (F1), not IPC. An extension's own *window* can reach the frontend preload by navigating away (F4). |
 | 2 | `HOST_*` file channels are `isFrontendFrame`-gated; `DOWNLOAD_*` use `gatedFrameKey(event, "downloads")`; permissions are enforced twice | **Confirmed** (the `ipcMain.handle(DOWNLOAD_*)` block and the `ipcMain.handle(HOST_*)` block in `ipc.js`). Not gated: the frontend preload's other channels — `PREF_REGISTER/GET/GET_ALL/SET/REMOVE/CLEAR`, `WINDOW_BRING_TO_FRONT`, `WINDOW_CLOSE`, `SHOW_CONTEXT_MENU` (the `ipcMain.handle(PREF_*/WINDOW_*/SHOW_CONTEXT_MENU)` block in `ipc.js`). |
-| 3 | `safeName()` strips directories, so downloads cannot leave the chosen directory | **Confirmed** [measured]. `..` and `.` survive as whole names; the write then fails with `EISDIR` and the unlink of a directory fails, so this is harmless. A symlink that **already exists** inside `~/Downloads` is followed [measured]. |
-| 4 | Download without `saveAs` writes with no prompt; the realistic abuse is silent overwrite, which is Chrome's behavior | **No prompt: confirmed.** **"Chrome's behavior": corrected.** Chrome's default `conflictAction` is `uniquify`; it overwrites only when the call passes `overwrite` [docs: Chrome]. The reach matches Chrome; the default does not. **The realistic abuse is worse than overwrite — it is delete (F2).** Also, the shim compares against `"unique"` (`src/chrome-shim/downloads.js:128`), but Chrome's value is `"uniquify"`. |
+| 3 | `safeName()` strips directories, so downloads cannot leave the chosen directory | **Confirmed** [measured]. `..` and `.` survive as whole names; the write then failed with `EISDIR`, which was harmless only by accident — under the fix they are refused as names (`isWholeDot`) so nothing is created beside them. The symlink that **already exists** at the target name **is no longer followed**: it is refused (issue #22) [test: `tests/save-service.test.js`]. |
+| 4 | Download without `saveAs` writes with no prompt; the realistic abuse is silent overwrite, which is Chrome's behavior | **No prompt: confirmed.** **"Chrome's behavior": corrected, and now matched.** Chrome's default `conflictAction` is `uniquify`; it overwrites only when the call passes `overwrite` [docs: Chrome]. The shell now defaults to `uniquify` as well, and `overwrite` is honored only when a caller asks for it by name (issue #22). **The realistic abuse was worse than overwrite — it was delete (F2)** — and that is closed with it. Also, the shim still compares against `"unique"` (`src/chrome-shim/downloads.js`), but Chrome's value is `"uniquify"`: issue #27. |
 | 5 | `rozenite://` has no per-extension origin isolation; the fix may be a few lines in the handler | **Corrected.** Origins *are* distinct: cross-extension DOM access throws `SecurityError` [measured]. What is missing is a CORS check on the custom-scheme loader: even a `no-cors` fetch comes back `basic` with a readable body [measured]. **The fix cannot live in `protocol.handle`:** its `Request` carries no `Origin` and an empty `referrer` [measured]. `session.webRequest.onBeforeRequest` *does* fire for the scheme, with `details.frame.url` naming the requester [measured]. That fix is ~30 lines (§4, L6). The comment at `src/main/frame-security.js:62-65` ("shares one origin") is wrong. `:33-35` says the scheme is registered `secure`, but the code (`extension-server.js:110`) does not register it so. |
 | 6 | `sandbox:false` ⇒ renderer compromise = Node compromise; `nodeIntegrationInSubFrames` is load-bearing | **Confirmed, crux below.** Measured on Electron 38: with `sandbox:true` + `nodeIntegrationInSubFrames:true`, the preload still runs in `rozenite://` iframes (`process.sandboxed === true`). Its `require` resolves `electron` / `events` / `timers` / `url` only; `fs`, `path` and `./local` fail. With the flag false, no iframe preload runs at all. So under sandbox the flag **stays true**; it is the "run preloads in subframes" switch. |
 | 7 | `host_permissions` excluded from the gate; `permissions.request` grants nothing | **Confirmed.** `host_permissions` guards no capability here, in either direction. It does not limit egress, and the scheme is not `corsEnabled`, so it does not grant Chrome's CORS exemption either [inferred, unmeasured]. It is theater. §4 L10 says not to make it real. |
@@ -127,9 +145,9 @@ developer opted into.
 
 | Actor | Allowed (consented remit) | Must never hold | Open gaps |
 | --- | --- | --- | --- |
-| Store extension of unknown intent | Its own pages, storage, declared APIs; `eval` into the app from DevTools contexts (Chrome grants this to any devtools extension) | Frontend channels; files outside its folder; deleting user files | F1, F2, F4, F5 |
+| Store extension of unknown intent | Its own pages, storage, declared APIs; `eval` into the app from DevTools contexts (Chrome grants this to any devtools extension) | Frontend channels; files outside its folder; deleting user files | F1 (see the note in §1.1), F4, F5. F2 — deleting user files — is closed |
 | Folder the developer dropped in (today's only install path) | Same as above; semi-trusted by the act of installing | Same | Same; no consent prompt or integrity check (accepted, §7) |
-| Legit extension with a bug | Same | Same; a bug must not become data loss | F2 (a failed download deletes a file) |
+| Legit extension with a bug | Same | Same; a bug must not become data loss | None on the filesystem: a buggy download can now fail all it likes and the user's files are what they were (F2 closed, issue #22) |
 | Rogue Metro / patched frontend fork over `http://127.0.0.1:8081` | It **is** the frontend (`isFrontendFrame` is an origin check). Saves stay dialog-gated; `openInNewTab` is http(s) only. It already serves the app's JS, so it owns the app. | Node; silent file writes | None found beyond §7 (renderer exploit) |
 | Peer on the CDP socket (another local process, a browser page, a LAN host) | Nothing; only the frontend should connect | The app's debugger session | F3 |
 | The developer's RN app, as a victim | Content scripts run in its JS realm only when `DEVTOOLS_CONTENT_SCRIPTS` names the extension | Script injected without that opt-in | F5 (`eval` from non-DevTools contexts). Inside the opted-in realm there is no isolated world, and content-script identity is the payload's `envelope.x` (`src/main/content-bridge.js:987`). Accepted, §7. |
@@ -142,10 +160,11 @@ developer opted into.
 
 | Operation | Where | Reachable from | Who picks the path | Verdict |
 | --- | --- | --- | --- | --- |
-| `writeFile` (truncate + write) | `save-service.js:398` (attached `:545`) | extension with `downloads` (`ipcMain.handle(DOWNLOAD_START)` in `ipc.js`); frontend (`HOST_SAVE`) | non-`saveAs`: `~/Downloads/<safeName>` (`:246-249`); `saveAs`: the user's dialog (`:250-257`); `fixedPath`: host-files only | Stays in `~/Downloads` top level. Overwrites an existing file silently (default differs from Chrome's `uniquify`). Follows a pre-existing symlink. |
-| `unlink` via `removePartial` | `save-service.js:272-282`, called at `:381`, `:400`, `:410` | same | `record.filename` = the chosen target, **not** a file this call created | **F2.** Fetch failure, malformed `data:`, or cancel each unlink a pre-existing file at that name [measured] |
+| `writeFile` (`wx`, into a `.rozenite-partial` beside the target) | `save-service.js` (`start`, staging step; attached in `attachSaveService`) | extension with `downloads` (`ipcMain.handle(DOWNLOAD_START)` in `ipc.js`); frontend (`HOST_SAVE`) | non-`saveAs`: `~/Downloads/<safeName>`; `saveAs`: the user's dialog; `fixedPath`: host-files only | Stays in `~/Downloads` top level. **It can no longer write to a name the service does not own:** the create is exclusive, so an existing file — or a symlink — is refused rather than overwritten or followed. The final name appears only through the `rename` row below. |
+| `rename` (partial → final name) | `save-service.js` (`resolvePartial` → `rename`, on success only) | same | the name `resolveTarget` chose: uniquified against the directory on the no-prompt path, verbatim for a dialog choice and for `fixedPath` | The only operation that can create the final name, and it runs after every way the download can still fail. On the no-prompt path a taken name was already uniquified; on a dialog path the replace is the consent, and it is still atomic. `rename(2)` would replace a symlink rather than write through one, but the symlink is refused up front so this never comes up. |
+| `unlink` via `removePartial` | `save-service.js`, called only on the staged partial | same | the partial path this download created and claimed | **Was F2.** Now it can only ever be handed `staged` — a name probed free, then created by this call — and the final name is never a candidate. Closed by [test: `tests/save-service.test.js`, the F2 cases] |
 | `appendFile` | `host-files.js:107` (attached `:135`) | frontend only (`HOST_APPEND`, `isFrontendFrame`) | only a path a completed save of that url produced (`:100-105`) | Sound |
-| Re-save to remembered path | `host-files.js:57-69` → `fixedPath` (`save-service.js:327`) | frontend only | the remembered path | Documented sharp edge (`host-files.js:20-23`): a failed re-save deletes the earlier file. Same root cause as F2; same fix. |
+| Re-save to remembered path | `host-files.js` (`save`) → `fixedPath` (`save-service.js`) | frontend only | the remembered path | Replaced on success, and that is what a re-save means; it can no longer damage the earlier file, because the new bytes arrive in a partial and are renamed only on success (issue #22). A failed re-save — mid-write, or a symlink at the remembered path — leaves the earlier contents intact [test: `tests/host-primitives.test.js`]. `savedURL` identity survives because `fixedPath` deliberately does *not* uniquify. |
 | `chrome.storage` persistence | `storage-service.js:355-361` (electron-store under `userData`) | extension with `storage` | `extension-<id>-<area>`; id matches `^[A-Za-z0-9._-]+$` (`extension-server.js:31`); area is validated (`storage-service.js:244`) | Sound; quota-bounded (`storage-core.js:17-28`) |
 | Frontend preferences | `preferences.js` (electron-store) | `PREF_SET/REMOVE/CLEAR`, **ungated** | fixed store | Not a filesystem escape, but F4 lets a navigated extension window write it |
 | Install state | `install-state.js` | host only | fixed | Sound |
@@ -163,33 +182,61 @@ developer opted into.
 
 ### 3.3 `safeName`, `chooseTarget`, `fixedPath` (measured in bare Node against `src/main/save-service.js`)
 
-- **`safeName`** (`:98-107`). It keeps only the last path segment, split on `/` and `\`, then
-  replaces `: < > | ? " * NUL`. Relative, absolute, Windows-style and percent-encoded names
-  (`nameFromUrl` decodes first, `:61`) all reduce to a bare name [measured; the basic cases
-  are also in `tests/save-service.test.js:119-123`]. `.` and `..` survive as whole names. The
-  write fails with `EISDIR`, and the cleanup unlink of a directory fails too, so nothing
-  changes [measured].
-- **`chooseTarget`** (`:241-258`). With `fixedPath` → that path. Without `saveAs` →
-  `downloadsDir()/name`, **no prompt**. With `saveAs` → dialog (or the test seam).
-- **`fixedPath`.** It is set only from `request.filePath` (`:301`, `:327`). The
-  `DOWNLOAD_START` handler builds its request field by field and never passes `filePath`
-  (`ipcMain.handle(DOWNLOAD_START)`, which builds its request field by field in `ipc.js`),
-  so only `host-files.js:68` can set it. [code]
-- **`data:` / `blob:`.** `data:` is decoded in main (`:82-96`), and a malformed one throws
-  *after* the target is chosen, which is one way into F2. There is no `blob:` path: a `blob:`
-  URL from a renderer is not fetchable by `node-fetch` in main, so it fails, also after the
-  target is chosen (F2) [inferred].
+- **`safeName`.** It keeps only the last path segment, split on `/` and `\`, then replaces
+  `: < > | ? " * NUL`. Relative, absolute, Windows-style and percent-encoded names
+  (`nameFromUrl` decodes first) all reduce to a bare name [measured; the basic cases are also
+  in `tests/save-service.test.js`]. `.` and `..` survive as whole names. They used to fail the
+  write with `EISDIR`, which was harmless *by accident*: once the conflict check uniquifies,
+  the directory counts as a taken name and the shell would produce `. (1)` in the user's
+  Downloads folder, so `resolveTarget` refuses a whole dot by name [test: `tests/save-service.test.js`].
+  Files that merely *begin* with a dot (`.env`, `.gitignore`) are names and still save.
+- **`chooseTarget`.** With `fixedPath` → that path. Without `saveAs` → `downloadsDir()/name`,
+  **no prompt**, and since issue #22 that name is *checked*: `resolveTarget` lstats it and
+  uniquifies to `name (1).ext` when it is taken, which is Chrome's default `conflictAction`.
+  With `saveAs` → dialog (or the test seam), and the chosen path is used as given — the dialog
+  is Chrome's conflict prompt. All three refuse a symlink at the name.
+- **`fixedPath`.** It is set only from `request.filePath`. The `DOWNLOAD_START` handler builds
+  its request field by field and never passes `filePath` (`ipcMain.handle(DOWNLOAD_START)`,
+  which builds its request field by field in `ipc.js`), so only `host-files.js` can set it.
+  It is the one path that does not uniquify, on purpose: `savedURL(url, path)` and every
+  `append` that follows identify the frontend's file by that exact path. (The dialog's choice
+  is likewise used as given; the difference is that a dialog asked a human, and a `fixedPath`
+  did not — it just never needs a fresh name, because it *is* the name already agreed on.)
+- **`data:` / `blob:`.** `data:` is decoded in main, and a malformed one throws — before the
+  fix, *after* the target was chosen, which was one way into F2; now a throw at that point has
+  no file of the user's to lose, because staging has not begun [test: the `data:`-URL case in
+  `tests/save-service.test.js`]. There is no `blob:` path: a `blob:` URL from a renderer is not
+  fetchable by `node-fetch` in main, so it fails, likewise harmlessly now [inferred].
 
-### 3.4 F2, precisely
+### 3.4 F2, precisely — and what replaced it
 
-`start()` assigns `record.filename = target.filePath` (`:364`) **before** producing the bytes.
-The fetch (`:375`), the `data:` decode (`:373`), cancellation (`:380`, `:399`) and the write
-itself (`:398`) can all fail after that point. Every failure path then calls
-`removePartial(record.filename)`. The target was named by the extension (or derived from its
-URL) and may be a file the user already had. Chrome writes to an intermediate file and renames
-it on completion, so a failure never touches an existing target [docs: Chrome].
-`tests/save-service.test.js:272-278` currently *pins* this behavior (it expects the target to be
-unlinked); that assertion must change with the fix.
+`start()` assigned `record.filename = target.filePath` **before** producing the bytes. The
+fetch, the `data:` decode, cancellation and the write itself could all fail after that point,
+and every failure path then called `removePartial(record.filename)` — deleting a file the user
+had put in their Downloads folder themselves, since the target was named by the extension or
+derived from its URL. The write also truncated an existing file at that name, and followed a
+symlink standing there, which is how a write left the directory.
+
+Chrome avoids all three structurally: it stages the bytes and renames on completion [docs:
+Chrome]. So does this shell now, in `save-service.js`:
+
+1. `resolveTarget` picks the name — `lstat`ed (not `stat`ed) against the directory, uniquified
+   on the no-prompt path, symlink refused, and **claimed before the look** so two downloads of
+   one URL cannot resolve onto one name.
+2. `resolvePartial` picks a `.rozenite-partial` name beside it the same way, stepping around a
+   leftover from a crashed run rather than taking it over.
+3. `writeFile` writes there with `flag: "wx"`, so the create is the kernel's own answer to "is
+   this name free", not just the service's bookkeeping.
+4. `rename` publishes it, only after every failure point has passed and only if a cancel has
+   not arrived; `removePartial` then sees a path it created, or nothing at all.
+
+The two sharp edges that shared this root cause went with it: the frontend's failed re-save no
+longer eats the earlier file (§3.1), and `host-files.js`'s "known sharp edge" header now records
+the rule instead of the hole.
+
+`tests/save-service.test.js:272-278` used to *pin* the old behavior (it expected the target to be
+unlinked). It is inverted: the same scenario asserts the partial is unlinked and that nothing
+else in the directory can be.
 
 ### 3.5 Test seams
 
@@ -252,7 +299,7 @@ Goal state, one sentence per asset:
 | --- | --- | --- | --- | --- |
 | **L1 containment on resolved paths** | `resolveInsideExtension` also compares realpaths of target and root (see §6 step 1) | `fs.realpathSync` | ~6 lines | **Worth doing, first** |
 
-| **L2 save broker invariant** | Write to a sibling temp file, then `rename`. Create the final name with exclusive-create (`wx`) and Chrome's ` (1)` uniquify on `EEXIST`. Cleanup only ever touches the temp file. `fixedPath` (frontend re-save) uses the same temp + rename. Do not implement `conflictAction:"overwrite"` for extensions (keep reporting it). Fix the `"unique"` → `"uniquify"` spelling. | `fs.promises.open(…, "wx")`, `rename` | ~30 lines + test edits | **Worth doing, first** |
+| **L2 save broker invariant** | Write to a sibling temp file, then `rename`. Create the final name with exclusive-create (`wx`) and Chrome's ` (1)` uniquify on `EEXIST`. Cleanup only ever touches the temp file. `fixedPath` (frontend re-save) uses the same temp + rename. Do not implement `conflictAction:"overwrite"` for extensions (keep reporting it). Fix the `"unique"` → `"uniquify"` spelling. **Landed (issue #22)** with two deviations worth naming: the exclusive create is on the *partial* rather than the final name (the final name is created by `rename`, which is strictly stronger — the staging is `flag: "wx"`, and `resolvePartial` also lstats the candidate so a planted or leftover name is stepped around rather than unlinked), and `overwrite` is honored one layer down, in `createSaveService`'s `conflictAction` request field, while the shim still reports any `conflictAction` it does not accept and forwards nothing — which is exactly "keep reporting it," and is what issue #27 will wire. | `fs.promises.writeFile(…, { flag: "wx" })`, `rename`, `lstat` | ~30 lines + test edits | **DONE** (F2) |
 | **L3 IPC broker** | Already in place: identity from frame, principal pinning, double permission enforcement, `isFrontendFrame` on file channels. **Add:** (i) `isFrontendFrame` on `PREF_*`, `WINDOW_*`, `SHOW_CONTEXT_MENU`; (ii) a `devtoolsCaller(event)` = registered principal **and** `event.sender === getFrontendContents()` **and** the manifest declares `devtools_page`, required by `DEVTOOLS_EVAL/RELOAD`, `NETWORK_GET_BODY`, and by `NETWORK_SUBSCRIBE/GET_HAR/GET_STATUS` unless the frame holds `webRequest`; (iii) delete the unused `Store.initRenderer()`. Keep the namespaces (shape-first rule); fail the call with lastError. | `ipcMain.handle`, `WebFrameMain` | ~25 lines | **Worth doing** |
 | **L4 extension windows** | Worker, options, and `tabs.create`'s `window`-policy windows (the `Extension tab` `BrowserWindow` in `tab-host.js`'s `openWindow`): `setWindowOpenHandler(() => ({action: "deny"}))`, plus `will-navigate` / `will-redirect` allowing only `rozenite://<same id>/`. Reuse the `guardNavigation` shape from `frontend-frame.js:69-78`. Optional: route an http(s) link to `tabs-host` policy instead of dropping it. | `webContents.setWindowOpenHandler`, `will-navigate`, `will-redirect` | ~15 lines | **Worth doing** |
 | **L5 CDP socket** | Default `listenHost` to loopback (`127.0.0.1` and `::1`, or switch the default `?ws=` to `127.0.0.1`). Add `verifyClient`: accept a missing `Origin` (non-browser local tools) or exactly the frontend's origin; reject everything else. `DEVTOOLS_CDP_HOST` stays the explicit opt-in for LAN use. **Landed (issue #23):** both loopbacks, `verifyClient` on the frontend origin + `DEVTOOLS_CDP_ALLOWED_ORIGINS` (unset by default), Origin-less accepted from a loopback peer only, and a second client refused instead of evicting the first. | `ws` `verifyClient`, `host` | ~10 lines | **DONE** (F3) |
@@ -313,7 +360,10 @@ Footnotes:
    reference).
 3. Calls from a worker, an options page, or an extension without `devtools_page` now fail
    with lastError. `webRequest` in a worker keeps working via its grant.
-4. Temp + rename; a name clash yields ` (1)`, not an overwrite.
+4. Temp + rename; a name clash yields ` (1)`, not an overwrite. **Holds as written (issue
+   #22)** — plus the two rules the row did not have: only a partial this download created is
+   ever unlinked, and a symlink at the target is refused. A dialog choice and a `fixedPath`
+   re-save are used as given, which is what keeps `savedURL`/`append` working.
 5. Worker/options windows can no longer navigate off their own extension or `window.open`.
 6. A worker's subresources are same-extension, so they pass.
 7. Only the frontend's `Origin` (or none) may connect.
@@ -324,7 +374,7 @@ Footnotes:
 | Cell(s) | Existing test | Assertion to add (or change) |
 | --- | --- | --- |
 | S1 i18n / worker / content (²) | `tests/background-worker-electron.test.js` (suite at `:570`), `tests/i18n-electron.test.js`, `tests/content-scripts-registry.test.js` | Stage an extension with an in-folder symlink resolving outside the root: the fetch is 404, while a symlinked extension *root* still serves. Existing traversal and bootstrap assertions stay green. |
-| S1 downloads / save (⁴) | `tests/save-service.test.js`, `tests/host-primitives.test.js` (real `fs` at `:81`, `:445`) | A pre-existing file survives (a) a failed fetch, (b) a malformed `data:` URL, (c) cancel. A clashing name produces ` (1)`. **Change** `:272-278` to expect the *temp* path unlinked. A failed re-save via `fixedPath` keeps the earlier file. |
+| S1 downloads / save (⁴) | `tests/save-service.test.js`, `tests/host-primitives.test.js` (real `fs`), `tests/tier2-worker-electron.test.js` (the real-process save) | **Landed (issue #22).** A pre-existing file survives (a) a failed fetch, (b) a malformed `data:` URL, (c) a failing write, (d) a cancel — all four against the injected filesystem, and (a), (b), (c) plus the symlink case again against the real `fs` in a temp dir, where the link's target sits outside it. A clashing name produces ` (1)`, and the counter keeps counting. The old `:272-278` assertion is inverted: the *partial* is unlinked and nothing else in the directory can be. A symlink at the target is refused, not followed, and its target outside the directory is proven untouched. A failed re-save via `fixedPath` keeps the earlier file. Plus: the staged create is exclusive (`flag: "wx"`), a partial left by an earlier run is stepped around rather than unlinked, two concurrent same-name downloads get two files, a failed download releases the name it held, and a directory the shell cannot `lstat` stops the download instead of reporting its name free. |
 | S2 network / eval (³) | `tests/extension-frame-electron.test.js` (the harness registers its host as the frontend via `setFrontendContents` in `extension-frame-harness.js`), `tests/inspected-window.test.js`, `tests/delivery-scope.test.js` (its live-push suite landed with F6: the harness runs the production CDP bridge against `tests/fake-rn-app.js`, and `--observe-frame-sends=on` records the pushes so a filtered-out one is observable), `tests/background-worker-electron.test.js` | A panel frame still evaluates. A worker's `inspectedWindow.eval` returns `isError` with the DevTools-context reason. graphql's worker still receives `webRequest` deliveries (the panel-frame half of that is measured as of F6; the worker half is still to assert). `NETWORK_GET_BODY` from a worker is refused. |
 | S2 windows (⁵) | `tests/background-worker-electron.test.js`, `tests/options-and-requests.test.js` | A worker that sets `location.href` to http stays on its bootstrap URL. `window.open` from a worker creates no window (count `BrowserWindow.getAllWindows()`). |
 | S2 CDP (⁷) | `tests/cdp-bridge.test.js` | A client with a foreign `Origin` is rejected and does **not** evict the current client. A client with the frontend origin, or no `Origin`, connects. Default bind is loopback. **Landed (issue #23)**, plus: a refused client cannot get one command upstream, a second client while attached is refused (`close 4001`) instead of evicting, a reload still reattaches, an unreachable owner is replaced after the probe, and `DEVTOOLS_CDP_ALLOWED_ORIGINS` is unset-by-default. |
@@ -342,14 +392,28 @@ will be folded in later may reorder steps 1–3. Nothing here argues for step 4 
 
 **Step 1 — filesystem containment (F1 + F2).**
 
+- *Status:* **the F2 half is done** (the write and delete side). Staged partial + rename,
+  `uniquify` by default, `overwrite` only by name, symlink refused, cleanup limited to the
+  download's own partial — see `src/main/save-service.js` and `tests/save-service.test.js`
+  (issue #22). The F1 half (the read side) is closed in code and tested; its *prose* closure in
+  §1.1/§3.2 was lost in the stack merge and needs re-landing there.
 - *Closes:* line (b) completely: reads stay inside the folder, and no write can modify or
   delete a pre-existing file.
 - *Cost:* ~40 lines in `extension-server.js` and `save-service.js`, plus the test edits in §5.
   About half a day.
 - *Could break:* an extension whose files are symlinks *within* its own folder (still fine);
-  code that expects a re-download to overwrite (it now gets ` (1)`, as in Chrome).
-- *Proof:* `save-service.test.js`, `host-primitives.test.js`, `background-worker-electron.test.js`
-  (§5 rows S1).
+  code that expects a re-download to overwrite — it now gets ` (1)`, as in Chrome. Measured
+  against this repo's own consumers: the frontend's `save`/`append`/`close` and HAR export are
+  unaffected because a dialog choice and a `fixedPath` re-save are deliberately *not*
+  uniquified (`tests/host-primitives.test.js`, `tests/frontend-host-electron.test.js`).
+- *Proof:* §5 rows S1. Each rule above is additionally mutation-checked: staging, the cleanup
+  target, the symlink refusal, the default conflict action, the `wx` create, claim release, the
+  dot-name refusal, `lstat` vs `stat` in the real backend, and the uniquify counter were each
+  broken in turn and each broke at least one named test. (The claim-before-probe *ordering*
+  itself is the one rule no in-process mutation can show failing: Node's FIFO microtask queue
+  makes a late claim resolve in the same order the probe would have, so only a second real
+  writer could expose it. The claim map it protects is mutation-covered; the ordering is held
+  so that stays true if the gap around the probe ever grows.)
 
 **Step 2 — ambient-authority gates (F3 + F4 + F5).**
 
@@ -456,6 +520,11 @@ lived in `/tmp`; nothing in the repo was changed by them.
   dir as `downloadsDir`. Pre-existing files at the target name were removed after a rejected
   fetch, after a malformed `data:` URL, and for a URL-derived name. Overwrite was silent. A
   pre-existing symlink was followed. `..` failed with `EISDIR` and nothing changed.
+  **That probe is now committed** — the same experiment against the same real `fs`, in a temp
+  dir, with the symlink's target planted outside the downloads dir so the escape (and its
+  closing) is observable rather than argued: `tests/save-service.test.js` ("F2 on the real
+  disk…"). The `..` case is a unit assertion there, and the behavior it recorded changed: a
+  whole-dot name is now refused before anything is created.
 - **F1:** a standalone Electron app that `require`s the worktree's
   `src/main/extension-server.js`, with `DEVTOOLS_EXTENSIONS_DIR` pointing at a temp folder.
   Content outside the extension root was served for both a file symlink and a directory

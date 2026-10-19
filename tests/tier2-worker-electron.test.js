@@ -504,6 +504,7 @@ suite(
     const said = (needle) => lines.some((m) => m.includes(needle));
     const windows = (run.observed.find((l) => l.kind === "options-windows") || {}).windows || [];
     const writes = run.observed.filter((l) => l.kind === "save-write");
+    const renames = run.observed.filter((l) => l.kind === "save-rename");
 
     console.log(
       [
@@ -541,11 +542,25 @@ suite(
       `a content save wrote the bytes it was given (${JSON.stringify(fs.readdirSync(downloadsDir))})`
     );
     assert.equal(said("GRANTED:content-resolved"), true, "and the call resolved with the host's id");
+    assert.deepEqual(
+      fs.readdirSync(downloadsDir).filter((name) => name.endsWith(".rozenite-partial")),
+      [],
+      "a finished download leaves no partial file behind in the user's Downloads dir"
+    );
 
+    // Chrome's shape for a save, proved against a real process and a real disk: the
+    // bytes arrive in a partial file of the service's own, and only a rename makes them
+    // the name the download reports (GitHub issue #22). A write that named the final file
+    // directly would mean the service is writing onto names it does not own again.
     assert.equal(
-      writes.some((entry) => entry.name === "granted.txt"),
+      writes.length > 0 && writes.every((entry) => entry.partial === true),
       true,
-      `a URL download fetched and wrote a file named from the URL: ${JSON.stringify(writes)}`
+      `every write this run made went to a partial file: ${JSON.stringify(writes)}`
+    );
+    assert.equal(
+      renames.some((entry) => entry.name === "granted.txt"),
+      true,
+      `a URL download fetched, staged, and renamed onto a file named from the URL: ${JSON.stringify(renames)}`
     );
     assert.equal(said("GRANTED:url-callback"), true, "the callback style names the same id");
     assert.match(JSON.stringify(lines), /GRANTED:url-callback:\d+:lastError=null/);

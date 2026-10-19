@@ -17,10 +17,12 @@
 //   - `cancel`/`erase`/`search` report main's answer, so the shell never claims a file
 //     exists that it did not write.
 //
-// Not implemented, and not faked: `danger`/`warning` UI, `conflictAction` other than
-// overwriting, and `show`/`showDefaultFolder` (there is no download shelf to reveal
-// anything in). Each of those is reported the first time it is asked for, because a
-// call that silently did nothing reads as one that worked.
+// Not implemented, and not faked: `danger`/`warning` UI, the `conflictAction` values
+// (`unique`/`overwrite`/`prompt`) beyond the shell's default of `uniquify`, and
+// `show`/`showDefaultFolder` (there is no download shelf to reveal anything in). Each of
+// those is reported the first time it is asked for, because a call that silently did
+// nothing reads as one that worked. The save service decides what a taken name means, not
+// this file: see `resolveTarget` in `src/main/save-service.js` (GitHub issue #22).
 const { createEvent } = require("./event");
 const { promiseOrCallback } = require("./async-style");
 
@@ -126,12 +128,19 @@ const createDownloads = ({
           throw noBackendError();
         }
         if (opts.conflictAction !== undefined && opts.conflictAction !== "unique") {
-          // Chrome's own values are `unique` (its default), `overwrite` and `prompt`;
-          // this shell overwrites, so anything else is reported rather than ignored.
+          // TODO(issue #27): Chrome's value is `uniquify`, not `unique`; the accepted value
+          // and the enum are that issue's to fix, so nothing here changes what is accepted.
+          // What did change is the sentence below: GitHub issue #22 moved the shell's default
+          // to Chrome's `uniquify`, so claiming an existing file "is overwritten" would be a
+          // report that describes behavior this host no longer has. The parameter stays
+          // unforwarded — the save service's own default is what runs — so the report says
+          // exactly that, including the one path (`saveAs`) where the user's pick stands.
           report(
             `conflict:${opts.conflictAction}`,
-            `chrome.downloads: conflictAction "${opts.conflictAction}" is not implemented — an ` +
-              "existing file at the chosen path is overwritten."
+            `chrome.downloads: conflictAction "${opts.conflictAction}" is not implemented — it is ` +
+              "ignored and the shell's default applies: a name already taken in the downloads " +
+              "folder is not overwritten, the download is saved as `name (1).ext` as Chrome's " +
+              "default does (a path chosen in a save dialog is used as given)."
           );
         }
         // No report for `saveAs` unset: Chrome writes those into its downloads folder
