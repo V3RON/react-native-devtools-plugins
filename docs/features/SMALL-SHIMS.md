@@ -205,11 +205,12 @@ above inject their own timers and need neither.
 | Method | Status |
 | --- | --- |
 | `download({url})` | **real** — fetches and writes, and resolves the id **main allocated**. A `data:` URL is decoded rather than fetched, like Chrome's. |
+| `conflictAction` | **Chrome's default is the shell's default: `uniquify`.** A name that is taken yields `name (1).ext` and the original is left alone; the shell never overwrites a file the caller did not name `overwrite` for, and never deletes one it did not write. `overwrite` is honored by the save service when a caller asks for it by name; the shim still reports a `conflictAction` it does not accept and forwards none of them, and its accepted value is spelled `unique` where Chrome's is `uniquify` — GitHub issue #27 owns that spelling and the plumbing. |
 | `download({data \| body})` | **real content save** — `data` is a data URL and is decoded; `body` is written as the file's content, which is reported, because Chrome POSTs a `body` and this shell has no POST-download path. |
-| `saveAs: true` | **real save dialog** (`dialog.showSaveDialog`), defaulting to the derived name in the downloads directory. A cancelled dialog is `interrupted` with **no error**, because nothing went wrong. |
+| `saveAs: true` | **real save dialog** (`dialog.showSaveDialog`), defaulting to the derived name in the downloads directory. A cancelled dialog is `interrupted` with **no error**, because nothing went wrong. The path the user chose is used exactly as given — it is not uniquified, because the dialog is Chrome's conflict prompt. |
 | `onChanged` | **real** — the transitions main observed, pushed into the context that started the download (Chrome's rule). A delta carries `current` only on a download's first event, and a property only when it actually changed. |
 | `onDeterminingFilename` | **real two-step contract** — nothing is decided until the extension's callback runs, the callback may run once, and with **no listener** the download proceeds at once under the suggested name. A listener that answers asynchronously is not pre-empted; main waits its 3 s and then says that it decided the name itself. |
-| `cancel` | **real** — an active download becomes `interrupted` with error `CANCELED` (Chrome's vocabulary) and the partial file is unlinked. An unknown id resolves `false`. |
+| `cancel` | **real** — an active download becomes `interrupted` with error `CANCELED` (Chrome's vocabulary) and the partial file is unlinked — the partial **this download staged**, never a file that was already at the target name. An unknown id resolves `false`. |
 | `search` | **real, scoped to the calling extension** — answered from what this shell tracked. Chrome's `id`/`state`/`url`/`filename`/`filenamePrefix`/`startedBefore`/`startedAfter`/`totalBytesGreater`/`limit` filters are honoured; a query field the host cannot filter on (`danger`, `error`) is **reported as ignored** rather than silently treated as match-everything. |
 | `erase` | **real, scoped to the calling extension** — forgets the ledger's entries and answers Chrome's `{id, url, filename}`. A running download is refused, and the **file is not deleted** (Chrome does not delete it either). |
 | `show` / `showDefaultFolder` | do nothing and **say so once**, because there is no download shelf to reveal anything in. |
@@ -230,12 +231,19 @@ keeps the per-url file memory and raises `savedURL` / `canceledSaveURL` / `appen
 1. **An id exists because this file allocated it and is tracking it.** A request with
    neither `url` nor content is refused before any id is minted, so nothing can later
    "search" up a download that never started.
-2. **`complete` is reached only after `writeFile` resolved**, and `totalBytes` is the byte
-   count actually written — not the length of what was asked for.
+2. **`complete` is reached only after the bytes are on disk under the final name**, and
+   `totalBytes` is the byte count actually written — not the length of what was asked for.
 3. **A failure is `interrupted` with the platform's own message** (`404 Not Found`,
    `ENOSPC: no space left on device`), and the partial file is removed, so nothing
    half-written is reported as a download.
-4. **One extension's `search`/`erase` never sees another's.** Chrome's download history
+4. **A save writes what it created, or nothing.** The bytes go into a `.rozenite-partial`
+   file the download creates with an exclusive create and are renamed onto the final name only
+   on success, so no failure — a 404, a bad `data:`, a full disk, a cancel — can delete or
+   truncate a file the user already had. A taken name becomes `name (1).ext` rather than being
+   overwritten, and a symlink standing at the target is refused instead of followed, which is
+   how a write would leave the directory (GitHub issue #22;
+   [../SECURITY-PLATFORM.md](../SECURITY-PLATFORM.md) §3.4).
+5. **One extension's `search`/`erase` never sees another's.** Chrome's download history
    belongs to an extension, so the ledger is keyed by the extension id **main read off the
    calling frame's URL**. The only cross-extension caller is the DevTools frontend's own
    save, which is not an extension.
