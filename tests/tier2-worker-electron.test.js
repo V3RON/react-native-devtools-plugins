@@ -617,6 +617,136 @@ suite(
   }
 );
 
+// `conflictAction` across the whole wire (GitHub issue #27).
+//
+// The save service has honored `conflictAction: "overwrite"` since issue #22, and the shim
+// forwards it since #27, but between them sits `ipcMain.handle(DOWNLOAD_START)` — a handler
+// that rebuilds the request field by field, so a field nobody adds there simply stops
+// existing. A test that injects `start` cannot see that hole: it proves the shim spoke, not
+// that main listened. So this asks a real process over a real IPC channel, on a real disk,
+// the two questions that matter:
+//
+//   - does `overwrite` actually replace a file that was already there, and
+//   - does `uniquify` (and an unset parameter, and a value outside Chrome's enum) leave it
+//     alone and land on `name (1).ext`?
+suite(
+  "chrome.downloads conflictAction survives the trip from the shim to the save service",
+  { timeout: 240000 },
+  async (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "rozenite-tier2-conflict-"));
+    t.after(() => {
+      fs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    });
+
+    const downloadsDir = path.join(root, "downloads");
+    fs.mkdirSync(downloadsDir, { recursive: true });
+    // The file the user already had, placed by the test rather than by this shell — which is
+    // the only way to observe the difference between replacing it and stepping around it.
+    fs.writeFileSync(path.join(downloadsDir, "report.txt"), "the user's own bytes");
+
+    const extensionsDir = path.join(root, "extensions");
+    stageExtension(extensionsDir, TIER2_ID, {
+      "manifest.json": manifest({ permissions: ["downloads"] }),
+      "bg.js": `
+const report = (line) => console.log("CONFLICT:" + line);
+const four = [
+  ["overwrite", "overwrite"],
+  ["uniquify", "uniquify"],
+  ["default", ""],
+  ["legacy", "unique"],
+];
+for (const [label, conflictAction] of four) {
+  const options = {
+    filename: "report.txt",
+    body: "new bytes for " + label,
+    conflictAction: conflictAction || undefined,
+  };
+  chrome.downloads.download(options)
+    .then((id) => report("resolved:" + label + ":" + String(id)))
+    .catch((error) => report("rejected:" + label + ":" + String(error && error.message)));
+}
+// The search at the end is the wait condition AND the answer: every download is complete
+// with the filename the shell really wrote to, which is what each conflict action is judged
+// on. Nothing here guesses a name from the label.
+setTimeout(() => {
+  chrome.downloads.search({}, (items) =>
+    report("search:" + JSON.stringify((items || []).map((i) => ({ id: i.id, state: i.state, filename: i.filename }))))
+  );
+}, 900);
+console.log("CONFLICT:ready");
+`,
+    });
+
+    const run = await runHarness({
+      binary,
+      root: path.join(root, "run"),
+      extensionsDir,
+      backgroundHost: true,
+      downloadsDir,
+      hostPage: "<!DOCTYPE html><html><body>no extension frames</body></html>",
+      waitFor: "CONFLICT:search",
+      timeoutMs: 120000,
+      settleMs: 1500,
+    });
+
+    const lines = run.observed
+      .filter((l) => l.kind === "worker-console" && l.extensionId === TIER2_ID)
+      .map((l) => String(l.message));
+    const said = (needle) => lines.some((m) => m.includes(needle));
+    const searchLine = lines.find((m) => m.includes("CONFLICT:search:"));
+    console.log(
+      [
+        `  [electron/tier2/conflict] exit=${run.code} worker-lines=${lines.length}`,
+        `  [electron/tier2/conflict] said: ${JSON.stringify(lines)}`,
+        `  [electron/tier2/conflict] dir: ${JSON.stringify(fs.readdirSync(downloadsDir))}`,
+      ].join("\n")
+    );
+
+    assert.equal(said("CONFLICT:ready"), true, "the worker ran");
+    assert.ok(searchLine, `search answered: ${JSON.stringify(lines)}`);
+    const items = JSON.parse(searchLine.slice("CONFLICT:search:".length));
+    assert.equal(items.length, 4, "four downloads, one per conflictAction under test");
+    assert.ok(
+      items.every((item) => item.state === "complete"),
+      `all four completed: ${JSON.stringify(items)}`
+    );
+
+    const nameOf = (label) => {
+      const line = lines.find((m) => m.includes(`CONFLICT:resolved:${label}:`));
+      assert.ok(line, `the ${label} call resolved with an id: ${JSON.stringify(lines)}`);
+      const id = Number(line.slice(`CONFLICT:resolved:${label}:`.length));
+      const item = items.find((i) => i.id === id);
+      assert.ok(item, `and search knows id ${id}`);
+      return path.basename(item.filename);
+    };
+
+    // ── `overwrite` reached the save service, because the file it names is gone ──
+    assert.equal(nameOf("overwrite"), "report.txt", "overwrite wrote to the name it was given");
+    assert.equal(
+      fs.readFileSync(path.join(downloadsDir, "report.txt"), "utf8"),
+      "new bytes for overwrite",
+      "and that is the ONLY thing that can be read there — the user's bytes are replaced, " +
+        "which is what a caller naming `overwrite` asked for and the proof the field crossed the IPC boundary"
+    );
+
+    // ── everything else stepped around that name, as Chrome's default does ──────
+    for (const label of ["uniquify", "default", "legacy"]) {
+      const name = nameOf(label);
+      assert.match(name, /^report \(\d\)\.txt$/, `${label} lands on a uniquified name, not the taken one: ${name}`);
+      assert.ok(
+        fs.existsSync(path.join(downloadsDir, name)),
+        `and the file the shell reports is a file that exists: ${name}`
+      );
+    }
+    assert.equal(
+      new Set(["uniquify", "default", "legacy"].map(nameOf)).size,
+      3,
+      "three downloads, three distinct names: the uniquify counter really counts, it does not " +
+        "resolve all three onto the same free name"
+    );
+  }
+);
+
 suite(
   "a denied chrome.downloads is refused by the host even when the frame asks",
   { timeout: 240000 },
