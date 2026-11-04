@@ -28,6 +28,7 @@ const { getContentBridge, attachContentBridge } = require("./content-bridge");
 const { deliverTabMessage } = require("./tab-send");
 const { sendCommand, onEvent, status: bridgeStatus } = require("./cdp-bridge");
 const { createPermissionGate, API_PERMISSIONS } = require("../shared/permissions");
+const { conflictActionForRequest } = require("../shared/downloads");
 const tabHost = require("./tab-host");
 const notificationHost = require("./notification-host");
 const { getContextRegistry } = require("./context-registry");
@@ -757,6 +758,13 @@ const registerIpcHandlers = () => {
         filename: details.filename,
         saveAs: details.saveAs === true,
         title: details.title,
+        // Chrome's `conflictAction`, and the reason this field is not simply copied: it is
+        // the one request field that decides whether a file ALREADY IN THE USER'S FOLDER
+        // gets replaced, so it is validated here rather than trusted from the payload.
+        // Anything outside what this shell performs arrives as `undefined`, which is the
+        // save service's own default — `uniquify`, the behavior the shim's report promises
+        // for an unaccepted value. (GitHub issue #27.)
+        conflictAction: conflictActionForRequest(details.conflictAction),
       })
       .catch((error) => ({ ok: false, error: (error && error.message) || "the save failed" }));
   });

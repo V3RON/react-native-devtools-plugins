@@ -60,7 +60,76 @@ test("download resolves the id the host allocated, and nothing else", async () =
     filename: "renamed.txt",
     saveAs: false,
     title: undefined,
+    // The field is always handed over, `undefined` meaning "the service's own default".
+    // Its presence here is the whole of issue #27's plumbing: before it, the shim had no
+    // way to tell main which conflict action the caller asked for, so `overwrite` could
+    // never have been honored end to end.
+    conflictAction: undefined,
   });
+});
+
+// ── conflictAction (GitHub issue #27) ────────────────────────────────────────
+// Chrome's `FilenameConflictAction` is `"uniquify" | "overwrite" | "prompt"`
+// (developer.chrome.com, downloads#type-FilenameConflictAction, checked 2026-10-14).
+// Two of the three are behaviors this shell really has since issue #22, so they are
+// accepted AND forwarded; the third needs a dialog flow that does not exist here, and
+// anything outside the enum is reported rather than honoured or quietly dropped.
+test("Chrome's `uniquify` and `overwrite` are accepted, and both reach the save service", async () => {
+  for (const conflictAction of ["uniquify", "overwrite"]) {
+    const { downloads, calls, unsupported } = setup();
+    await downloads.download({ url: "https://example.com/a.txt", conflictAction });
+    assert.equal(
+      calls.start[0].conflictAction,
+      conflictAction,
+      `"${conflictAction}" is forwarded as the field the save service reads — an "overwrite" that never ` +
+        "reached it would silently uniquify, which is the divergence this test exists to catch"
+    );
+    assert.equal(
+      unsupported.filter((m) => /conflictAction/.test(m)).length,
+      0,
+      `"${conflictAction}" is a value Chrome accepts and this shell performs, so nothing is claimed about it`
+    );
+  }
+});
+
+test("Chrome's `prompt` is reported as not implemented, and the shell's default runs instead", async () => {
+  const { downloads, calls, unsupported } = setup();
+  await downloads.download({ url: "https://example.com/a.txt", conflictAction: "prompt" });
+  assert.equal(
+    calls.start[0].conflictAction,
+    undefined,
+    "no dialog flow exists, so the value is not forwarded to pretend it was honoured"
+  );
+  const reports = unsupported.filter((m) => /conflictAction/.test(m));
+  assert.equal(reports.length, 1, "one report, and it is a Chrome value this shell lacks rather than a typo");
+  assert.match(reports[0], /"prompt"/);
+  assert.match(reports[0], /not implemented/);
+  assert.match(reports[0], /dialog/, "and the report names what is missing: no conflict dialog to prompt in");
+});
+
+test("the legacy `unique` is reported, with the spelling Chrome actually uses", async () => {
+  const { downloads, calls, unsupported } = setup();
+  await downloads.download({ url: "https://example.com/a.txt", conflictAction: "unique" });
+  assert.equal(
+    calls.start[0].conflictAction,
+    undefined,
+    "`unique` is not in Chrome's enum, so it cannot decide what the write does"
+  );
+  const reports = unsupported.filter((m) => /conflictAction/.test(m));
+  assert.equal(reports.length, 1);
+  assert.match(reports[0], /"unique"/);
+  assert.match(reports[0], /uniquify/, "the hint is the point: an extension that wrote `unique` meant Chrome's `uniquify`");
+});
+
+test("a value outside Chrome's enum is reported once per value, and the default applies", async () => {
+  const { downloads, calls, unsupported } = setup();
+  await downloads.download({ url: "https://example.com/a.txt", conflictAction: "ask-me" });
+  await downloads.download({ url: "https://example.com/b.txt", conflictAction: "ask-me" });
+  const asked = unsupported.filter((m) => /"ask-me"/.test(m));
+  assert.equal(asked.length, 1, "reported once, like every other divergence here");
+  assert.match(asked[0], /not a Chrome value|not one of Chrome's/, `and it says the value is not Chrome's: ${asked[0]}`);
+  assert.match(asked[0], /uniquify/, "naming Chrome's values is what tells the extension its own is wrong");
+  assert.equal(calls.start[1].conflictAction, undefined, "and neither call forwards it");
 });
 
 test("download's callback style gets the same id, and no promise is double-handed", async () => {

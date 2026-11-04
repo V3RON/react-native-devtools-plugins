@@ -584,8 +584,11 @@ const createSaveService = ({
 
       const target = await chooseTarget(record, record.requestedFilename || null, owned, {
         // Chrome's default conflict action is `uniquify`; `overwrite` is honored only when
-        // the caller asks for it by name. The shim forwards no `conflictAction` yet (issue
-        // #27), so today no extension can ask — the parameter is here for the link that does.
+        // the caller asks for it by name (issue #22). An extension can now ask, because the
+        // shim forwards Chrome's `conflictAction` and `ipcMain.handle(DOWNLOAD_START)` passes
+        // it on after checking it against Chrome's enum (issue #27); anything else — an unset
+        // field, `prompt`, a value outside the enum, a payload that skipped the shim entirely
+        // — arrives as `undefined`, which is this default.
         uniquify: conflictAction !== "overwrite",
       });
       if (!target) {
