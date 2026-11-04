@@ -60,6 +60,11 @@ test("download resolves the id the host allocated, and nothing else", async () =
     filename: "renamed.txt",
     saveAs: false,
     title: undefined,
+    // The field is always handed over, `undefined` meaning "the service's own default".
+    // Its presence here is the whole of issue #27's plumbing: before it, the shim had no
+    // way to tell main which conflict action the caller asked for, so `overwrite` could
+    // never have been honored end to end.
+    conflictAction: undefined,
   });
 });
 

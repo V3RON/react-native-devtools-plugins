@@ -17,14 +17,31 @@
 //   - `cancel`/`erase`/`search` report main's answer, so the shell never claims a file
 //     exists that it did not write.
 //
-// Not implemented, and not faked: `danger`/`warning` UI, the `conflictAction` values
-// (`unique`/`overwrite`/`prompt`) beyond the shell's default of `uniquify`, and
-// `show`/`showDefaultFolder` (there is no download shelf to reveal anything in). Each of
-// those is reported the first time it is asked for, because a call that silently did
-// nothing reads as one that worked. The save service decides what a taken name means, not
-// this file: see `resolveTarget` in `src/main/save-service.js` (GitHub issue #22).
+// Not implemented, and not faked: `danger`/`warning` UI, `conflictAction: "prompt"` (there
+// is no conflict dialog to open), and `show`/`showDefaultFolder` (there is no download shelf
+// to reveal anything in). Each of those is reported the first time it is asked for, because
+// a call that silently did nothing reads as one that worked. The save service decides what a
+// taken name means, not this file: see `resolveTarget` in `src/main/save-service.js`
+// (GitHub issues #22 and #27).
 const { createEvent } = require("./event");
 const { promiseOrCallback } = require("./async-style");
+
+/**
+ * Chrome's `FilenameConflictAction` and the shell's own subset of it live in
+ * `src/shared/downloads.js`, because `src/main/ipc.js` validates the same field on its way
+ * to the save service and the two layers must not disagree about the vocabulary.
+ *
+ * Note what is NOT in Chrome's list: `"unique"`, which is the value this shim used to
+ * accept — an invention of ours, which no Chrome extension sends, while the one value
+ * Chrome extensions DO send used to be reported here as unimplemented. That inversion was
+ * GitHub issue #27.
+ *
+ * `uniquify` and `overwrite` are the two this shell can perform, because issue #22 gave the
+ * save service exactly those behaviors (`name (1).ext` by default, a replace only when the
+ * caller names `overwrite`); `conflictActionForRequest` forwards one of those, or `undefined`
+ * to mean "the service's default", which is what the report below promises.
+ */
+const { conflictActionForRequest } = require("../shared/downloads");
 
 /**
  * Chrome's DownloadQuery fields this shell's host can actually filter on
@@ -127,17 +144,28 @@ const createDownloads = ({
         if (!start) {
           throw noBackendError();
         }
-        if (opts.conflictAction !== undefined && opts.conflictAction !== "unique") {
-          // TODO(issue #27): Chrome's value is `uniquify`, not `unique`; the accepted value
-          // and the enum are that issue's to fix, so nothing here changes what is accepted.
-          // What did change is the sentence below: GitHub issue #22 moved the shell's default
-          // to Chrome's `uniquify`, so claiming an existing file "is overwritten" would be a
-          // report that describes behavior this host no longer has. The parameter stays
-          // unforwarded — the save service's own default is what runs — so the report says
-          // exactly that, including the one path (`saveAs`) where the user's pick stands.
+        const conflictAction = conflictActionForRequest(opts.conflictAction);
+        if (opts.conflictAction !== undefined && conflictAction === undefined) {
+          // The tail below is issue #22's sentence and stays as it was written: it is what
+          // actually happens when this parameter decides nothing. What changed (issue #27) is
+          // WHICH values get here at all — Chrome's enum, not a spelling of our own — and the
+          // two openings now say which kind of non-value this is.
+          const why =
+            opts.conflictAction === "prompt"
+              ? // Chrome's third value, and the one this shell has no way to perform: it is a
+                // request to ask the human, and there is no conflict dialog to ask in. Faking it
+                // with the save dialog would be inventing a prompt Chrome did not ask for
+                // (`saveAs` is that dialog, and it is the caller's own choice).
+                "is not implemented — this host has no conflict dialog to prompt in, so it is "
+              : // Not Chrome's vocabulary at all. `unique` lands here too, which is the whole
+                // point of issue #27: the name it is one letter from is Chrome's DEFAULT, so an
+                // extension that wrote it meant `uniquify` and deserves to be told the spelling
+                // rather than left guessing why its parameter did nothing.
+                `is not one of Chrome's values (\`uniquify\`, \`overwrite\`, \`prompt\`) — ` +
+                  "if the spelling meant here was `uniquify`, that one is implemented, so it is ";
           report(
             `conflict:${opts.conflictAction}`,
-            `chrome.downloads: conflictAction "${opts.conflictAction}" is not implemented — it is ` +
+            `chrome.downloads: conflictAction "${opts.conflictAction}" ${why}` +
               "ignored and the shell's default applies: a name already taken in the downloads " +
               "folder is not overwritten, the download is saved as `name (1).ext` as Chrome's " +
               "default does (a path chosen in a save dialog is used as given)."
@@ -161,6 +189,10 @@ const createDownloads = ({
           filename: opts.filename,
           saveAs: opts.saveAs === true,
           title: opts.title,
+          // Only a value the shell performs reaches this field. `prompt` and anything outside
+          // Chrome's enum arrive as `undefined`, which is the save service's "use your default"
+          // — the same thing the report above just promised.
+          conflictAction,
         });
         if (!reply || !reply.ok) {
           throw new Error((reply && reply.error) || "chrome.downloads.download: the save was refused.");
