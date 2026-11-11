@@ -11,24 +11,44 @@
 //
 // What makes the result honest:
 //   - a download gets an id only because this file allocated it and is tracking it;
-//   - `complete` is reached only after `writeFile` resolved, and `fileSize` is the
-//     byte count actually written — not the length of the content asked for;
-//   - a failure is `interrupted` with the platform's own message, and the partial file
-//     is unlinked, so nothing half-written is reported as a download;
+//   - `complete` is reached only after the bytes are on disk under the final name, and
+//     `fileSize` is the byte count actually written — not the length of the content
+//     asked for;
+//   - the bytes are staged in a partial file this download created and renamed onto
+//     the final name only on success. So a failure — a 404, a malformed `data:`, an
+//     `ENOSPC`, a cancel — leaves every file that was already there exactly as it was,
+//     and the only unlink this service can ever issue is on its own partial file
+//     (GitHub issue #22; docs/SECURITY-PLATFORM.md §3.4);
+//   - a name that is already taken is not silently overwritten: Chrome's default
+//     `conflictAction` is `uniquify`, so the write lands on `name (1).ext` and the
+//     original survives. `overwrite` is honored only when the caller asks for it by
+//     name. A symlink standing at the target is refused rather than followed, which is
+//     how a write would leave the directory the user pointed at;
+//   - a failure is `interrupted` with the platform's own message, so nothing
+//     half-written is reported as a download;
 //   - a CANCELLED download is `interrupted` with error `CANCELED`, which is Chrome's
-//     own vocabulary, and the file it had written is removed.
+//     own vocabulary, and the partial file it had written is removed.
 //   - `onDeterminingFilename` is only fired at the point where a name is genuinely
 //     still to be chosen, and the extension's suggestion is used if it sends one.
 //     Nothing waits on an extension that has no listener: the shim answers "no
 //     suggestion" synchronously in that case.
 //
-// Every capability is injected — the save dialog, the fetch, the filesystem, the
-// clock, the download directory — so the rules above are unit-tested without Electron
-// and without writing outside a temp dir (docs/ARCHITECTURE.md's layering rule).
+// Every capability is injected — the save dialog, the fetch, the filesystem (write,
+// rename, lstat, unlink), the clock, the download directory — so the rules above are
+// unit-tested without Electron and without writing outside a temp dir
+// (docs/ARCHITECTURE.md's layering rule).
 const DEFAULT_NAME = "download";
 
 /** Chrome's `state` values, spelled as Chrome spells them. */
 const STATES = ["in_progress", "interrupted", "complete"];
+
+/**
+ * The suffix of the file this service stages its bytes in, beside the final name. It is
+ * Chrome's `.crdownload`: the bytes arrive in a name of our own, and only a rename makes
+ * them the file the download is named after. Same directory, because a rename is atomic
+ * only within one filesystem.
+ */
+const PARTIAL_SUFFIX = ".rozenite-partial";
 
 /** Chrome's own filename-suggestion window: long enough for an extension to answer,
  *  short enough that a listener which claims the callback and stalls cannot hold a
@@ -107,6 +127,24 @@ const safeName = (name, fallback = DEFAULT_NAME) => {
 };
 
 /**
+ * Chrome's `uniquify` — "the filename is changed to include a counter before the
+ * filename extension" (docs: Chrome's FilenameConflictAction, the default for
+ * `downloads.download`). `report.pdf` becomes `report (1).pdf`; a name with no dot gets
+ * the counter on the end, since there is no extension to insert it before.
+ */
+const uniqueName = (name, counter) => {
+  const dot = name.lastIndexOf(".");
+  // A leading dot is a whole filename on its own (`.gitignore`), not an extension.
+  if (dot <= 0) {
+    return `${name} (${counter})`;
+  }
+  return `${name.slice(0, dot)} (${counter})${name.slice(dot)}`;
+};
+
+/** How far the uniquify counter runs before the shell gives up and says so. */
+const UNIQUE_ATTEMPTS = 100;
+
+/**
  * Chrome's DownloadDelta for one transition. Built here rather than in the shim
  * because this file owns the previous state.
  *
@@ -142,7 +180,19 @@ const deltaFor = (previous, record) => {
  *         (Promise<{canceled?: boolean, filePath?: string}>|{canceled?: boolean, filePath?: string})} deps.showSaveDialog
  * @param {(url: string, signal?: object) => (Promise<{buffer: Buffer, contentType?: string}>|{buffer: Buffer})} deps.fetchUrl
  * @param {(path: string, data: any, options?: object) => Promise<void>} deps.writeFile
+ *        Called for the PARTIAL file only, with `{ flag: "wx" }`, which is what makes a
+ *        pre-existing name — including a symlink — refuse the create instead of being
+ *        written through. It is never called on a final name.
+ * @param {(from: string, to: string) => Promise<void>} deps.rename
+ *        Moves the partial onto the final name, and is the only thing that can create it.
+ *        `rename(2)` does not follow a symlink at the destination, so it cannot escape the
+ *        directory either — the symlink check below is about not silently *replacing* one.
+ * @param {(path: string) => Promise<object>} deps.lstat
+ *        The one look the service takes at a name before writing: is anything there, and
+ *        is it a link. `lstat` and not `stat`, because `stat` would follow the link and
+ *        report what is on the other side of it.
  * @param {(path: string) => Promise<void>} [deps.unlink]
+ *        Only ever called with the path of a partial file this download created.
  * @param {() => string} deps.downloadsDir where a save without `saveAs` lands
  * @param {(() => string)|string} [deps.now] ISO timestamp
  * @param {{deliver: function}} [deps.contextRegistry] for onChanged / onDeterminingFilename
@@ -155,6 +205,8 @@ const createSaveService = ({
   showSaveDialog,
   fetchUrl,
   writeFile,
+  rename,
+  lstat,
   unlink = null,
   downloadsDir,
   now = () => new Date().toISOString(),
@@ -189,8 +241,8 @@ const createSaveService = ({
     if (!record) {
       return null;
     }
-    // `frameKey` and `owner` are this shell's routing detail, not part of Chrome's
-    // DownloadItem.
+    // `frameKey`, `owner` and `fixedPath` are this shell's routing detail, not part of
+    // Chrome's DownloadItem.
     const { frameKey, owner, fixedPath, ...item } = record;
     void frameKey;
     void owner;
@@ -237,15 +289,176 @@ const createSaveService = ({
     };
   };
 
+  /**
+   * Whether something stands at `path`, and whether it is a link. `null` means the name is
+   * free; anything else the filesystem says is left an error, on purpose.
+   *
+   * `lstat`, never `stat`: `stat` answers about what a link points AT, which is exactly the
+   * information a check for "is this name free" must not be built on. And only ENOENT counts
+   * as free — a name the shell cannot look at (`EACCES`, `EPERM`, whatever the platform
+   * prefers) is a name it must not write to, because "I could not tell" and "there is nothing
+   * there" are not the same answer, and treating them as one is how a conflict check becomes
+   * decoration. The failure surfaces as an interrupted download carrying the platform's own
+   * words.
+   */
+  const probe = async (path) => {
+    let stats;
+    try {
+      stats = await lstat(path);
+    } catch (error) {
+      if (error && error.code === "ENOENT") {
+        return null;
+      }
+      throw error;
+    }
+    return { symlink: stats.isSymbolicLink() === true };
+  };
+
+  /**
+   * Names this shell has promised to write to, counted by path.
+   *
+   * The claim is taken BEFORE the directory is looked at, and taking it is synchronous. That
+   * ordering is the whole point: the gap between "nothing is standing at this name" and
+   * "these bytes are now under it" spans an `await`, which is exactly where a second
+   * download of the same URL used to land on the same file — and a fix for F2 that picks
+   * names by looking first would reintroduce a smaller version of it. A name that is claimed
+   * is somebody else's, whoever the directory says is there.
+   */
+  const claims = new Map();
+
+  const isClaimed = (path) => (claims.get(path) || 0) > 0;
+  const claim = (path, owned) => {
+    claims.set(path, (claims.get(path) || 0) + 1);
+    owned.push(path);
+  };
+  const unclaim = (path, owned) => {
+    const left = (claims.get(path) || 1) - 1;
+    if (left > 0) {
+      claims.set(path, left);
+    } else {
+      claims.delete(path);
+    }
+    owned.splice(owned.indexOf(path), 1);
+  };
+  /** Called when a download settles: every name it promised is free again. */
+  const release = (owned) => {
+    while (owned.length) {
+      unclaim(owned[owned.length - 1], owned);
+    }
+  };
+
+  /**
+   * A name is not a path, and `safeName` guarantees there is no separator left in one — but
+   * `.` and `..` survive it as whole names, and a name like that is not a file anyone means.
+   * Before this fix the write onto it failed with `EISDIR`, which was harmless by accident;
+   * under uniquify a failure no longer stops the name being chosen, and the shell would
+   * happily create `. (1)` in the user's Downloads folder. So it is refused by name, loudly.
+   * Files that merely START with a dot (`.env`, `.gitignore`) are names and stay allowed.
+   */
+  const isWholeDot = (wantedPath) => {
+    const last = wantedPath.split(/[\\/]/).pop();
+    return last === "." || last === "..";
+  };
+
+  /**
+   * The name this download writes to, checked against what is really in the directory.
+   *
+   * Chrome never overwrites silently: its `conflictAction` default is `uniquify`, so a
+   * taken name becomes `name (1).ext` and the file that was already there is left alone.
+   *
+   * `uniquify` is the downloads-directory case, where nobody was asked. A path the user
+   * picked in a dialog and the path `fixedPath` re-saves to are used exactly as given —
+   * the dialog IS Chrome's conflict prompt, and a re-save that quietly wrote
+   * `report (1).har` would break the frontend's per-url file memory (src/main/host-files.js)
+   * and every `append` that follows it. Both still refuse a symlink.
+   *
+   * Every name is claimed before it is probed, and the claim is synchronous, so a name seen
+   * as free cannot be taken by a download that started after this one looked at it.
+   */
+  const resolveTarget = async (wantedPath, { uniquify }, owned) => {
+    if (isWholeDot(wantedPath)) {
+      throw new TypeError(
+        `downloads: "${wantedPath.split(/[\\/]/).pop()}" is not a filename; refusing to write it.`
+      );
+    }
+    const uncontested = !isClaimed(wantedPath);
+    claim(wantedPath, owned);
+    const first = await probe(wantedPath);
+    if (first && first.symlink) {
+      // Chrome's uniquify would step around a link; this shell refuses instead, because a
+      // link at the name an extension chose is how a write leaves the directory it was
+      // pointed at, and quietly writing `name (1)` beside it hides that from the user.
+      unclaim(wantedPath, owned);
+      throw new TypeError(
+        `downloads: "${wantedPath.split(/[\\/]/).pop()}" is a symlink; refusing to write through it.`
+      );
+    }
+    if (!uniquify) {
+      return wantedPath;
+    }
+    if (uncontested && !first) {
+      return wantedPath;
+    }
+    // Rebuilt from the wanted path rather than run through `path.join`: the wanted path is
+    // returned verbatim when there is no conflict, and a join would normalize a path the
+    // caller gave us into a different string than the one it is waiting for.
+    const separator = Math.max(wantedPath.lastIndexOf("/"), wantedPath.lastIndexOf("\\"));
+    const head = separator === -1 ? "" : wantedPath.slice(0, separator);
+    const name = separator === -1 ? wantedPath : wantedPath.slice(separator + 1);
+    for (let counter = 1; counter <= UNIQUE_ATTEMPTS; counter++) {
+      const candidate = `${head}${separator === -1 ? "" : "/"}${uniqueName(name, counter)}`;
+      if (isClaimed(candidate)) {
+        continue;
+      }
+      claim(candidate, owned);
+      if (!(await probe(candidate))) {
+        return candidate;
+      }
+      unclaim(candidate, owned);
+    }
+    throw new TypeError(
+      `downloads: every name from "${uniqueName(name, 1)}" to "${uniqueName(name, UNIQUE_ATTEMPTS)}" is taken.`
+    );
+  };
+
+  /**
+   * A partial file to stage this download's bytes in, beside the name it resolved to.
+   *
+   * Claimed the same way a final name is, so two downloads of the same URL cannot stage into
+   * one file either, and probed before use so a name left over from a crashed run (or planted
+   * at this predictable path) is stepped around rather than unlinked: this service only ever
+   * deletes a file it created in this download.
+   */
+  const resolvePartial = async (finalPath, owned) => {
+    const base = `${finalPath}${PARTIAL_SUFFIX}`;
+    for (let counter = 0; counter <= UNIQUE_ATTEMPTS; counter++) {
+      const candidate = counter === 0 ? base : `${base}.${counter}`;
+      if (isClaimed(candidate)) {
+        continue;
+      }
+      claim(candidate, owned);
+      if (!(await probe(candidate))) {
+        return candidate;
+      }
+      // Somebody's file is standing at this name — a leftover, or something planted. It is
+      // not ours, so it stays exactly where it is and this download stages beside it.
+      unclaim(candidate, owned);
+    }
+    throw new TypeError(`downloads: no partial file name is free beside "${base}".`);
+  };
+
   /** Where the bytes go: the dialog when `saveAs`, the downloads dir otherwise. */
-  const chooseTarget = async (record, suggested) => {
+  const chooseTarget = async (record, suggested, owned, { uniquify }) => {
     const name = safeName(suggested || record.requestedFilename || record.suggestedName);
     if (record.fixedPath) {
-      return { filePath: record.fixedPath, name: safeName(record.fixedPath.split(/[\\/]/).pop(), name) };
+      const target = await resolveTarget(record.fixedPath, { uniquify: false }, owned);
+      return { filePath: target, name: safeName(target.split(/[\\/]/).pop(), name) };
     }
     if (!record.saveAs) {
       const dir = String(downloadsDir()).replace(/[/\\]$/, "");
-      return { filePath: `${dir}/${name}`.replace(/\\/g, "/"), name };
+      const wanted = `${dir}/${name}`.replace(/\\/g, "/");
+      const target = await resolveTarget(wanted, { uniquify }, owned);
+      return { filePath: target, name: safeName(target.split(/[\\/]/).pop(), name) };
     }
     const reply = await showSaveDialog({
       defaultPath: `${String(downloadsDir()).replace(/[/\\]$/, "")}/${name}`,
@@ -254,7 +467,8 @@ const createSaveService = ({
     if (!reply || reply.canceled || !reply.filePath) {
       return null;
     }
-    return { filePath: reply.filePath, name: safeName(reply.filePath.split(/[\\/]/).pop(), name) };
+    const target = await resolveTarget(String(reply.filePath), { uniquify: false }, owned);
+    return { filePath: target, name: safeName(target.split(/[\\/]/).pop(), name) };
   };
 
   const finish = (record, state, extra = {}) => {
@@ -269,6 +483,15 @@ const createSaveService = ({
     return snapshot(record.id);
   };
 
+  /**
+   * Remove the partial file THIS download staged.
+   *
+   * `path` is a name `resolvePartial` probed as free and then wrote to, so anything
+   * standing there was created by this call. It is the only unlink this service can issue:
+   * the final name is never passed, which is exactly what GitHub issue #22 was — a failed
+   * download unlinking a file the user had put in their Downloads folder themselves. The
+   * shell only ever earns the right to delete bytes it wrote.
+   */
   const removePartial = async (path) => {
     if (!path || !unlink) {
       return;
@@ -299,6 +522,7 @@ const createSaveService = ({
       saveAs,
       title,
       filePath,
+      conflictAction,
     } = request || {};
     if (url === undefined && content === undefined) {
       return { ok: false, error: "downloads.download: either url or body/content is required." };
@@ -338,6 +562,12 @@ const createSaveService = ({
     });
     pushChanged(null, { ...record });
 
+    // Every name this download took a promise on (the target, then the partial), released
+    // when it settles. `staged` is the ONLY path this download may ever unlink, and only
+    // once the write to it has actually been issued.
+    const owned = [];
+    let staged = null;
+
     try {
       if (!record.requestedFilename) {
         const { suggestion } = await askForFilename(record);
@@ -348,12 +578,16 @@ const createSaveService = ({
         }
       }
       if (canceled) {
-        await removePartial(null);
         finish(record, "interrupted", { error: CANCELED, filename: "" });
         return { ok: true, id };
       }
 
-      const target = await chooseTarget(record, record.requestedFilename || null);
+      const target = await chooseTarget(record, record.requestedFilename || null, owned, {
+        // Chrome's default conflict action is `uniquify`; `overwrite` is honored only when
+        // the caller asks for it by name. The shim forwards no `conflictAction` yet (issue
+        // #27), so today no extension can ask — the parameter is here for the link that does.
+        uniquify: conflictAction !== "overwrite",
+      });
       if (!target) {
         // The user said no. Chrome reports an interrupted download with no error,
         // because nothing went wrong.
@@ -378,7 +612,6 @@ const createSaveService = ({
           },
         });
         if (canceled) {
-          await removePartial(target.filePath);
           finish(record, "interrupted", { error: CANCELED });
           return { ok: true, id };
         }
@@ -395,21 +628,33 @@ const createSaveService = ({
         payload = String(content ?? "");
         encoding = "utf8";
       }
-      await writeFile(target.filePath, payload, encoding ? { encoding } : undefined);
+
+      // Chrome's shape: "when all the data is fetched into a temporary file … then the
+      // temporary file is renamed to the target filename". Everything the download can
+      // still fail at — a full disk, a cancel, a rename that cannot happen — happens
+      // against a name of ours, so a failure leaves the target name exactly as it found it.
+      staged = await resolvePartial(target.filePath, owned);
+      await writeFile(staged, payload, { flag: "wx", ...(encoding ? { encoding } : {}) });
       if (canceled) {
-        await removePartial(target.filePath);
+        await removePartial(staged);
+        staged = null;
         finish(record, "interrupted", { error: CANCELED });
         return { ok: true, id };
       }
+      await rename(staged, target.filePath);
+      staged = null;
+
       // The byte count that was written, not the one that was asked for.
       const size = Buffer.isBuffer(payload) ? payload.length : Buffer.byteLength(String(payload), "utf8");
       finish(record, "complete", { totalBytes: size });
       return { ok: true, id };
     } catch (error) {
       const message = (error && error.message) || "the save failed";
-      await removePartial(record.filename);
+      await removePartial(staged);
       finish(record, "interrupted", { error: message });
       return { ok: true, id };
+    } finally {
+      release(owned);
     }
   };
 
@@ -543,6 +788,10 @@ const attachSaveService = (deps = {}) => {
       return { buffer: await reply.buffer(), contentType: reply.headers.get("content-type") };
     },
     writeFile: (target, data, options) => fs.writeFile(target, data, options),
+    rename: (from, to) => fs.rename(from, to),
+    // `lstat` and not `stat`: the service asks whether the NAME itself is a link, which
+    // is the one thing `stat` cannot answer — it reports what is on the other side.
+    lstat: (target) => fs.lstat(target),
     unlink: (target) => fs.unlink(target),
     downloadsDir: () => path.join(os.homedir(), "Downloads"),
     contextRegistry: getContextRegistry(),

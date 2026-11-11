@@ -17,10 +17,11 @@
 // name an arbitrary file to grow. The dialog and the write are the shell's one save
 // path (src/main/save-service.js); events go out on the dispatch channel.
 //
-// Known sharp edge: a re-save to a remembered path overwrites that file in place, so if
-// the write then fails the save service removes the (already truncated) file — the
-// earlier contents are gone, and `canceledSaveURL` is raised. Writing to a temp file and
-// renaming would avoid it; it has not been done.
+// A re-save to a remembered path replaces that file, which is what a re-save means, but it
+// can no longer damage it: the save service stages the new bytes in its own partial file and
+// renames them onto the path only on success (GitHub issue #22). So a re-save that fails —
+// mid-write, on a full disk, on a symlink standing at the path — raises `canceledSaveURL` and
+// leaves the earlier contents exactly as they were.
 //
 // Operations on one url run in order (a console log is saved, then appended to in
 // chunks, and an append must not overtake the save that gives it a path).

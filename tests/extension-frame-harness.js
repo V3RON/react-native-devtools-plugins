@@ -276,17 +276,28 @@ app
           note({ kind: "save-fetch", url });
           return { buffer: Buffer.from(bodyFor(url)), contentType: "text/plain" };
         },
-        // The REAL filesystem, into the run's temp dir, with each write recorded so a
-        // test can tell "the service said complete" from "bytes reached a file".
+        // The REAL filesystem, into the run's temp dir, with each step recorded so a test
+        // can tell "the service said complete" from "bytes reached a file". A write now
+        // lands on a `.rozenite-partial` name and becomes the file the download reports
+        // only through `rename` (GitHub issue #22), so the rename is recorded as its own
+        // observation rather than folded into the write's.
         writeFile: async (target, data, options) => {
           await fs.promises.writeFile(target, data, options);
           note({
             kind: "save-write",
             path: target,
             name: path.basename(target),
+            partial: target.endsWith(".rozenite-partial"),
             bytes: Buffer.byteLength(Buffer.isBuffer(data) ? data : String(data)),
           });
         },
+        rename: async (from, to) => {
+          await fs.promises.rename(from, to);
+          note({ kind: "save-rename", from, to, name: path.basename(to) });
+        },
+        // The service asks whether a NAME is a link, so the harness gives it the real
+        // `lstat` and not `stat`, which would answer about the file on the other side.
+        lstat: (target) => fs.promises.lstat(target),
         unlink: (target) =>
           fs.promises.unlink(target).then(() => note({ kind: "save-unlink", path: target })),
         downloadsDir: () => downloadsDir,
