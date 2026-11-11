@@ -50,7 +50,7 @@
 // marked pending and the report says so in words. When the session dies, the app's seat
 // in the messaging mesh is withdrawn rather than left to accumulate undeliverable work.
 const { createEvalInPage } = require("./inspected-window");
-const { decideEntries } = require("./content-gate");
+const { decideEntries, isAllowlisted } = require("./content-gate");
 const { NO_RECEIVER } = require("./message-router");
 const { tabIdFor } = require("../chrome-shim/devtools");
 const { syntheticTab } = require("../chrome-shim/tab-model");
@@ -178,10 +178,19 @@ const loaderSource = ({
     var stack = [];
     var text;
     try {
+      // "stack" is the chain of ANCESTORS of the value being visited, not everything seen
+      // so far: the same object reachable twice without a cycle (a shared array, which
+      // MobX DevTools' payloads have) is data, and must arrive twice, not as "[circular]".
+      // "this" is the holder of "key", so popping down to it leaves exactly the ancestors.
       text = JSON.stringify(value, function (key, v) {
+        while (stack.length && stack[stack.length - 1] !== this) stack.pop();
         if (v && typeof v === "object") {
           var bin = binaryOf(v);
-          if (bin) return { __rozeniteBase64: toB64(bin) };
+          if (bin) {
+            var wrapped = { __rozeniteBase64: toB64(bin) };
+            stack.push(wrapped);
+            return wrapped;
+          }
           if (stack.indexOf(v) >= 0) return "[circular]";
           stack.push(v);
         }
@@ -647,13 +656,129 @@ const loaderSource = ({
   g[${JSON.stringify(globalName)}] = host;
 })();`;
 
+/** Where the per-extension scopes live on the app's global (non-enumerable, never clobbered). */
+const SCOPE_REGISTRY_KEY = "rozenite.content-bridge.scopes";
+
+/**
+ * An expression that evaluates, INSIDE THE APP, to extension `extensionId`'s `window`.
+ *
+ * Chrome's content scripts and the page's MAIN world talk through `window.postMessage`
+ * and the `message` event (mobx-devtools: contentScript.js <-> backend.js). A Hermes
+ * global has neither, and installing them on the real global would leak one extension's
+ * traffic to every other extension and to the app, and would make the app's own
+ * libraries (React's scheduler, setImmediate shims) think they run in a browser.
+ *
+ * So each extension gets a Proxy over the real global instead:
+ *   - `postMessage`, `addEventListener`/`removeEventListener` for "message", and
+ *     `onmessage` go to a bus PRIVATE TO THAT EXTENSION. Every script that extension
+ *     injects, in either world and across evaluates, shares the bus. That is the
+ *     channel the two Chrome worlds share, minus the page and other extensions (Chrome
+ *     lets both of those see and spoof it: this is deliberately stricter).
+ *   - Delivery is asynchronous (`setTimeout(0)`), like the browser's. Handlers that
+ *     remove themselves and reply from inside the handler rely on that.
+ *   - `data` crosses BY REFERENCE, not structured-cloned (Hermes has no structuredClone).
+ *   - `window`, `self` and `globalThis` read through the scope return the scope.
+ *   - Everything else (reads, writes, defineProperty, `in`) passes to the real global,
+ *     so `window.__MOBX_DEVTOOLS_GLOBAL_HOOK__` is the hook the app's mobx calls.
+ *
+ * Only `window.x`-qualified access is scoped: a bare `postMessage(...)` still resolves
+ * against the real global, where Hermes has none. The scope is self-contained (no
+ * loader, no binding), because MAIN-world injections run without the loader.
+ */
+const scopeExpression = (extensionId) => `(function (g, id) {
+  var KEY = Symbol.for(${JSON.stringify(SCOPE_REGISTRY_KEY)});
+  var registry = g[KEY];
+  if (!registry) {
+    registry = Object.create(null);
+    Object.defineProperty(g, KEY, { value: registry, enumerable: false });
+  }
+  if (registry[id]) return registry[id];
+
+  var listeners = [];
+  var onmessage = null;
+  var scope;
+  function isListener(fn) {
+    return typeof fn === "function" || (fn && typeof fn.handleEvent === "function");
+  }
+  function invoke(fn, event) {
+    try {
+      if (typeof fn === "function") fn.call(scope, event);
+      else fn.handleEvent(event);
+    } catch (error) {
+      // The browser reports a throwing listener and keeps delivering to the rest.
+      if (typeof console !== "undefined" && console.error) console.error(error);
+    }
+  }
+  var overrides = {
+    postMessage: function (data) {
+      setTimeout(function () {
+        var event = { type: "message", data: data, origin: "", lastEventId: "", source: scope, ports: [] };
+        var current = listeners.slice();
+        if (typeof onmessage === "function") current.push(onmessage);
+        for (var i = 0; i < current.length; i++) invoke(current[i], event);
+      }, 0);
+    },
+    addEventListener: function (type, fn) {
+      if (type !== "message") {
+        // Not a message: the real global's, if this runtime has one.
+        return typeof g.addEventListener === "function" ? g.addEventListener.apply(g, arguments) : undefined;
+      }
+      if (isListener(fn) && listeners.indexOf(fn) === -1) listeners.push(fn);
+    },
+    removeEventListener: function (type, fn) {
+      if (type !== "message") {
+        return typeof g.removeEventListener === "function" ? g.removeEventListener.apply(g, arguments) : undefined;
+      }
+      var at = listeners.indexOf(fn);
+      if (at !== -1) listeners.splice(at, 1);
+    }
+  };
+  var own = function (key) { return Object.prototype.hasOwnProperty.call(overrides, key); };
+  var self = { window: 1, self: 1, globalThis: 1 };
+  scope = new Proxy(g, {
+    get: function (target, key) {
+      if (typeof key === "string") {
+        if (own(key)) return overrides[key];
+        if (key === "onmessage") return onmessage;
+        if (self[key] === 1) return scope;
+      }
+      return Reflect.get(target, key);
+    },
+    set: function (target, key, value) {
+      if (key === "onmessage") { onmessage = typeof value === "function" ? value : null; return true; }
+      return Reflect.set(target, key, value);
+    },
+    has: function (target, key) {
+      return (typeof key === "string" && (own(key) || key === "onmessage")) || key in target;
+    }
+  });
+  registry[id] = scope;
+  return scope;
+})(globalThis, ${JSON.stringify(extensionId)})`;
+
+/**
+ * Run `body` as a function of the extension's scope: `window`, `self`, `globalThis` and
+ * a top-level `this` are all that extension's scope (`scopeExpression`). `prelude` is
+ * declared first, inside the same function (the ISOLATED world's lexical `chrome`).
+ * The expression's value is the function's return value.
+ */
+const scopedExpression = ({ extensionId, body, prelude = "" }) =>
+  `(function (scope) {\n  return (function (window, self, globalThis) {\n${prelude}${body}\n  }).call(scope, scope, scope, scope);\n})(${scopeExpression(
+    extensionId
+  )})`;
+
 /** Install the loader, register this entry's files, then run the extension's script. */
 const injectionExpression = ({ extensionId, innerPaths, source, loader }) =>
-  `${loader}\n;${DISPATCH_GLOBAL}.inject(${JSON.stringify(
-    extensionId
-  )}, ${JSON.stringify(innerPaths)});\n(function () { var chrome = ${DISPATCH_GLOBAL}.forExtension(${JSON.stringify(
-    extensionId
-  )}, globalThis.chrome);\n${source}\n})();`;
+  `${loader}\n;${DISPATCH_GLOBAL}.inject(${JSON.stringify(extensionId)}, ${JSON.stringify(
+    innerPaths
+  )});\n${scopedExpression({
+    extensionId,
+    prelude: `var chrome = ${DISPATCH_GLOBAL}.forExtension(${JSON.stringify(extensionId)}, globalThis.chrome);\n`,
+    body: source,
+  })};`;
+
+/** A MAIN-world script: the same scope (so it hears the ISOLATED side), no `chrome`. */
+const mainWorldExpression = ({ extensionId, source }) => `${scopedExpression({ extensionId, body: source })};`;
 
 /** The host->app delivery: one evaluate into the dispatch function the loader installed. */
 const dispatchExpression = (envelope) =>
@@ -710,6 +835,10 @@ const createContentBridge = ({
   const state = new Map();
   /** extensionId -> Map(app port id ⇄ router port id) */
   const appPorts = new Map();
+  /** extensionId -> the app's mesh seat (the frame object the router holds) */
+  const appSeats = new Map();
+  /** `${extensionId}\0${app port id}` -> resolves once that app-opened port is mapped */
+  const opening = new Map();
   /**
    * extensionId -> what the CURRENT app context has already been evaluated into it, keyed
    * by the same notion of "fresh context" everything above uses. Re-running a script the
@@ -854,16 +983,19 @@ const createContentBridge = ({
    */
   const registerAppFrame = (extensionId) => {
     if (!router) return;
-    router.registerFrame({
+    const seat = {
       key: appFrameKey(extensionId),
       extensionId,
       url: appFrameURL(extensionId),
+      tab: null, // stamped by `stampSeatTab` before each app-originated send
       send: (delivery) => {
         deliverToApp(extensionId, delivery).catch((error) =>
           line(`${extensionId}: delivery failed: ${error.message}`)
         );
       },
-    });
+    };
+    appSeats.set(extensionId, seat);
+    router.registerFrame(seat);
     const record = state.get(extensionId) || {};
     state.set(extensionId, { ...record, frameRegistered: true });
   };
@@ -883,6 +1015,7 @@ const createContentBridge = ({
     // stands for is the one thing here that must never happen).
     if (router) {
       router.unregisterFrame(appFrameKey(extensionId));
+      appSeats.delete(extensionId);
     }
     appPorts.delete(extensionId);
     evaluated.delete(extensionId);
@@ -895,9 +1028,58 @@ const createContentBridge = ({
     });
   };
 
+  /**
+   * The app speaks as a content script of the inspected tab, so what it sends carries that
+   * tab as `sender.tab` (the router reads `seat.tab`). Refreshed per send: the target's
+   * url/title can change between sends, and a seat without an attached target has no tab.
+   */
+  const stampSeatTab = async (extensionId) => {
+    const seat = appSeats.get(extensionId);
+    if (!seat) return;
+    // Mid re-attach the target info is briefly unavailable, but a message FROM the app
+    // proves a tab is there, and its id is fixed. A sender without `tab` is not a
+    // content script to an extension (mobx-devtools reads `port.sender.tab.id`).
+    seat.tab =
+      (await senderTab(extensionId)) ||
+      (seat.tab && seat.tab.id === tabIdFor(extensionId) ? seat.tab : null) ||
+      syntheticTab({ tabId: tabIdFor(extensionId), attached: false });
+  };
+
+  /**
+   * The target's url/title for `sender.tab`, kept off the messaging path. Reading it is a
+   * CDP round-trip (tab-host's `targetInfo`), and one that can take the bridge's whole
+   * request timeout (10 s) to fail. Awaited per message, it held every app-opened port
+   * and every host→app delivery for that long, and an extension that pings once
+   * (mobx-devtools' panel) never heard back. So: answer from the last snapshot, refresh
+   * in the background, and wait briefly only when there is no snapshot yet.
+   */
+  let targetCache = null;
+  let targetRefresh = null;
+  const FIRST_TARGET_WAIT_MS = 250;
+  const refreshTarget = () => {
+    if (!targetRefresh) {
+      targetRefresh = targetSnapshot()
+        .then((info) => {
+          targetCache = info;
+        })
+        .finally(() => {
+          targetRefresh = null;
+        });
+    }
+    return targetRefresh;
+  };
   const senderTab = async (extensionId) => {
-    const info = await targetSnapshot();
-    if (!info.attached) return null;
+    if (!isAttached()) return null;
+    const refreshing = refreshTarget();
+    if (!targetCache) {
+      let timer;
+      await Promise.race([
+        refreshing,
+        new Promise((resolve) => (timer = setTimer(resolve, FIRST_TARGET_WAIT_MS))),
+      ]);
+      clearTimer(timer);
+    }
+    const info = targetCache && targetCache.attached ? targetCache : { url: "", title: "" };
     return syntheticTab({
       tabId: tabIdFor(extensionId),
       attached: true,
@@ -1043,6 +1225,7 @@ const createContentBridge = ({
           await answerApp(extensionId, envelope.s, undefined, noReceiverReason(extensionId));
           return;
         }
+        await stampSeatTab(extensionId);
         const response = await router.sendMessage({ fromKey: key, message: envelope.m });
         await answerApp(extensionId, envelope.s, response);
         return;
@@ -1085,8 +1268,24 @@ const createContentBridge = ({
           );
           return;
         }
+        // Stamping the tab is a CDP round-trip, and the script may post on this port in
+        // the same tick it opened it. Posts and closes that arrive meanwhile wait for
+        // this open (`opening`) instead of being dropped as "never opened".
+        let opened;
+        const openKey = `${extensionId}\u0000${envelope.s}`;
+        opening.set(openKey, new Promise((resolve) => (opened = resolve)));
+        try {
+          await stampSeatTab(extensionId);
+        } finally {
+          opening.delete(openKey);
+        }
         const result = router.connect({ fromKey: key, name: envelope.n || "" });
+        line(
+          `${extensionId}: the app opened port ${JSON.stringify(envelope.n || "")}` +
+            (result.ok ? ` (router port ${result.portId})` : `, refused: ${result.error}`)
+        );
         if (!result.ok) {
+          opened();
           await evaluateInApp(
             dispatchExpression({
               t: "port-drop",
@@ -1100,6 +1299,7 @@ const createContentBridge = ({
         const ports = portsOf(extensionId);
         ports.set(envelope.s, result.portId);
         ports.set(result.portId, envelope.s);
+        opened();
         await evaluateInApp(
           dispatchExpression({ t: "port-open", x: extensionId, s: envelope.s, p: result.portId })
         );
@@ -1107,6 +1307,7 @@ const createContentBridge = ({
       }
       case "port-post": {
         if (!router) return;
+        await opening.get(`${extensionId}\u0000${envelope.s}`);
         const hostPortId = portsOf(extensionId).get(envelope.s);
         if (hostPortId === undefined) {
           line(`${extensionId}: post on an app port the router never opened`);
@@ -1117,6 +1318,7 @@ const createContentBridge = ({
       }
       case "port-close": {
         if (!router) return;
+        await opening.get(`${extensionId}\u0000${envelope.s}`);
         const ports = portsOf(extensionId);
         const hostPortId = ports.get(envelope.s);
         if (hostPortId === undefined) return;
@@ -1421,6 +1623,122 @@ const createContentBridge = ({
     return { ok: true, frameKey: appFrameKey(extensionId) };
   };
 
+  /**
+   * `chrome.scripting.executeScript`'s host half: one `Runtime.evaluate` into the app.
+   *
+   * Chrome's contract: exactly one of `files` / `func`; the promise resolves with one
+   * `InjectionResult` per frame (`{frameId, result}`), `result` being the script's
+   * completion value (files: the last file's) or `func`'s return value — awaited if it is
+   * a promise — and only JSON-serializable values survive.
+   *
+   * RN mapping, stated rather than implied:
+   *   - one target, no frames: the answer is always ONE result, `frameId: 0`;
+   *   - `world: "MAIN"` is the app's global context, which is the only context Hermes has;
+   *   - `world: "ISOLATED"` (Chrome's default) cannot be isolated either. What it CAN be is
+   *     a content script: files run through the same loader + lexical `chrome` as manifest
+   *     `content_scripts`, and the extension's app context takes its mesh seat, so the
+   *     injected file's `chrome.runtime.connect/sendMessage` really reach the extension.
+   *     Its completion value is lost to that wrapper, so ISOLATED `files` resolve `null`.
+   *   - `func` is evaluated from its source text (Chrome serializes it the same way, which
+   *     is why a `func` cannot close over anything).
+   *
+   * Gated exactly like manifest content scripts (DEVTOOLS_CONTENT_SCRIPTS): this is the
+   * same third-party code inside the user's app, so it needs the same explicit opt-in.
+   *
+   * @returns {Promise<{ok: true, results: object[]}|{ok: false, error: string}>}
+   */
+  const executeScript = async ({ extensionId, files = null, func = null, args = [], world = "ISOLATED" }) => {
+    const refuse = (why) => ({ ok: false, error: `scripting.executeScript: ${why}` });
+    const hasFiles = Array.isArray(files) && files.length > 0;
+    const hasFunc = typeof func === "string" && func.trim() !== "";
+    if (hasFiles === hasFunc) {
+      return refuse("exactly one of 'files' or 'func' must be specified");
+    }
+    if (world !== "ISOLATED" && world !== "MAIN") {
+      return refuse(`unknown world ${JSON.stringify(world)}`);
+    }
+    if (!isAllowlisted(allowlist, extensionId).allowed) {
+      return refuse(
+        `"${extensionId}" may not run scripts in the inspected app. Nothing is evaluated unless ` +
+          `DEVTOOLS_CONTENT_SCRIPTS names "${extensionId}" or "<all_rn_targets>" ` +
+          "(docs/features/CONTENT-SCRIPTS.md)"
+      );
+    }
+    if (!isAttached()) {
+      return refuse("no CDP session is attached to the inspected target");
+    }
+
+    let expression;
+    let asContentScript = false;
+    let innerPaths = [];
+    if (hasFunc) {
+      // Arguments cross as JSON, like Chrome's (it rejects what it cannot serialize).
+      let encodedArgs;
+      try {
+        encodedArgs = JSON.stringify(Array.isArray(args) ? args : []);
+      } catch (error) {
+        return refuse(`'args' must be JSON-serializable: ${error.message}`);
+      }
+      // In the extension's scope, so a func's `window.x` reads the same global its
+      // injected files see.
+      expression = scopedExpression({ extensionId, body: `return (${func}).apply(null, ${encodedArgs});` });
+    } else {
+      if (!resolvePaths || !readSources) {
+        return refuse("no registry reader is wired");
+      }
+      // Chrome accepts "/backend.js" and "backend.js" alike: both are extension-root relative.
+      innerPaths = files.map((file) => String(file).replace(/^\/+/, ""));
+      const resolved = resolvePaths(extensionId, { js: innerPaths, css: [] });
+      const read = readSources(extensionId, resolved, () => true);
+      if (read.problems.length > 0 || read.sources.length !== innerPaths.length) {
+        return refuse(`could not load ${read.problems.join("; ") || "the requested files"}`);
+      }
+      const source = read.sources.map((entry) => entry.source).join("\n;\n");
+      if (world === "MAIN") {
+        expression = mainWorldExpression({ extensionId, source });
+      } else {
+        asContentScript = true;
+        const binding = await ensureBinding();
+        if (!binding || !(await bindingIsLive())) {
+          return refuse(`the app did not install ${BINDING_NAME}, so an ISOLATED-world script would have no chrome.runtime`);
+        }
+        expression = injectionExpression({ extensionId, innerPaths, source, loader });
+      }
+    }
+
+    if (asContentScript) {
+      // Same ordering rule as `injectExtension`: the seat first, so a file that connects
+      // from its first statement is routable while its evaluate is still open.
+      registerAppFrame(extensionId);
+      const record = state.get(extensionId) || { extensionId, entries: [] };
+      state.set(extensionId, { ...record, evaluating: true });
+    }
+    const outcome = await evaluateInApp(expression);
+    if (asContentScript) {
+      const record = state.get(extensionId) || {};
+      if (outcome.ok) {
+        state.set(extensionId, { ...record, evaluating: false, injected: true, pending: false, lastError: null });
+      } else if (!record.injected) {
+        withdraw(extensionId, outcome.error);
+      } else {
+        state.set(extensionId, { ...record, evaluating: false });
+      }
+    }
+    if (!outcome.ok) {
+      line(`${extensionId}: scripting.executeScript failed: ${outcome.error}`);
+      return refuse(outcome.error);
+    }
+    line(
+      `${extensionId}: scripting.executeScript ran ${
+        hasFunc ? "a func" : innerPaths.join(", ")
+      } in the ${world} world`
+    );
+    return {
+      ok: true,
+      results: [{ frameId: 0, result: asContentScript || outcome.value === undefined ? null : outcome.value }],
+    };
+  };
+
   const report = () =>
     [...state.values()].map((record) => ({
       extensionId: record.extensionId,
@@ -1450,6 +1768,7 @@ const createContentBridge = ({
     dispose,
     report,
     tabTarget,
+    executeScript,
     sweep,
     /** Test seam: the app→host leg exactly as `Runtime.bindingCalled` hands it over. */
     onBindingCalled,
@@ -1516,6 +1835,8 @@ module.exports = {
   RESPONSE_WAIT_MS,
   loaderSource,
   injectionExpression,
+  mainWorldExpression,
+  scopeExpression,
   dispatchExpression,
   appFrameKey,
   appFrameURL,

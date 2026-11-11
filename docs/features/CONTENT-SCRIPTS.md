@@ -193,6 +193,65 @@ needs re-installing: same generation, same bytes → the pass reports the entry 
 the next pass injects for real — the re-injection `Runtime.executionContextCreated` exists for
 still happens.
 
+### `chrome.scripting.executeScript`
+
+The on-demand half of the same mechanism. Real extensions do not only declare
+`content_scripts`: MobX DevTools, for one, checks the page with
+`executeScript({func, world: "MAIN"})` before creating its panel, then injects its relay
+and backend with `executeScript({files})` when the panel opens. Without this API that
+extension never shows a panel at all.
+
+| Injection | What happens here |
+| --- | --- |
+| `func` + `args` | `(${func}).apply(null, args)` via `Runtime.evaluate` (`returnByValue`, `awaitPromise`), so the result is the return value, awaited, JSON only — Chrome's contract. `func` crosses as source text, so like Chrome's it cannot close over anything. Runs inside the extension's `window` scope (below). |
+| `files`, `world: "MAIN"` | the files' source, concatenated, run inside the extension's `window` scope (below), without `chrome`; the result is `null`. |
+| `files`, `world: "ISOLATED"` (Chrome's default) | evaluated through the content-script loader with a lexical `chrome` for the calling extension, after the app context takes its mesh seat, so `chrome.runtime.connect`/`sendMessage` from that file reach the extension. Not isolated (Hermes has one context), and the loader's wrapper swallows the completion value, so the result is `null`. |
+| `target.tabId` | must be the one synthetic tab (`devtools.inspectedWindow.tabId`); anything else is Chrome's `No tab with id`. `frameIds`/`allFrames`/`documentIds` are ignored: there are no frames. |
+
+**The extension's `window`.** Chrome's two worlds talk through `window.postMessage` and
+the `message` event. MobX DevTools' `contentScript.js` (ISOLATED, has `chrome.runtime`)
+pings, and `backend.js` (MAIN, sees the mobx hook) answers and then relays every message.
+Hermes has neither API, and putting them on the real global would leak one extension's
+traffic to others and to the app. It would also make the app's own libraries (React's
+scheduler, `setImmediate` shims) feature-detect a browser. Instead, every script and
+`func` an extension injects, including manifest content scripts, runs as
+`(function (window, self, globalThis) { … }).call(scope, scope, scope, scope)`.
+`scope` is a `Proxy` over the real global that belongs to that extension:
+
+- `postMessage`, `addEventListener`/`removeEventListener("message")` and `onmessage` go to
+  a bus private to the extension. It is shared by all of that extension's injections,
+  in both worlds and across evaluates (a non-enumerable
+  `Symbol.for("rozenite.content-bridge.scopes")` registry on the global).
+- Delivery is asynchronous (`setTimeout(0)`), as in the browser, and the event is
+  `{ type, data, origin: "", source: scope, ports: [] }`. `data` is passed by reference,
+  not structured-cloned.
+- Everything else, including writes, `defineProperty` and `in`, reaches the real global.
+
+**`sender.tab`.** What the app sends (`runtime.sendMessage`, `runtime.connect`) carries
+the synthetic tab as `sender.tab`, with `frameId: 0`, as Chrome does for a content script.
+Extensions key content-script ports on it: MobX DevTools' worker stores the port under
+`port.sender.tab.id` and looks it up with the panel's `inspectedWindow.tabId`. The tab's
+url and title are cached and refreshed in the background, never awaited per message.
+Reading them is a CDP round-trip that can take the bridge's whole 10 s request timeout,
+and while it was awaited, the port opened after the panel's one-shot ping.
+
+This is stricter than Chrome on purpose: there, the page and other extensions can see and
+spoof MAIN-world messages. Only `window.`-qualified access is scoped. A bare
+`postMessage(…)` resolves against the real global, which has none. A top-level `var` in a
+MAIN-world file is function-scoped now, so it no longer becomes a global.
+
+Gates, both host-side: the manifest's `scripting` permission (checked in main from the
+manifest on disk, and in the frame's shim for `lastError`), **and** the same
+`DEVTOOLS_CONTENT_SCRIPTS` opt-in as manifest content scripts, because it is the same
+third-party code inside the user's app. The extension addressed is always the calling
+frame's own; the payload carries code, never an id. `insertCSS`/`removeCSS` and
+`registerContentScripts` & co. reject with a reason.
+
+Code: [src/chrome-shim/scripting.js](../../src/chrome-shim/scripting.js) (frame half),
+`executeScript` in [src/main/content-bridge.js](../../src/main/content-bridge.js) (host
+half, with `scopeExpression`), `SCRIPTING_EXECUTE` in [src/main/ipc.js](../../src/main/ipc.js). Not yet covered
+by tests.
+
 ### What is *not* claimed
 
 `npm test` covers the registry, the gate, the loader's semantics (executed in a `node:vm`
