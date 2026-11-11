@@ -20,8 +20,15 @@ exposes them at `chrome-extension://<id>/`, and drives each declared execution c
   ([DEVTOOLS-PANELS.md](DEVTOOLS-PANELS.md)).
 - "Install" = drop the folder in `extensions/`; the frontend picks it up on (re)load.
   The `rozenite://` protocol blindly maps
-  `rozenite://<dir-name>/<path>` → `extensions/<dir-name>` (with a path-traversal
-  guard; see `src/main/extension-server.js`).
+  `rozenite://<dir-name>/<path>` → `extensions/<dir-name>` (with a containment guard; see
+  `src/main/extension-server.js`). That guard decides containment on **resolved** paths —
+  `fs.realpath` of the folder and of the target — so a symlink inside an extension folder
+  cannot hand its pages a file from elsewhere on the machine, while links that stay inside
+  the folder keep working. A **symlinked folder is never an extension root**: `readdir` +
+  `isDirectory()` does not report links, so the scan skips it, and the file server refuses
+  the same id rather than disagreeing with the scan. Both halves are asserted in
+  `tests/extension-symlink-containment.test.js` (and the escape/refusal is asserted again as
+  a real renderer's `fetch()` in `tests/background-worker-electron.test.js`).
 - Extension id == directory name (works, and `runtime.getURL` consumers like Altair's
   `tabs.js` depend on hostname == id — keep it).
 - **Per-extension CSP**: `src/shared/csp.js` turns `content_security_policy` into the
@@ -29,11 +36,14 @@ exposes them at `chrome-extension://<id>/`, and drives each declared execution c
   (`script-src 'self'; object-src 'self'`, plus `wasm-unsafe-eval` for service-worker
   extensions). A declaration that weakens `script-src`/`object-src` is not served — the
   strict default is, with one console line naming the extension and the reason.
-- **Declared permissions gate capability.** Two enforcement points, both asserted in
-  `tests/extension-frame-electron.test.js`: `src/main/delivery-scope.js` filters host→frame
-  deliveries using the manifest read **from disk** (a frame cannot talk itself into data),
-  and `src/chrome-shim/permission-gate.js` makes the promise/callback APIs answer with
-  `runtime.lastError` + a rejected promise. Only `permissions` counts, like Chrome's
+- **Declared permissions gate capability.** Two enforcement points: `src/main/delivery-scope.js`
+  filters host→frame deliveries using the manifest read **from disk** (a frame cannot talk
+  itself into data), and `src/chrome-shim/permission-gate.js` makes the promise/callback APIs
+  answer with `runtime.lastError` + a rejected promise. The shim half is asserted in
+  `tests/extension-frame-electron.test.js`; the main half in `tests/delivery-scope.test.js`,
+  which additionally proves a live push really arrives at an entitled frame — the filter once
+  shipped unimported, and the swallowed exception in the delivery fan-out made that invisible
+  (issue #20, `docs/SECURITY-PLATFORM.md` F6). Only `permissions` counts, like Chrome's
   `permissions.contains()` — `host_permissions` is network reach, `optional_permissions`
   are by definition not granted.
 - **Background contexts are discovered and run.** `scanBackgroundExtensions()`

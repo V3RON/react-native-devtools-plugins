@@ -20,8 +20,11 @@
 // half lives in src/chrome-shim/permission-gate.js, which refuses to register a
 // denied extension's listeners at all. Together they mean a frame without
 // `webRequest` cannot receive an onBeforeRequest/onSendHeaders/onResponseStarted
-// detail object by any route — asserted in tests/delivery-scope.test.js and
-// end-to-end in tests/extension-frame-electron.test.js.
+// detail object by any route — the matrix per grant set x payload kind is asserted
+// in tests/delivery-scope.test.js, whose live-push suite proves the filter runs on
+// real pushes (issue #20: this function was once called without being imported, and
+// network-service's broadcast catch swallowed the ReferenceError on every delivery),
+// and the shim half is end-to-end in tests/extension-frame-electron.test.js.
 //
 // Pure: `grants` is the host's own per-frame verdict from src/main/ipc.js, and
 // nothing here knows about Electron.

@@ -3,7 +3,8 @@
 //
 // Everything the model cannot know is injected: the inspected target's real
 // url/title, the capability to open something, the capability to close it. No test
-// here opens a window, launches a browser, or touches the filesystem.
+// here opens a window, launches a browser, or writes to the filesystem; the
+// `readSource` test below reads two of this repo's own source files, read-only.
 // Run: npm test
 const test = require("node:test");
 const assert = require("node:assert");
@@ -14,6 +15,9 @@ const { createChromeNamespace } = require("../src/chrome-shim");
 const { createMemoryBackend, createExtensionStorage } = require("../src/chrome-shim/storage");
 const { createGrantGate } = require("../src/shared/permissions");
 const { createTabHost } = require("../src/main/tab-host");
+const { createExternalOpener } = require("../src/main/external-open");
+const fs = require("node:fs");
+const path = require("node:path");
 const { tabIdFor } = require("../src/chrome-shim/devtools");
 
 const ATTACHED = { attached: true, url: "ws://10.0.0.5:8081/debugger-proxy?role=debugger", title: "RnApp" };
@@ -493,7 +497,24 @@ test("open: the default policy opens nothing and says so; external and window ar
     via: "external",
     handle: null,
   });
-  assert.deepEqual(launched, ["https://example.com"]);
+  // The opener is handed what the filter CHECKED (`openableUrl`'s normalized href), not the
+  // caller's string — the same rule the window branch follows at the bottom of this test. It
+  // moved here because the host used to pass the raw string through and leave the check to
+  // the injected opener, which is a filter only for as long as the injected opener is the
+  // one from src/main/external-open.js. Both assertions below this one therefore fail against
+  // the code as it stood before this commit, unlike the pins in the tests further down.
+  assert.deepEqual(launched, ["https://example.com/"]);
+  launched.length = 0;
+  await external.open({ url: "  https://example.com/x?y=1  " });
+  assert.deepEqual(launched, ["https://example.com/x?y=1"], "surrounding whitespace never reaches the OS launcher");
+  launched.length = 0;
+  // A raw `shell.openExternal` — the injection this branch now guards against — cannot get an
+  // unfiltered string: the host filters before delegating.
+  await assert.rejects(
+    () => external.open({ url: "file:///etc/passwd" }),
+    /^Error: refused to open a URL that is not http\(s\): file:\/\/\/etc\/passwd$/
+  );
+  assert.deepEqual(launched, [], "and the injected launcher is not called for a refusal");
 
   const opened = [];
   const inWindow = createTabHost({
@@ -508,7 +529,14 @@ test("open: the default policy opens nothing and says so; external and window ar
     via: "window",
     handle: 5,
   });
-  assert.deepEqual(opened, ["https://example.com"]);
+  // The window is handed what the filter CHECKED (`openableUrl`'s normalized form), not
+  // the caller's string — the same thing the external branch does with `allowed`, and the
+  // reason it is done that way is that checking one string and loading another is the bug
+  // this whole branch exists to close.
+  assert.deepEqual(opened, ["https://example.com/"]);
+  opened.length = 0;
+  await inWindow.open({ url: "  https://example.com/x  " });
+  assert.deepEqual(opened, ["https://example.com/x"], "surrounding whitespace never reaches loadURL");
 
   // A policy whose capability is missing opens nothing rather than throwing.
   assert.deepStrictEqual(await createTabHost({ policy: "window" }).open({ url: "x" }), {
@@ -519,6 +547,294 @@ test("open: the default policy opens nothing and says so; external and window ar
     via: null,
     handle: null,
   });
+});
+
+// F6 (docs/SECURITY-PLATFORM.md): the `window` branch used to `loadURL` whatever string
+// arrived, while its sibling `external` branch filtered through `openableUrl`. One policy
+// with a filter and one without is how `chrome.tabs.create` became a route to `file://`.
+// These assert both halves of the agreement: the same URL is refused by both policies, and
+// the refusal reaches the shim in the same shape either way.
+//
+// Which of these fails against the pre-fix code matters for review: THIS matrix is the one
+// that could not have passed before 9b40094 — every `file:` / `smb:` / `chrome:` entry used to
+// reach `openWindow` under the `window` policy. The three environment schemes appended below
+// were already refused by both branches at 9b40094 (measured), so they are contract pins that
+// stay green either way; they are here because `about:`, `blob:` and `ws:` are the schemes an
+// extension is most likely to `create` by accident, and a filter that silently stopped covering
+// them should fail loud. The normalization cases in the tests after this one are labelled
+// individually: an uppercase scheme was refused pre-fix and passes now (a pin on the new
+// verdict), while an embedded port and userinfo both USED TO LOAD and are regression guards.
+const REFUSALS = [
+  "file:///Users/dev/Downloads/x.html",
+  "file:///etc/passwd",
+  "chrome-extension://abcdefghijklmnop/page.html",
+  "chrome://settings",
+  "smb://host/share",
+  "javascript:alert(1)",
+  "data:text/html,<script>fetch('file:///Users/dev/.ssh/id_ed25519')</script>",
+  "ms-msdt:/id",
+  "http://trusted.example@evil.example/",
+  "not a url",
+  // Three more the shell can host or reach, refused today and pinned so: `about:blank` is a
+  // page no extension needs to `create` and one a window must not be talked into (it is the
+  // seed for a later script navigation); `blob:` inherits its scheme text from whatever made
+  // it, so it is a string a scheme allowlist cannot reason about; `ws:` is not a document at
+  // all, and loading one is exactly the "we opened a window and it failed" a filter prevents.
+  "about:blank",
+  "blob:https://x/y",
+  "ws://x/y",
+];
+
+test("the window policy refuses every scheme the external policy refuses, before opening anything", async () => {
+  // One shared verdict, composed the way attachTabHost composes it (src/main/tab-host.js
+  // filters in BOTH branches and each refusal travels as a throw): a URL cannot be openable to
+  // one policy and refused to the other.
+  const opened = [];
+  const launched = [];
+  const windowHost = createTabHost({
+    policy: "window",
+    openWindow: (url) => {
+      opened.push(url);
+      return 1;
+    },
+  });
+  const externalHost = createTabHost({
+    policy: "external",
+    openExternal: async (url) => {
+      const reply = await createExternalOpener({ openExternal: (u) => launched.push(u) }).open(url);
+      if (!reply.ok) {
+        throw new Error(reply.error);
+      }
+    },
+  });
+  const threw = async (host, url) => {
+    try {
+      await host.open({ url });
+      return null;
+    } catch (error) {
+      return error.message;
+    }
+  };
+  for (const url of REFUSALS) {
+    const [viaWindow, viaExternal] = [await threw(windowHost, url), await threw(externalHost, url)];
+    assert.ok(viaExternal, `the external policy must refuse ${url}`);
+    assert.strictEqual(viaWindow, viaExternal, `both policies refuse ${url} with one message`);
+    assert.match(viaWindow, /^refused to open a URL that is not http\(s\): /);
+  }
+  assert.deepEqual(opened, [], "no window was created for any of them");
+  assert.deepEqual(launched, [], "and no browser was launched");
+
+  // The same shipped-style composition still OPENS an http(s) URL, and the launcher is handed
+  // the normalized href exactly once. The host checks, then `external-open`'s opener checks the
+  // string the host just handed it: `openableUrl` judges the href it returns, so the host-side
+  // filter the `external` branch added is not a second verdict that could disagree with the
+  // opener's — whatever passes the first pass passes the second with the same string.
+  assert.deepStrictEqual(await externalHost.open({ url: " https://example.com/a?b=1 " }), {
+    via: "external",
+    handle: null,
+  });
+  assert.deepEqual(launched, ["https://example.com/a?b=1"]);
+});
+
+// The one place the two passes of the `external` branch could disagree: the 8192-char cap.
+// Percent-encoding EXPANDS (`é` becomes `%C3%A9`), so a URL whose raw form sits under the cap
+// can normalize past it, and a cap on the raw input checked it against the wrong string: the
+// window branch (one pass) accepted the 49040-char href while the shipped external branch
+// (the host's check, then the opener's re-check of that href) refused it — one URL, two
+// verdicts. The cap now judges `parsed.href`, so both passes see the same over-long string
+// and both refuse, which is what the cap is for anyway: bounding what the OS launcher can
+// be handed, not what the caller typed.
+test("a URL under the cap in raw form but over it as an href is refused by both policies", async () => {
+  // 4085 emoji: 20 + 8170 = 8190 chars raw (under 8192), 4085 × 12-char escapes in the href.
+  const overCapAsHref = `https://example.com/${"\u{1F600}".repeat(4085)}`;
+  assert.ok(overCapAsHref.length < 8192, "the raw form is under the cap");
+  assert.ok(new URL(overCapAsHref).href.length > 8192, "the href is over it");
+  const opened = [];
+  const launched = [];
+  const windowHost = createTabHost({
+    policy: "window",
+    openWindow: (url) => {
+      opened.push(url);
+      return 1;
+    },
+  });
+  const externalHost = createTabHost({
+    policy: "external",
+    openExternal: async (url) => {
+      const reply = await createExternalOpener({ openExternal: (u) => launched.push(u) }).open(url);
+      if (!reply.ok) {
+        throw new Error(reply.error);
+      }
+    },
+  });
+  // Pre-fix this is where they split: the window branch ACCEPTED (one pass, raw under the
+  // cap) while the external branch's re-check refused. Now one message from both.
+  const threw = async (host) => {
+    try {
+      await host.open({ url: overCapAsHref });
+      return null;
+    } catch (error) {
+      return error.message;
+    }
+  };
+  const [viaWindow, viaExternal] = [await threw(windowHost), await threw(externalHost)];
+  assert.ok(viaExternal, "the external policy must refuse it");
+  assert.strictEqual(viaWindow, viaExternal, "both policies refuse the over-cap href alike");
+  assert.match(viaWindow, /^refused to open a URL that is not http\(s\): /);
+  assert.deepEqual(opened, [], "no window for an href the cap exists to bound");
+  assert.deepEqual(launched, [], "and no browser either");
+
+  // The cap still bounds only the CAP, not http(s) in general: a normal long URL under it
+  // opens through both policies, href and all.
+  const underCap = `https://example.com/search?q=${"a".repeat(8000)}`;
+  assert.deepStrictEqual(await externalHost.open({ url: underCap }), {
+    via: "external",
+    handle: null,
+  });
+  assert.equal(launched.length, 1, "the under-cap href reached the launcher");
+  assert.equal(launched[0], underCap, "as the normalized href, handed once");
+  assert.deepStrictEqual(await windowHost.open({ url: underCap }), {
+    via: "window",
+    handle: 1,
+  });
+  assert.deepEqual(opened, [underCap]);
+});
+
+test("the window policy still opens http(s) and the extension's own rozenite:// pages", async () => {
+  const opened = [];
+  const host = createTabHost({
+    policy: "window",
+    openWindow: (url) => {
+      opened.push(url);
+      return opened.length;
+    },
+  });
+  for (const url of [
+    "https://example.com/page",
+    "http://localhost:8081/index",
+    // Altair's `create({url: "altair-app/index.html"})` arrives like this: the shim
+    // resolves a bare path against the extension origin (src/chrome-shim/tabs.js).
+    "rozenite://altair.local/altair-app/index.html",
+    "rozenite://altair.local/index.html?x=1#frag",
+  ]) {
+    assert.deepStrictEqual(await host.open({ url }), { via: "window", handle: opened.length });
+    assert.equal(opened[opened.length - 1], url, `${url} loads as asked`);
+  }
+
+  // A rozenite:// URL naming no extension is refused rather than handed to a window: the
+  // file server has nothing to serve for it, and "we tried" is not what a filter is for.
+  await assert.rejects(() => host.open({ url: "rozenite://" }), /refused to open a URL/);
+  // A port is not part of `id == hostname` (src/shared/protocol.js), so this names no folder
+  // this protocol can serve. Pre-fix it LOADED: the old prefix rule took `a.b:8080` as the id,
+  // and the file server's own id rule is what turned the window into a 404 — the failure mode a
+  // filter is supposed to prevent, so this is a regression guard, not a pin.
+  await assert.rejects(() => host.open({ url: "rozenite://a.b:8080/x" }), /refused to open a URL/);
+  // Credentials are the shape that would let a userinfo host stand in for the checked one. This
+  // is the case the finding is about: pre-fix the raw string reached `loadURL`, so the window
+  // carried userinfo the filter had never looked at. Refused now, which is also the honest
+  // verdict — `new URL` puts `evil` in `hostname` and `a.b` in `username`, so the two readings
+  // name different extensions and there is no string worth loading. Same verdict the http half
+  // gives for `http://trusted.example@evil.example/`.
+  await assert.rejects(() => host.open({ url: "rozenite://a.b@evil/x" }), /refused to open a URL/);
+  assert.equal(opened.length, 4, "the refusals above opened nothing");
+
+  // An uppercase scheme follows the lowercased-scheme rule rather than being refused: that is
+  // what `new URL` and Chromium do to a URL's scheme, so judging `ROZENITE:` a different scheme
+  // would mean the filter's verdict was about a string the loader never sees. The window is
+  // handed the lowercased `href` — the checked string IS the loaded string, which is the whole
+  // point of normalizing this half through `new URL`.
+  assert.deepStrictEqual(await host.open({ url: "ROZENITE://a.b/index.html" }), {
+    via: "window",
+    handle: opened.length,
+  });
+  assert.equal(
+    opened[opened.length - 1],
+    "rozenite://a.b/index.html",
+    "the window loads the normalized form the filter judged, not the caller's capitals"
+  );
+});
+
+test("the extension scheme stays outside the external policy: shell.openExternal never sees it", async () => {
+  // `openableWindowUrl`'s extra scheme is scoped to the window branch. Composed the way
+  // attachTabHost composes it (src/main/tab-host.js), `external` still refuses rozenite://:
+  // the OS launcher has no handler for this shell's protocol, so handing it over would open
+  // "nothing" or whatever the OS guesses, and claim the tab opened externally.
+  const launched = [];
+  const external = createTabHost({
+    policy: "external",
+    openExternal: async (url) => {
+      const reply = await createExternalOpener({ openExternal: (u) => launched.push(u) }).open(url);
+      if (!reply.ok) {
+        throw new Error(reply.error);
+      }
+    },
+  });
+  await assert.rejects(
+    () => external.open({ url: "rozenite://altair.local/index.html" }),
+    /refused to open a URL that is not http\(s\)/
+  );
+  assert.deepEqual(launched, []);
+
+  // And the shared allowlist itself never learned the scheme (tests/host-primitives.test.js
+  // pins the same refusal from the other side).
+  const { ALLOWED_PROTOCOLS, openableUrl } = require("../src/main/external-open");
+  assert.deepEqual(ALLOWED_PROTOCOLS, ["http:", "https:"]);
+  assert.strictEqual(openableUrl("rozenite://altair.local/index.html"), null);
+});
+
+// Two of the three hops a refusal travels are an IPC boundary and a frame preload, which no
+// unit test can cross (registerIpcHandlers needs a real ipcMain; openTabIn runs in a frame's
+// renderer), so they are pinned from source — the idiom tests/security.test.js and
+// tests/tier2-honesty.test.js use, over CODE rather than comments. The third hop, what the
+// real shim does with a host that opened nothing, is asserted for real below.
+const readSource = (...parts) =>
+  fs.readFileSync(path.join(__dirname, "..", ...parts), "utf8");
+const codeOf = (source) =>
+  source
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .split("\n")
+    .filter((line) => !/^\s*(\/\/|\*|\*\/)/.test(line))
+    .join("\n");
+/** The body of one `ipcMain.handle(CHANNEL, …)` registration, comment-free. */
+const channelHandler = (channel) => {
+  const source = codeOf(readSource("src", "main", "ipc.js"));
+  const start = source.indexOf(`ipcMain.handle(${channel},`);
+  assert.ok(start >= 0, `src/main/ipc.js registers ${channel}`);
+  return source.slice(start, source.indexOf("});", start));
+};
+
+test("the throw becomes the frame's {ok: false, error}, and the shim reports nothing opened", async () => {
+  // hop 1 — main turns a refusal into an answer with a reason, not a channel failure.
+  // Matched on the channel's IDENTIFIER, which is what ipcMain.handle is called with.
+  const handler = channelHandler("TABS_OPEN");
+  assert.match(
+    handler,
+    /\.then\(\(outcome\) => \(\{ ok: true, \.\.\.outcome \}\)\)/,
+    "a successful open is ok: true with the policy's answer"
+  );
+  assert.match(
+    handler,
+    /\.catch\(\(error\) => \(\{ ok: false, error: error && error\.message \}\)\)/,
+    "a thrown refusal is ok: false carrying the reason — how a window refusal reaches the frame"
+  );
+
+  // hop 2 — the frame keeps Chrome's shape (create never fails here) and says why.
+  const preload = codeOf(readSource("src", "preload", "extension-frame.js"));
+  assert.match(
+    preload,
+    /tabs\.create opened nothing: \$\{reply\.error\}/,
+    "the reason is logged rather than dropped, for both policies alike"
+  );
+  assert.match(
+    preload,
+    /return \{ via: null \};/,
+    "a refusal resolves {via: null}, so the descriptor says nothing opened"
+  );
+
+  // hop 3 — for real: a host that opened nothing leaves the descriptor honest.
+  const { tabs } = make({ openTab: async () => ({ via: null, handle: null }) });
+  const tab = await tabs.create({ url: "file:///Users/dev/Downloads/x.html" });
+  assert.strictEqual(tab.openedVia, null, "openedVia is the whole truth");
 });
 
 test("close only closes windows this host opened", async () => {

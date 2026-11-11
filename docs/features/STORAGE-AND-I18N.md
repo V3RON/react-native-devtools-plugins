@@ -176,8 +176,14 @@ lands after the first call. Options weighed:
 
 The chosen path adds no IPC channel and no new trust: the extension protocol is already the
 one sanctioned way for a frame to read its own files. The id is the request's own hostname,
-the bundle is built in main (`src/main/i18n-host.js`) under the existing path-containment guard
-with the host's UI locale, and the reserved inner path is unreachable as a file (asserted).
+the bundle is built in main (`src/main/i18n-host.js`) with the host's UI locale, and the
+reserved inner path is unreachable as a file (asserted). Note that the bundle's own reads are
+contained a second time, inside `i18n-host.js` rather than by the protocol server's guard: the
+server decides containment for the path a *request* names, while this file derives its own
+names (`_locales/<locale>/messages.json`) from the root it is handed, and a derived path never
+reaches that guard. One `victim/_locales -> outside` link therefore used to publish an outside
+catalog through this very route while the equivalent file request was refused
+(`docs/SECURITY-PLATFORM.md` §3.2; `tests/extension-symlink-containment.test.js` suite 6).
 The preload reads it lazily on the first i18n call, once, and the shim caches it; an extension
 that never touches i18n pays nothing. Measured live: the first statement of a devtools page
 and of a background worker both get translated strings (`tests/i18n-electron.test.js`,

@@ -43,6 +43,8 @@ into the frontend's main world, never `require`d at runtime.
   `DEVTOOLS_EXTENSIONS_DIR`, `DEVTOOLS_CDP_BRIDGE` (`off` = external relay),
   `DEVTOOLS_SHOW_PANEL` (`<extensionId>[/<pagePath>]`: open on that extension's panel),
   `DEVTOOLS_METRO_HOST` / `DEVTOOLS_METRO_PORT`, `DEVTOOLS_CDP_HOST` / `DEVTOOLS_CDP_PORT`,
+  `DEVTOOLS_CDP_ALLOWED_ORIGINS` (extra browser origins for the CDP socket; default: the
+  frontend's own origin only),
   `DEVTOOLS_APP_FILTER` / `DEVTOOLS_DEVICE_FILTER`, `DEVTOOLS_CDP_REQUEST_TIMEOUT_MS`,
   `DEVTOOLS_UI_LOCALE` (UI locale `chrome.i18n` reports; default: Electron's).
   The frontend is a patched RN
@@ -59,6 +61,15 @@ into the frontend's main world, never `require`d at runtime.
   verbatim. Injected transports/timers/logging (no Electron import) keep it unit-testable
   against a fake upstream (`tests/cdp-bridge.test.js`). `DEVTOOLS_CDP_BRIDGE=off` leaves
   the socket to an external relay.
+  **Who may dial it:** bound to `127.0.0.1` and `::1` (both, because the frontend dials
+  `?ws=localhost:…` and `localhost` may resolve to either family) and gated at the
+  WebSocket upgrade: an `Origin` must be the frontend's own or one named by
+  `DEVTOOLS_CDP_ALLOWED_ORIGINS`; a missing `Origin` is accepted from a loopback peer
+  only (a browser cannot omit that header, so its absence means a local tool). Exactly
+  one client owns the session — a second is refused with `close 4001` rather than
+  evicting the first, and a newcomer's frames are held until it wins or is refused.
+  A reload reattaches: the close frees the seat, and an owner that stops answering pings
+  loses it after ~1 s. `docs/SECURITY-PLATFORM.md` F3 is the reasoning.
 - `inspected-window.js` — `chrome.devtools.inspectedWindow.eval` / `.reload` as
   `Runtime.evaluate` / `Page.reload` on that session, with the pure CDP → Chrome
   `[value, exceptionInfo]` mapping (`mapEvaluation`).
@@ -73,7 +84,11 @@ into the frontend's main world, never `require`d at runtime.
 - `extension-server.js` — registers the privileged custom scheme **`rozenite://`**
   mapping `rozenite://<extension-id>/<path>` → `extensions/<extension-id>/<path>`,
   guarded against path traversal. **Installing an extension = dropping its unpacked
-  folder into `extensions/`.** Every response carries that extension's CSP
+  folder into `extensions/`.** Containment is decided on `fs.realpath` of both the folder
+  and the target, so a symlink planted inside an extension cannot point outside it, and a
+  symlinked folder is never an extension root — the same verdict the scan reaches, because
+  `readdir` + `isDirectory()` never reports a link
+  (`tests/extension-symlink-containment.test.js`). Every response carries that extension's CSP
   (`src/shared/csp.js`): its own `content_security_policy`, or Chrome's MV3 default.
   The handler is **`protocol.handle`**, not the deprecated `registerFileProtocol`, because
   one response kind has no bytes on disk: the reserved path
@@ -138,7 +153,12 @@ listed honestly in [LIMITATIONS.md](LIMITATIONS.md): sandbox off, one shared
 The end-to-end assertions for all of this live in `tests/extension-frame-electron.test.js`
 + `tests/extension-frame-harness.js`, which boots a production-shaped shell headlessly
 (`show: false`, `DEVTOOLS_CDP_BRIDGE=off`, no Metro) — an extension frame needs neither a
-device nor the frontend to be observable.
+device nor the frontend to be observable. One run goes further: `--fake-rn-app=on` serves a
+fake inspected app inside the harness (on a port the OS picks, reported back on the NDJSON
+`harness` line) and starts the real CDP bridge against it, which is how
+`tests/delivery-scope.test.js` proves a live network push actually reaches a subscribed frame
+and records the pushes main addressed to each frame, so a filtered-out one is visible too
+(see F6 in [SECURITY-PLATFORM.md](SECURITY-PLATFORM.md) for why those assertions exist).
 
 ### Main-frame preload (`src/preload/frontend-host.js`)
 

@@ -118,7 +118,20 @@ const runHarness = ({
 
   const child = spawn(binary, args, {
     stdio: ["ignore", "pipe", "pipe"],
-    env: { ...process.env },
+    env: {
+      ...process.env,
+      // ELECTRON_RUN_AS_NODE has to go, even though it may be in the parent's env: it
+      // turns the Electron binary into plain Node, and a plain Node cannot run this
+      // app's main — every harness dies in electron-store's ESM preparse at
+      // src/main/preferences.js:6, long before the protocol is registered. Under
+      // `npm start` from a shell the variable is absent; a test run that merely
+      // INHERITS it (a developer's own shell, or a CI job that exports it for other
+      // Node suites) must not silently become a dozen failing suites, so the runner
+      // strips it rather than documenting the workaround. Node omits an undefined
+      // value from the child env entirely, so the variable is GONE, which is the state
+      // `npm start` from a clean shell produces.
+      ELECTRON_RUN_AS_NODE: undefined,
+    },
   });
   let output = "";
   child.stdout.on("data", (chunk) => (output += chunk));

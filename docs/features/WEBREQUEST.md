@@ -37,8 +37,8 @@ bodies are gone.
 | `onResponseStarted` | yes | `Network.responseReceived` (non-3xx) |
 | `onCompleted` | yes | `Network.loadingFinished` |
 | `onErrorOccurred` | yes | `Network.loadingFailed` |
-| `onHeadersReceived` | **no** | no CDP counterpart on this backend |
-| `onAuthRequired` | **no** | no CDP counterpart on this backend |
+| `onHeadersReceived` | **no** 🚷 | no CDP counterpart on this backend |
+| `onAuthRequired` | **no** 🚷 | no CDP counterpart on this backend |
 
 The two silent ones are still registrable — Chrome's shape, `hasListener`/`removeListener`
 included — so feature detection and cleanup code keeps working; they simply never fire
@@ -79,8 +79,8 @@ real Chrome value instead of an invented one.
 
 ### Blocking: not feasible, and it says so
 
-RN implements no CDP `Fetch` domain, so nothing here can cancel, redirect, or rewrite a
-request. `addListener(cb, filters, ["blocking"])` registers normally — extensions do not
+🚷 **No anchor, not an open item.** RN implements no CDP `Fetch` domain, so nothing here can
+cancel, redirect, or rewrite a request. `addListener(cb, filters, ["blocking"])` registers normally — extensions do not
 crash — and the frame logs one sentence, once: *"this host is observe-only … a listener can
 never block, cancel or rewrite a request"*. Listeners must not expect a blocking return
 value. The read-only hints Chrome documents (`requestBody`, `responseHeaders`) are answered
@@ -103,7 +103,12 @@ over time.
 Covered by [tests/web-request.test.js](../../tests/web-request.test.js),
 [network-bridge.test.js](../../tests/network-bridge.test.js), and the real-socket
 [end-to-end test](../../tests/network-end-to-end.test.js); the claims about the backend are
-read out of this repo's vendored RN. Not run against a device from this checkout — hence 🟨,
+read out of this repo's vendored RN. The delivery side is covered separately: the grant matrix
+per payload kind and a live push arriving at a real subscribed frame are asserted in
+[tests/delivery-scope.test.js](../../tests/delivery-scope.test.js), in the production shell
+with the real CDP bridge fed by a fake inspected app — that path shipped silently dead once
+(issue #20), so "an event arrives" is now an assertion and not an assumption. Still not run
+against a device from this checkout — hence 🟨,
 not ✅. The device run listed in DEVTOOLS-NETWORK.md covers this namespace too: the sample
 panel logs every `onBeforeRequest` it sees with URL, method and type.
 

@@ -16,7 +16,10 @@ extension API reference (developer.chrome.com, ~90 namespaces).
 
 Legend used in both docs: ✅ implemented in `src/preload`/`src/chrome-shim` ·
 🟡 stubbed but fake/inert · 🔧 implementable in Electron today · 🔌 needs RN/CDP backend ·
-⛔ architectural gap ([features/DISPATCH-CHANNEL.md](../features/DISPATCH-CHANNEL.md)).
+⛔ architectural gap ([features/DISPATCH-CHANNEL.md](../features/DISPATCH-CHANNEL.md)) ·
+🚷 **no anchor** — the RN DevTools panel or browser surface this method extends does not exist
+([the anchor list](../OVERVIEW.md#what-rn-devtools-actually-offers-the-anchor-list)); no
+channel work or backend work makes it meaningful, so it is closed, not deferred.
 Host-side CDP access itself is no longer a gap: `src/main/cdp-bridge.js` owns the
 session, so 🔌 items are now fidelity questions rather than transport questions.
 

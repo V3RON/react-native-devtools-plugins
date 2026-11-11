@@ -2,7 +2,7 @@
   "name": "devtools-electron",
   "main": "src/main/index.js",
   "devDependencies": {
-    "electron": "^38.0.0"
+    "electron": "^38.8.6"
   },
   "scripts": {
     "start": "electron .",

@@ -2,7 +2,7 @@
 
 | | |
 | --- | --- |
-| **Status** | 🟨 partial — `eval` and `reload` are real (CDP `Runtime.evaluate` / `Page.reload` over the shell's own bridge); `getResources` / `getSelectedNode` are inert |
+| **Status** | 🟨 partial — `eval` and `reload` are real (CDP `Runtime.evaluate` / `Page.reload` over the shell's own bridge); `getSelectedNode` is 🚷 (no Elements panel, no DOM), `getResources` / `getResourceContent` are implementable and not built |
 | **Tier** | 1 |
 | **Blocked by** | — (needs the CDP bridge, now in the shell: [src/main/cdp-bridge.js](../../src/main/cdp-bridge.js)) |
 
@@ -37,7 +37,11 @@ host territory; the frontend allocates 1,2,3,…). Replies with a host id are co
 in main and never forwarded to the frontend.
 
 Everything else is deliberately inert: `tabId` is a stable synthetic int per
-extension; `getResources` answers `[]`; `getSelectedNode` answers `null`.
+extension; `getResources` answers `[]`; `getSelectedNode` answers `null` — and it always
+will: that API returns the node selected in the **Elements panel**, which RN DevTools does
+not have ([the anchor list](../OVERVIEW.md#what-rn-devtools-actually-offers-the-anchor-list)).
+That makes it 🚷 rather than an open item, unlike `getResources` / `getResourceContent`, which
+have a real CDP source (`Debugger.getScriptParsed`) and a real RN DevTools panel (Sources).
 
 `reload()` is real: it maps onto CDP `Page.reload`, which RN's backend implements
 (`HostAgent.cpp` -> `targetController_.getDelegate().onReload({ignoreCache,
@@ -57,7 +61,8 @@ being swallowed.
 | `eval` + `frameURL` / `scriptExecutionContext` / `useContentScriptContext` | accepted, **ignored** | documented degradation: RN has no frames and no isolated content-script worlds — the app's global context is the only context, and RN aliases `global.window = global` (`Libraries/Core/setUpGlobals.js`), which is what state-debugger extensions need. Chrome *fails* such a call when there is no content-script world (`isError`, `code: E_NOTFOUND`); erroring here would only make the API unusable, since RN genuinely has no other world to pick |
 | `eval` timeout | **our own option** (Chrome has none) | bounds the wait; forwarded to `Runtime.evaluate` best-effort, reply deadline sits slack behind it |
 | `reload` | `Page.reload` (`ignoreCache`, `injectedScript` → `scriptToEvaluateOnLoad`) | High for the JS bundle; RN reloads the bundle, not a DOM page. No callback in Chrome's API, so failures surface in the frame console |
-| `getResources` / `getResourceContent` | `Debugger.getScriptParsed` + script source | not implemented (Tier 2) |
+| `getResources` / `getResourceContent` | `Debugger.getScriptParsed` + script source | not implemented (Tier 2, **implementable** — RN DevTools has a Sources panel) |
+| `getSelectedNode` | 🚷 no anchor — the selected **DOM** node from the Elements panel; RN has no Elements panel and no `DOM` domain | none; answers `null` forever |
 
 ### Result mapping (implemented in `src/main/inspected-window.js`)
 
@@ -83,7 +88,9 @@ Nothing is fabricated: when the backend cannot answer, `eval` says so in
    [DISPATCH-CHANNEL.md](DISPATCH-CHANNEL.md).
 2. ~~Map exceptionInfo into Chrome's `{value, exceptionInfo}` callback shape~~ ✅.
 3. ~~`tabId` constant~~ ✅. ~~`reload`~~ ✅ (`Page.reload`). Resources
-   (`getResources` / `getResourceContent`) and `getSelectedNode`: still open (Tier 2).
+   (`getResources` / `getResourceContent`): still open (Tier 2, implementable over
+   `Debugger.getScriptParsed`). ~~`getSelectedNode`~~ 🚷 closed as "no anchor" — RN DevTools
+   has no Elements panel.
 
 ## Definition of done
 

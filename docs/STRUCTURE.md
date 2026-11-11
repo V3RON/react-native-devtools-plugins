@@ -12,6 +12,8 @@ docs/
 │                                          • how an MV3 DevTools extension works
 │                                          • what was achieved in this prototype
 │                                          • "inspected window"/"network" → RN mapping table
+│                                          • ★ THE ANCHOR LIST: which RN DevTools panels exist,
+│                                            and so which Chrome APIs can never be real (🚷)
 │                                          • scope rules (stubbing rule of thumb)
 ├── ARCHITECTURE.md                        How the current prototype works:
 │                                          • src/ layout and layering rule
@@ -21,7 +23,9 @@ docs/
 │                                          • data-flow diagram
 ├── LIMITATIONS.md                         What the prototype is NOT (extension model, API
 │                                          fidelity, frontend coupling, security)
-├── ROADMAP.md                             Definition of done (5 levels), 4 implementation
+├── SECURITY-PLATFORM.md                   Threat model, FS/code-exec audit, target security architecture
+├── ROADMAP.md                             Definition of done (5 levels), the PRUNED list of
+│                                          what we can actually implement, 5 implementation
 │                                          buckets, recommended build order, guardrails
 ├── features/
 │   ├── README.md                          ★ MASTER STATUS MATRIX — start here for
@@ -34,7 +38,7 @@ docs/
 │   │                                        contract rules (lastError, promise/callback, Events)
 │   ├── EXTENSION-MANAGEMENT.md            🟨 manifest parsing, ids, background scan, install
 │   │                                        version record + manifest-key support matrix
-│   ├── DEVTOOLS-PANELS.md                 🟨 panels.create/theme/events, elements sidebars
+│   ├── DEVTOOLS-PANELS.md                 🟨 panels.create/theme/events; elements 🚷 no anchor
 │   ├── DEVTOOLS-NETWORK.md                🟨 devtools.network on CDP Network.* (HAR, bodies)
 │   ├── INSPECTED-WINDOW.md                🟨 eval → Runtime.evaluate (state debuggers)
 │   ├── STORAGE-AND-I18N.md                🟨 storage areas status + _locales support
@@ -68,6 +72,7 @@ docs/
 | How do I work on the roadmap? | `ROADMAP.md` ("Recommended order") |
 | Which Chrome method do we stub / miss? | `api/INSPECTOR-FRONTEND-HOST.md` (frontend host), `api/CHROME-EXTENSION-APIS.md` (extension API) |
 | What is intentionally NOT supported? | `features/TIER3-OMITTED.md` |
+| Which APIs can *never* work because RN DevTools has no panel for them? (🚷) | `OVERVIEW.md` → "the anchor list", then `features/README.md` → "Closed as no anchor" |
 | Why does an extension crash / misbehave? | `LIMITATIONS.md`, then the feature doc's "Current state" |
 | How do content scripts get into the app? | `features/CONTENT-SCRIPTS.md` |
 
@@ -76,7 +81,8 @@ docs/
 - One functionality = one file; status/tier/blockers live in the header table at its top.
 - Status legend & tiers: `docs/README.md`. Marks used in `api/` tables:
   ✅ real · 🟡 stub/fake · 🔧 implementable in Electron today · 🔌 needs RN/CDP backend ·
-  ⛔ needs dispatch channel.
+  ⛔ needs dispatch channel · 🚷 no anchor (the RN DevTools panel this extends doesn't exist —
+  see the anchor list in `OVERVIEW.md`).
 - Every feature doc ends with a **Definition of done** — status may only flip to ✅ when
   that observable test passes.
 - Update the matrix in `features/README.md` whenever a feature doc's status changes;

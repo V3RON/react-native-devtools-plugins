@@ -18,9 +18,11 @@
   nothing has to wake it, so `onSuspend`/`onUpdateAvailable` never fire and a worker that
   would have been torn down in Chrome keeps running here. That is a superset for a devtools
   host and a divergence from Chrome's resource model at the same time.
-- Still missing from the extension model: a working `action`/popup — plus a toolbar, browser
-  menu, or shortcut routing, which is why `action.onClicked`, `commands.onCommand`, and
-  `contextMenus.onClicked` are registrable but have no producer. Content-script injection has
+- Still missing from the extension model: a working `action`/popup — 🚷 **decision recorded, not
+  planned**: this host has no toolbar, so `action.onClicked` has no producer by construction and
+  never will. `commands.onCommand` and `contextMenus.onClicked` are registrable; only the first
+  is fixable here (the Electron app menu can route a shortcut), while the second is 🚷 — the menu
+  it attaches to is the page's, and there is no page. Content-script injection has
   arrived since (issue #5, [features/CONTENT-SCRIPTS.md](features/CONTENT-SCRIPTS.md)), but only
   for an extension a developer names in `DEVTOOLS_CONTENT_SCRIPTS`, and only into the app's own
   JS context — Hermes has no isolated worlds, so a script there can read and overwrite app
@@ -34,7 +36,9 @@
   empty list. A `chrome.permissions` prompt still does not exist, so `permissions.request`
   grants nothing. **`chrome.windows` is not injected at all** — no window model exists to
   report — so a worker naming it at module scope is the one remaining case where Tier 2
-  breaks the "a missing namespace must not kill the worker" rule.
+  breaks the "a missing namespace must not kill the worker" rule. Real `chrome.windows`
+  behavior is 🚷 (no window model); the *inert shell* that satisfies the rule is a small
+  open item.
 - DevTools pages are only "loaded" as iframes; no real separation between devtools page
   and panel frames like Chrome has.
 
@@ -42,7 +46,8 @@
 
 - `chrome.webRequest` is **observe-only**: seven of Chrome's nine events come from the
   shell's own CDP `Network.*` model with real filters and `ResourceType`, but listeners can
-  never block/modify/cancel a request — RN implements no CDP `Fetch` domain. `addListener`
+  never block/modify/cancel a request — RN implements no CDP `Fetch` domain (🚷: the backend
+  has no such domain, so this is not something we can implement here). `addListener`
   with `["blocking"]` registers and logs one honest note. `onHeadersReceived` and
   `onAuthRequired` have no CDP counterpart and never fire
   ([features/WEBREQUEST.md](features/WEBREQUEST.md)).
@@ -99,7 +104,9 @@
   a side effect nobody asked for. Even under `external`, only `http:`/`https:` URLs reach
   `shell.openExternal` (`src/main/external-open.js`, shared with
   `InspectorFrontendHost.openInNewTab`): a `file:`/`smb:`/custom-scheme URL is refused, since
-  the OS would launch whatever application is registered for it.
+  the OS would launch whatever application is registered for it. `window` filters through the
+  same check before it creates a window, plus this shell's own `rozenite://<id>/` pages — so
+  `create` is not a route to the `file://` origin either.
 - **Test seams are environment variables, off by default, and ignored by a packaged build.** `DEVTOOLS_TEST_OPEN_LOG`
   (record instead of opening a browser) and `DEVTOOLS_TEST_SAVE_DIALOG` (auto-answer the save
   dialog) exist so a headless run can prove `openInNewTab` / `save` end to end
@@ -128,7 +135,9 @@
   debugger-session change rather than a page navigation and carries the target's title (or
   `""`), and HAR fields CDP never reported (`timings.blocked/dns/connect/ssl`,
   `headersSize`) stay HAR's own `-1` instead of a plausible number.
-  `inspectedWindow.getResources` / `getSelectedNode` answer with documented no-data.
+  `inspectedWindow.getResources` / `getSelectedNode` answer with documented no-data — of which
+  only `getResources` is open: `getSelectedNode` is 🚷 (no Elements panel, no DOM), see
+  [features/INSPECTED-WINDOW.md](features/INSPECTED-WINDOW.md).
 - `inspectedWindow.eval` only answers when the shell's CDP bridge actually has a session:
   no Metro, no debuggable app, or `DEVTOOLS_CDP_BRIDGE=off` without an external relay all
   surface as `exceptionInfo.isError` with the host's reason. Nothing is answered from
@@ -145,6 +154,20 @@
   multi-target/device multiplexing (`src/tools/fake-cdp.js` likewise proxies exactly one
   Chrome tab). Target *selection* is filterable (`DEVTOOLS_APP_FILTER` /
   `DEVTOOLS_DEVICE_FILTER`), multiplexing is not.
+  Note that `src/tools/fake-cdp.js` is a plain proxy: it does **not** inherit the F3 access
+  rules below (dev-only tool; a follow-up ticket will cover it).
+- The CDP socket has **one owner**, and a second client is *refused* rather than taking
+  over (`close 4001` + a warning in the shell's terminal). That is a divergence from
+  Chrome, where a second DevTools page evicts the first: here eviction was the attack
+  ([SECURITY-PLATFORM.md](SECURITY-PLATFORM.md) F3), so takeover is a visible refusal.
+  A frontend **reload** still reattaches — the old socket's close frees the seat, and an
+  owner that stops answering pings loses it after the bridge's liveness probe times out
+  (~1 s). There is no shared session and no way to ask politely for the seat.
+- That socket is bound to loopback only and accepts the frontend's own `Origin` (plus
+  `DEVTOOLS_CDP_ALLOWED_ORIGINS`) or no `Origin` at all from a local peer. Consequences:
+  a non-browser tool on this machine connects freely, a web page on any other origin
+  cannot, and serving the frontend from another host needs an explicit
+  `DEVTOOLS_CDP_ALLOWED_ORIGINS` (or `DEVTOOLS_CDP_HOST` to bind elsewhere at all).
 - Because the frontend URL carries `?ws=`, the frontend build talks to the socket itself
   and `InspectorFrontendHost.sendMessageToBackend` is never called — that Chrome escape
   hatch is structurally unavailable here, and the host reaches the backend on the socket
@@ -183,7 +206,8 @@
 - **The `rozenite://` scheme has no per-extension origin isolation, and that is measured, not
   assumed.** The traversal guard stops a path from escaping its own folder inside one request,
   asserted from inside a real extension frame (`../` → 404; a bootstrap `?script=../sibling/x`
-  → 404). It was never a same-origin check: a page in extension A can
+  → 404; a symlink out of the folder → 404, resolved on `fs.realpath` —
+  `tests/extension-symlink-containment.test.js`). It was never a same-origin check: a page in extension A can
   `fetch("rozenite://B/file.js")` and read the body. Verified under BOTH the old
   `registerFileProtocol` handler and the current `protocol.handle` one — identical 200 with the
   real contents — so the migration did not open this. Closing it needs per-origin isolation for
@@ -196,7 +220,19 @@
   not declare gets a failing call (`runtime.lastError` + rejected promise) and, for
   `webRequest`, no deliveries at all — enforced twice, in main (`src/main/delivery-scope.js`
   decides from the manifest **on disk**, so a frame cannot talk itself into data) and in the
-  shim (`src/chrome-shim/permission-gate.js`). Deviation from Chrome, stated: Chrome omits
+  shim (`src/chrome-shim/permission-gate.js`). Both halves are measured, in one live run of
+  the production shell with a CDP session (`tests/delivery-scope.test.js`), and each is
+  measured by the observation that can actually see it: an entitled panel frame receives
+  every `chrome.webRequest` step and `devtools.network`'s finished event; for a frame with
+  no permission, the shim half is its own report that the listeners it registered were
+  withdrawn (`hasListeners()` false) and that nothing but devtools.network's two events ever
+  arrived, while main's half is the drop itself — the run records every push main addressed
+  to a frame, and no `request` / `sendHeaders` / `response` push was ever addressed to that
+  frame while `completed` was, for every cycle. (The main half had better be measured: it
+  shipped **broken and silent** for its whole life — the filter was never imported, and the
+  swallowed exception in the delivery fan-out meant no live push reached any frame.
+  Issue #20, `docs/SECURITY-PLATFORM.md` F6.)
+  Deviation from Chrome, stated: Chrome omits
   an undeclared namespace entirely, this shell keeps the namespace and fails the call
   (shape-first rule, [OVERVIEW.md](OVERVIEW.md)).
 - **`chrome.notifications` is real, with three gaps.** It shows an Electron
@@ -244,11 +280,13 @@
   `tabs` permission — a combination Chrome itself warns about — and the options host reports
   that gap too rather than dropping it.
 - **`commands`, `contextMenus` and `sidePanel` are injected, and none can do its headline
-  trick.** They exist with the real method shape so a worker naming them at module scope loads,
+  trick — two of the three are 🚷.** They exist with the real method shape so a worker naming
+  them at module scope loads,
   and each names what it lacks once: `commands.getAll` answers from the manifest but
-  `onCommand` never fires (no shortcut routing); `contextMenus` maintains a real registry with
-  Chrome's validations but `onClicked` never fires (no right-click menu to click);
-  `sidePanel` round-trips its configuration, and **`open` rejects** rather than resolving,
+  `onCommand` never fires (no shortcut routing — **open**: the Electron app menu can produce
+  this one); `contextMenus` maintains a real registry with Chrome's validations but
+  `onClicked` never fires 🚷 (the menu is the page's right-click menu, and there is no page);
+  `sidePanel` round-trips its configuration, and **`open` rejects** 🚷 rather than resolving,
   because its promise means a panel came up and none can
   ([features/SMALL-SHIMS.md](features/SMALL-SHIMS.md)).
 - **A content script's app→host payloads are also relayed to the DevTools frontend.** The host
@@ -276,5 +314,12 @@ far from a product: no install/reload UI, content scripts that inject only when 
 opts an extension in by hand (that path has now been walked on a device), no MV3 worker
 lifecycle,
 sandbox still off, deep coupling to an unmerged frontend fork.
+
+**Read "far from a product" against the pruned list, not against Chrome.** Some of what looks
+missing here is missing because React Native DevTools has no Elements panel, no DOM, no page,
+and no browser chrome to inspect — the Elements-family APIs, element selection, request
+blocking, toolbar/menu/shortcut events, DOM content scripts. Those are marked 🚷 across these
+docs and are closed, not deferred. What remains is
+[ROADMAP.md's pruned list](ROADMAP.md#what-we-can-actually-implement-the-pruned-list).
 The path forward is in [ROADMAP.md](ROADMAP.md); per-functionality state is in
 [features/README.md](features/README.md).

@@ -103,7 +103,9 @@ const runHarness = ({
 
   const child = spawn(binary, args, {
     stdio: ["ignore", "pipe", "pipe"],
-    env: { ...process.env },
+    // ELECTRON_RUN_AS_NODE stripped for the reason tests/electron-runner.js spells out:
+    // it turns the Electron binary into plain Node and the harness dies before it starts.
+    env: { ...process.env, ELECTRON_RUN_AS_NODE: undefined },
   });
   let output = "";
   child.stdout.on("data", (chunk) => (output += chunk));

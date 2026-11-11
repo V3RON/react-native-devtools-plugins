@@ -35,11 +35,14 @@ Altair, Lighthouse, Wiztree…) actually rely on, in rough order of importance:
 3. `devtools.inspectedWindow.eval()` — Redux/MobX/Vuex-style state debuggers reaching
    `window.__*` hooks.
 4. `chrome.runtime.sendMessage`/`connect` + `storage` — panel ⇄ background ⇄ outside world.
-5. `devtools.panels.elements.createSidebarPane` — object inspector sidebars.
+5. `devtools.panels.elements.createSidebarPane` — object inspector sidebars. 🚷 **No anchor:**
+   RN DevTools has no Elements panel (no DOM), so there is no selection to hang a sidebar on →
+   [the anchor list](#what-rn-devtools-actually-offers-the-anchor-list).
 6. `devtools.panels.themeName` / `setThemeChangeHandler`.
 7. `chrome.i18n.getMessage`.
-8. Niche: `inspectedWindow.getResources`, `network.getHAR`, `devtools.performance`,
-   `devtools.recorder`, `panels.sources`, `tabs`, `notifications`.
+8. Niche: `inspectedWindow.getResources` (implementable), `network.getHAR`, `devtools.performance`
+   (implementable), `devtools.recorder` 🚫, `panels.sources` (implementable), `tabs`,
+   `notifications`.
 
 ## What was achieved
 
@@ -78,10 +81,54 @@ network log (`network`/`webRequest`). In RN:
 | HTTP network log | CDP `Network` domain — **only if the RN runtime emits it**. RN network inspection is opt-in (`unstable_networkInspectionEnabled`, network plugin / `react-native-nitro-fetch` inspector); traffic may bypass the inspected runtime (native fetch, WebSocket, custom GraphQL transport) | Medium at best; the single biggest fidelity gap |
 | Request blocking (`webRequest` blocking listeners) | CDP `Fetch` domain — not supported by RN/JSI backends today | Not feasible today |
 | "Open this URL" / "open the app" | `shell.openExternal` / deep link to device | Fine |
+| Elements panel + selected DOM node | **No Elements panel, no `DOM` domain** — 🚷 no anchor (see [the anchor list](#what-rn-devtools-actually-offers-the-anchor-list)) | None; React Components is a React tree, not a DOM tree |
 
 Consequence: **network-centric extensions (GraphQL Network Inspector, Altair's monitor) can
 only be as good as RN's network-inspection story.** Debugger/state-centric extensions
 (Redux DevTools style) work surprisingly well via `Runtime.evaluate` + messaging.
+
+## What RN DevTools actually offers: the anchor list
+
+Chrome's extension APIs are all anchored on a **panel or a browser surface** the extension
+attaches to. React Native DevTools ships a known, closed set of those, and it is *smaller*
+than Chrome's — most of all, it has **no Elements panel**, because there is no DOM: the app is
+a Hermes runtime plus a Fabric tree, and jsinspector-modern implements no `DOM`/`Overlay`
+domains. This table is the single source of truth for that; every 🚷 mark in these docs means
+"the row this API is anchored on does not exist here".
+
+| RN DevTools panel (RN 0.83+) | Backing CDP | What it anchors |
+| --- | --- | --- |
+| Console | `Runtime`, `Log` | `inspectedWindow.eval` ✅ real |
+| Sources | `Debugger`, `Network` for source maps | `panels.sources`, `inspectedWindow.getResources` — implementable |
+| Network (since 0.83) | `Network` (opt-in on the backend) | `devtools.network`, `webRequest` — real, fidelity-capped |
+| Performance (since 0.83) | tracing | `panels.performance` — implementable |
+| Memory | `HeapProfiler` | (no extension API anchored on it) |
+| React Components / Profiler | React DevTools, integrated | *not* the Elements panel: it is React's own tree, not a DOM tree an extension can select from |
+| — **Elements: does not exist** | no `DOM` domain | ✂ `panels.elements.*`, `inspectedWindow.getSelectedNode`, `enterInspectElementMode`, element selection, inspect-element mode |
+| — **A page / document: does not exist** | no `Page` document model (only `Page.reload` for the bundle) | ✂ DOM content scripts, `chrome.scripting`, `panels.elements.openResource`'s resource map |
+| — **Browser chrome UI: does not exist** | — | ✂ toolbar/`action` popup, omnibox, real `contextMenus`, `sidePanel` drawer, shortcut routing |
+
+Two consequences worth stating before any planning:
+
+1. **Anything anchored on the ✂ rows is out of reach by construction, not by effort.** We keep
+   the *shape* alive (the stubbing rule below) so extensions degrade instead of dying, and mark
+   them 🚷 rather than leaving them on a to-do list.
+2. **The React Components panel is not a substitute.** It is a React-owned tree inside an
+   integrated React DevTools, not the `Elements` panel's DOM tree — there is no
+   `Runtime.RemoteObjectId` for "the node the user selected", and no host-level selection to
+   hang `createSidebarPane` off. Mapping the sidebars there would be a *new product feature*
+   (Fabric-tree selection + a new CDP-ish channel), not Chrome API fidelity, so it is scoped
+   out of this collaboration rather than parked as an open item.
+
+See also [features/TIER3-OMITTED.md](features/TIER3-OMITTED.md) for the browser-side half of
+the same argument, and [features/DEVTOOLS-PANELS.md](features/DEVTOOLS-PANELS.md) for the
+per-method marks.
+
+Sources for the panel list: the RN docs ("React Native DevTools" — Console, Sources, Network
+since 0.83, Performance since 0.83, Memory, plus the integrated React Components/Profiler; no
+Elements), and the shipped frontend this shell loads (`DEVTOOLS_FRONTEND_URL`, i.e. the fork's
+`rn_fusebox.html`), which is the version that actually has to agree. Verify against a device
+before planning anything on top of this table — same rule as everywhere else in these docs.
 
 ## Scope rules
 

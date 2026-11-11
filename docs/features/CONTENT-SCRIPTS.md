@@ -83,12 +83,17 @@ Key properties:
 
 ## Known hard limits
 
-- Hooks installed at attach time miss code that ran before attach (no clean
-  `document_start` analog) — the familiar "reload to catch initial state" problem Redux
-  DevTools users already know.
-- No DOM APIs: any Species-B script that reaches for `document` (even trivially) breaks;
-  consider an extremely thin `document` no-op shim to soften the most common cases, and
-  nothing more.
+🚷 = no anchor ([the anchor list](../OVERVIEW.md#what-rn-devtools-actually-offers-the-anchor-list));
+these are facts about Hermes and RN DevTools, not open items.
+
+- 🚷 Hooks installed at attach time miss code that ran before attach (no clean
+  `document_start` analog, no `Page.addScriptToEvaluateOnNewDocument`) — the familiar "reload
+  to catch initial state" problem Redux DevTools users already know.
+- 🚷 No DOM APIs: any Species-B script that reaches for `document` (even trivially) breaks;
+  consider an extremely thin `document` no-op shim to soften the most common cases (that shim
+  *is* an open item — a small one), and nothing more.
+- 🚷 No isolated worlds: everything runs in the app's main context, so a bad script can
+  pollute app globals.
 - Third-party code executes **inside the user's app process** — heavier security/perf
   story than running it in DevTools; hence the explicit host-level opt-in below, which is
   off until a developer names the extensions that may run.

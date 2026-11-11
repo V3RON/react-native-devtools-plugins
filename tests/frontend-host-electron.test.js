@@ -33,7 +33,13 @@ const run = () =>
       [path.join(__dirname, "frontend-host-harness.js"), `--out=${out}`, `--user-data-dir=${path.join(root, "ud")}`],
       {
         stdio: ["ignore", "pipe", "pipe"],
-        env: { ...process.env, DEVTOOLS_TEST_OPEN_LOG: openLog, DEVTOOLS_TEST_SAVE_DIALOG: saved },
+        // ELECTRON_RUN_AS_NODE stripped for the reason tests/electron-runner.js spells out.
+        env: {
+          ...process.env,
+          DEVTOOLS_TEST_OPEN_LOG: openLog,
+          DEVTOOLS_TEST_SAVE_DIALOG: saved,
+          ELECTRON_RUN_AS_NODE: undefined,
+        },
       }
     );
     let output = "";
@@ -93,8 +99,26 @@ suite("the frontend-only channels accept the frontend's main frame and nothing e
   assert.ok(!opened.includes("https://example.com/from-navigated-away"));
   assert.ok(!saved.includes("moved.txt"));
 
-  // 6. chrome.tabs.create's external policy, through the real attachTabHost wiring
+  // 6. chrome.tabs.create's open policies, through the real attachTabHost wiring: both
+  //    decide with the same allowlist and refuse with the same message (F6).
   assert.strictEqual(result.tabsHttps.via, "external");
   assert.ok(opened.includes("https://example.com/from-tabs"));
   assert.match(result.tabsFile, /^rejected: refused to open a URL that is not http\(s\)/);
+  assert.strictEqual(result.windowHttps.via, "window", "https opens in a shell window");
+  assert.strictEqual(
+    result.windowRozenite.via,
+    "window",
+    "an extension page of this shell's own scheme still opens — Altair's create of its own app page"
+  );
+  assert.match(result.windowFile, /^rejected: refused to open a URL that is not http\(s\)/);
+  assert.strictEqual(
+    result.windowFile,
+    result.tabsFile,
+    "one refusal message for one URL, whichever policy is set"
+  );
+  assert.deepStrictEqual(
+    result.windowLoaded,
+    ["https://example.com/from-tabs", "rozenite://probe.local/index.html"],
+    "the refused file: URL never reached the window"
+  );
 });

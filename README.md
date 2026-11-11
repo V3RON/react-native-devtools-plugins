@@ -29,12 +29,32 @@ Altair panels; the sample extension's **Osudio** panel asserts
 
 Notes:
 
+- **The lockfile is security-relevant:** `npm ci` installs exactly what `package-lock.json`
+  resolves, so an ageing lock is an n-day exposure, not stale metadata. Refresh `electron` at least
+  when the minor moves and run the suite — to the newest patch of the pinned major, and into
+  Electron's supported window (the latest three majors), since past that no patch is released at
+  all. The pinned 38 major already sits outside that window (38.8.6 is its terminal patch), so the
+  jump to a supported major is tracked as its own issue — within-major refresh is the floor, not
+  the goal. A Dependabot/Renovate rule scoped to `electron` is the durable version of this
+  sentence.
 - `app/` needs a *debuggable* connection to Metro (dev build; Dev Menu →
   "Connect to debugger" if the app doesn't show up in Metro's `/json/list`).
 - The shell runs the CDP bridge in-process (`src/main/cdp-bridge.js`): it discovers the
   app through Metro's `/json/list` and answers on the frontend's `ws` port. Knobs:
   `DEVTOOLS_METRO_HOST` / `DEVTOOLS_METRO_PORT`, `DEVTOOLS_APP_FILTER` /
   `DEVTOOLS_DEVICE_FILTER`, `DEVTOOLS_CDP_PORT`.
+  That port is the inspected app's debugger session, so it is bound to loopback and
+  accepts only the frontend's own `Origin` (or no `Origin` at all from a local peer —
+  that's how `npm run rn-cdp` and the tests connect). Serving the frontend from another
+  host: `DEVTOOLS_CDP_ALLOWED_ORIGINS=http://host:port`. Debugging a device from another
+  machine: `DEVTOOLS_CDP_HOST=<address>` (`--listen-host` for `npm run rn-cdp`) plus that
+  allowlist. One frontend owns the session at a time; a second one is refused, not swapped in.
+  Read the address knob for what it is: the allowlist keeps *browser pages* out, because a
+  browser sends an `Origin` a page cannot forge. Over a raw socket there is no `Origin` at all,
+  and nothing authenticates one — any peer that can reach the port may claim any origin or
+  none. So binding a non-loopback address does not narrow the exposure to "just my frontend":
+  it puts the inspected app's debugger session on that network, for whoever can route to it.
+  That is the operator's call, which is why it is never the default.
 - `chrome.i18n` follows Electron's UI locale (`npm start -- --lang=pt-BR`, or the OS language);
   `DEVTOOLS_UI_LOCALE=ar` overrides it for extensions only. The sample extension ships
   `_locales` for en, pt_BR, de and ar ([docs/features/STORAGE-AND-I18N.md](docs/features/STORAGE-AND-I18N.md)).
@@ -97,3 +117,7 @@ docs/           documentation — start at docs/README.md or docs/STRUCTURE.md
   analysis, roadmap.
 - Start with [docs/OVERVIEW.md](docs/OVERVIEW.md) (the idea + what was achieved) and
   [docs/features/README.md](docs/features/README.md) (status of each functionality).
+- Want the remaining work, with anything that can't exist in React Native DevTools already
+  removed? [docs/ROADMAP.md → "What we can actually implement"](docs/ROADMAP.md#what-we-can-actually-implement-the-pruned-list).
+  APIs marked 🚷 there and across the docs have no anchor in RN DevTools (no Elements panel,
+  no DOM, no page, no browser chrome) and are closed, not deferred.
