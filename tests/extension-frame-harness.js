@@ -466,6 +466,16 @@ app
       // The shared rule also checks the main frame is still on the frontend ORIGIN
       // (src/main/frontend-frame.js), so the configured frontend URL is this loopback page's.
       config.frontendURL = `http://127.0.0.1:${port}/`;
+      // AND the environment has to say it, not just main's config: the PRELOAD applies the
+      // same identity rule to decide which surface this window gets, and a renderer reads it
+      // from the environment (src/shared/frontend-identity.js — it cannot require
+      // src/main/config.js). Setting only `config.frontendURL` would leave the renderer with
+      // "no frontend declared" and install nothing here, which since F4 is the correct answer
+      // to that question — so the page would have no host surface and this harness's
+      // panel/theme pages would fail for a reason that has nothing to do with what they test.
+      // Same variable src/main/config.js reads, and the same one
+      // tests/frontend-host-harness.js already sets.
+      process.env.DEVTOOLS_FRONTEND_URL = config.frontendURL;
       require("../src/main/frontend-frame").setFrontendContents(win.webContents);
     }
     if (panelBridge) {

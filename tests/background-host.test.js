@@ -134,6 +134,21 @@ test("the worker's URL names the script it runs and how", () => {
 });
 
 // ── the host, with a fake window factory ───────────────────────────────────
+//
+// The fake window carries the two webContents hooks the production guard installs
+// (`on`, `setWindowOpenHandler`); the host applies its guard to whatever window it is
+// given, so a fake without them is a window the host could not guard, and `start()`'s
+// failure path would swallow it as "could not create the hidden window".
+const fakeWorkerWindow = (id = 1) => ({
+  id,
+  webContents: { on: () => {}, setWindowOpenHandler: () => {} },
+  on: () => {},
+  loadURL: () => Promise.resolve(),
+  isVisible: () => false,
+  isDestroyed: () => false,
+  destroy: () => {},
+});
+
 const makeHost = ({
   scan,
   installState = createInstallState(memoryStore()),
@@ -155,13 +170,21 @@ const makeHost = ({
     createWindow: (options) => {
       loaded.push(options);
       const listeners = {};
+      // webContents events and the window-open handler are recorded, because the guard the
+      // host installs (src/main/extension-window-policy.js) is asserted through them below.
+      const wcEvents = {};
+      const openHandlers = [];
       const win = {
         id: nextId++,
         options,
+        wcEvents,
+        openHandlers,
         webContents: {
           on: (event, fn) => {
             listeners[event] = fn;
+            wcEvents[event] = fn;
           },
+          setWindowOpenHandler: (fn) => openHandlers.push(fn),
         },
         on: () => {},
         loadURL: (url) => {
@@ -277,15 +300,7 @@ test("a manifest version bump yields `update` on the next host launch", () => {
         });
         return () => {};
       },
-      createWindow: () => ({
-        id: 1,
-        webContents: { on: () => {} },
-        on: () => {},
-        loadURL: () => Promise.resolve(),
-        isVisible: () => false,
-        isDestroyed: () => false,
-        destroy: () => {},
-      }),
+      createWindow: () => fakeWorkerWindow(1),
       log: { log: () => {}, warn: () => {}, error: () => {} },
     });
     host.attach();
@@ -341,15 +356,7 @@ test("a scan or window-creation failure is reported and does not stop the other 
       if (entry.extensionId === "bad") {
         throw new Error("no window for you");
       }
-      return {
-        id: 1,
-        webContents: { on: () => {} },
-        on: () => {},
-        loadURL: () => Promise.resolve(),
-        isVisible: () => false,
-        isDestroyed: () => false,
-        destroy: () => {},
-      };
+      return fakeWorkerWindow(1);
     },
     log: { log: () => {}, warn: (m) => warnings.push(m), error: (m) => warnings.push(m) },
   });
@@ -358,6 +365,78 @@ test("a scan or window-creation failure is reported and does not stop the other 
   assert.ok(
     warnings.some((message) => message.includes("bad") && message.includes("no window")),
     `failure reported: ${warnings.join(" | ")}`
+  );
+});
+
+// ── F4: the worker window is a guarded window, not an open one ───────────────
+//
+// The window is hidden, but hidden is not harmless: it runs the production preload as a
+// MAIN frame with an extension origin, so before issue #24 it had no `will-navigate`
+// guard and no `setWindowOpenHandler`. One `location.href = "https://evil.test"` moved the
+// worker's document to a remote page that still had a preload — and the old preload
+// decided "is this the frontend?" by ABSENCE of the extension scheme, so that page got the
+// frontend's InspectorFrontendHost surface (docs/SECURITY-PLATFORM.md F4). These pin the
+// two hooks the host installs, through the same injected window every other test here uses
+// (the host applies the guard to whatever window it was given, so this is the production
+// call path); the live half — a real `location.href` attempt that stays on the bootstrap
+// URL, and a real `window.open` that creates no window — is asserted in
+// tests/background-worker-electron.test.js.
+const fireNavigation = (win, url) => {
+  const handler = win.wcEvents["will-navigate"];
+  assert.ok(handler, "the host installs a will-navigate handler");
+  let prevented = false;
+  handler({ preventDefault: () => (prevented = true) }, url);
+  return prevented;
+};
+
+test("the worker window guards its navigations and denies window.open", () => {
+  const host = makeHost({
+    scan: () => [{ extensionId: "graphql", name: "GQL", script: "bg.js", type: "classic" }],
+  });
+  host.attach();
+  const [win] = host.windows;
+
+  assert.ok(win.wcEvents["will-navigate"], "will-navigate is guarded (it used to be absent)");
+  assert.ok(win.wcEvents["will-redirect"], "will-redirect too: a redirect is a navigation");
+  assert.strictEqual(win.openHandlers.length, 1, "setWindowOpenHandler is installed");
+  assert.deepStrictEqual(
+    win.openHandlers[0]({ url: "https://evil.test/popup", frameName: "" }),
+    { action: "deny" },
+    "window.open from a worker creates no window"
+  );
+
+  // Its own extension stays open: the bootstrap URL itself (a reload fires the event too)
+  // and the extension's other files.
+  assert.strictEqual(fireNavigation(win, win.url), false, "a reload is not a navigation");
+  assert.strictEqual(fireNavigation(win, "rozenite://graphql/assets/log.js"), false);
+  assert.strictEqual(
+    fireNavigation(win, "rozenite://GRAPHQL/x.js"),
+    false,
+    "URL hosts are case-insensitive, so this is still the same extension"
+  );
+  // Everything else is refused.
+  assert.strictEqual(fireNavigation(win, "https://evil.test/landed"), true);
+  assert.strictEqual(fireNavigation(win, "http://127.0.0.1:8081/rozenite/rn_fusebox.html"), true);
+  assert.strictEqual(
+    fireNavigation(win, "rozenite://altair/panel.html"),
+    true,
+    "another extension is another principal"
+  );
+  assert.strictEqual(fireNavigation(win, "about:blank"), true);
+  assert.strictEqual(fireNavigation(win, "file:///etc/passwd"), true);
+});
+
+test("a refused navigation is reported, never swallowed", () => {
+  const warnings = [];
+  const host = makeHost({
+    scan: () => [{ extensionId: "graphql", name: "GQL", script: "bg.js", type: "classic" }],
+    log: { log: () => {}, warn: (m) => warnings.push(m), error: () => {} },
+  });
+  host.attach();
+  fireNavigation(host.windows[0], "https://evil.test/landed");
+  assert.ok(
+    warnings.some((m) => /blocked a navigation/.test(m) && /evil\.test/.test(m)),
+    `the refusal is said out loud: ${warnings.join(" | ")}`
   );
 });
 

@@ -49,6 +49,229 @@ const codeOf = (source) =>
     .join("\n");
 const readCode = (...parts) => codeOf(readSource(...parts));
 
+// ── who the frontend is (docs/SECURITY-PLATFORM.md F4) ───────────────────────
+//
+// Two facts used to be one hole: the preload decided "is this the frontend?" by
+// ABSENCE ("not the extension scheme" + "isMainFrame"), so any extension window that
+// navigated away received the frontend's InspectorFrontendHost surface; and the nine
+// channels that surface calls (PREF_*, WINDOW_*, SHOW_CONTEXT_MENU) never asked who was
+// calling. Both halves are pinned here; the live halves (a real navigated-away window,
+// the real registered handlers refusing it) are in tests/frontend-host-electron.test.js.
+const {
+  DEFAULT_FRONTEND_URL,
+  isExtensionUrl,
+  isFrontendUrl,
+  preloadBranch,
+} = require("../src/shared/frontend-identity");
+const { extensionNavigationAllowed } = require("../src/main/extension-window-policy");
+
+const FRONTEND = "http://127.0.0.1:8081/rozenite/rn_fusebox.html?ws=localhost:9223";
+
+test("the frontend is identified by its URL, not by the absence of the extension scheme", () => {
+  // Same origin, any path: the frontend's own navigations, its reloads, its subpages.
+  assert.strictEqual(isFrontendUrl("http://127.0.0.1:8081/other.html", FRONTEND), true);
+  assert.strictEqual(isFrontendUrl(FRONTEND, FRONTEND), true);
+  // Another port, another host, another scheme: not the frontend.
+  assert.strictEqual(isFrontendUrl("http://127.0.0.1:8082/x.html", FRONTEND), false);
+  assert.strictEqual(isFrontendUrl("http://evil.test/rozenite/rn_fusebox.html", FRONTEND), false);
+  assert.strictEqual(isFrontendUrl("https://127.0.0.1:8081/x.html", FRONTEND), false);
+  // The F4 documents: an extension page, and the page such a window lands on.
+  assert.strictEqual(isFrontendUrl("rozenite://graphql/panel.html", FRONTEND), false);
+  assert.strictEqual(isFrontendUrl("https://evil.test/landed", FRONTEND), false);
+  // Origin-less documents cannot prove they are the frontend.
+  assert.strictEqual(isFrontendUrl("about:blank", FRONTEND), false);
+  assert.strictEqual(isFrontendUrl("data:text/html,x", FRONTEND), false);
+  // Measured, and kept deliberately: a `blob:` URL's URL.origin is the origin that CREATED
+  // it (blob:http://127.0.0.1:8081/uuid -> that origin), which is the browser's own identity
+  // model — a blob document is same-origin with its creator, and only frontend-origin script
+  // can mint a blob: URL for the frontend's origin. src/main/frontend-frame.js already reads
+  // URL.origin for the channels, so the two realms agree here by construction: the identity
+  // is positive in both. A blob minted by an extension page reports the opaque origin
+  // (blob:rozenite://graphql/uuid -> "null"), so it is not the frontend either way.
+  assert.strictEqual(isFrontendUrl("blob:http://127.0.0.1:8081/uuid", FRONTEND), true);
+  assert.strictEqual(isFrontendUrl("blob:rozenite://graphql/uuid", FRONTEND), false);
+  // Nothing announced, nothing is the frontend: the check fails CLOSED.
+  assert.strictEqual(isFrontendUrl("http://127.0.0.1:8081/a.html", ""), false);
+  assert.strictEqual(isFrontendUrl("http://127.0.0.1:8081/a.html", "not a url"), false);
+  assert.strictEqual(isFrontendUrl("", FRONTEND), false);
+  assert.strictEqual(isFrontendUrl(undefined, FRONTEND), false);
+  // An opaque-origin frontend identifies nothing, so it matches nothing — including itself.
+  // This is src/main/frontend-frame.js's pre-existing behavior (an origin-less frontend URL
+  // has always been refused rather than guessed at), and a fix that narrows nine channels is
+  // not the place to widen that one as a side effect.
+  assert.strictEqual(isFrontendUrl("about:blank", "about:blank"), false);
+  assert.strictEqual(
+    isFrontendUrl("file:///opt/frontend/frontend.html", "file:///opt/frontend/frontend.html"),
+    false,
+    "a file:// frontend is not an identity this shell claims — fail closed, as before"
+  );
+  assert.strictEqual(isFrontendUrl("file:///opt/other/x.html", "file:///opt/frontend/frontend.html"), false);
+  // A file: candidate against an http frontend: no match by any rule.
+  assert.strictEqual(isFrontendUrl("file:///opt/frontend/frontend.html", FRONTEND), false);
+});
+
+test("an extension URL is recognized by the scheme alone", () => {
+  assert.strictEqual(isExtensionUrl("rozenite://graphql/panel.html"), true);
+  assert.strictEqual(isExtensionUrl("rozenite://graphql/"), true);
+  assert.strictEqual(isExtensionUrl("http://127.0.0.1:8081/x"), false);
+  assert.strictEqual(isExtensionUrl("not a url"), false);
+  assert.strictEqual(isExtensionUrl(undefined), false);
+});
+
+test("the preload dispatch policy names the branch by identity", () => {
+  // Extension frames first, whatever else is true of them: a MAIN frame too (the hidden
+  // worker window) and a main frame that is also on the frontend's origin by accident.
+  assert.strictEqual(preloadBranch("rozenite://graphql/__rozenite_background__", true, FRONTEND), "extension");
+  assert.strictEqual(preloadBranch("rozenite://graphql/panel.html", false, FRONTEND), "extension");
+  assert.strictEqual(preloadBranch("rozenite://x/y", true, "rozenite://x/y"), "extension");
+  // The frontend: main frame, frontend origin.
+  assert.strictEqual(preloadBranch(FRONTEND, true, FRONTEND), "frontend");
+  assert.strictEqual(preloadBranch("http://127.0.0.1:8081/other.html", true, FRONTEND), "frontend");
+  // An iframe of the frontend is NOT the frontend host — main applies the same rule to the
+  // channels (src/main/frontend-frame.js), so the two must not disagree here.
+  assert.strictEqual(preloadBranch("http://127.0.0.1:8081/child.js", false, FRONTEND), "none");
+  // The F4 cases: a navigated-away extension window, and anything else with a preload.
+  assert.strictEqual(preloadBranch("https://evil.test/landed", true, FRONTEND), "none");
+  assert.strictEqual(preloadBranch("about:blank", true, FRONTEND), "none");
+  assert.strictEqual(preloadBranch("file:///etc/passwd", true, FRONTEND), "none");
+  assert.strictEqual(preloadBranch("http://127.0.0.1:8081/x", true, ""), "none");
+});
+
+test("the renderer's frontend URL cannot drift from main's", () => {
+  // src/main/config.js keeps its own copy of the default because a renderer preload cannot
+  // import it (config pulls in the main process). This is what keeps the two honest.
+  const config = require("../src/main/config");
+  assert.strictEqual(
+    config.frontendURL,
+    process.env.DEVTOOLS_FRONTEND_URL || DEFAULT_FRONTEND_URL
+  );
+});
+
+test("src/preload/index.js dispatches by that policy and not by absence", () => {
+  const source = readCode("src", "preload", "index.js");
+  assert.match(source, /preloadBranch/, "the branch comes from the shared policy");
+  assert.match(source, /window\.location\.href/, "decided from this frame's own URL");
+  assert.doesNotMatch(
+    source,
+    /else\s+if\s*\(\s*process\.isMainFrame\s*\)/,
+    "the absence rule that handed navigated-away windows the frontend surface is gone"
+  );
+});
+
+// ── extension-owned windows: navigation + window.open (F4 / §4 L4) ───────────
+test("an extension window may navigate to its own extension and nothing else", () => {
+  const own = "rozenite://graphql/__rozenite_background__?script=background.js";
+  assert.strictEqual(extensionNavigationAllowed(own, own), true, "a reload is not a navigation");
+  assert.strictEqual(extensionNavigationAllowed("rozenite://graphql/other.js", own), true);
+  assert.strictEqual(
+    extensionNavigationAllowed("rozenite://GRAPHQL/x.js", own),
+    true,
+    "the host comparison is case-insensitive, as URL hosts are"
+  );
+  // Another extension is another principal, even on the same scheme.
+  assert.strictEqual(extensionNavigationAllowed("rozenite://altair/panel.html", own), false);
+  // Every other scheme, including the frontend's own.
+  for (const url of [
+    "https://evil.test/x",
+    "http://127.0.0.1:8081/rozenite/rn_fusebox.html",
+    "file:///etc/passwd",
+    "about:blank",
+    "data:text/html,<script>x</script>",
+    "blob:rozenite://graphql/uuid",
+    "javascript:alert(1)",
+    "not a url",
+    "",
+    undefined,
+  ]) {
+    assert.strictEqual(extensionNavigationAllowed(url, own), false, String(url));
+  }
+  // An unparseable own URL guards nothing, so it lets nothing through.
+  assert.strictEqual(extensionNavigationAllowed("rozenite://graphql/x.js", "nonsense"), false);
+});
+
+test("the extension-window guard installs both hooks and denies what the policy refuses", () => {
+  const { guardExtensionWindow } = require("../src/main/extension-window-policy");
+  const handlers = {};
+  let openPolicy = null;
+  const contents = {
+    on: (event, fn) => {
+      handlers[event] = fn;
+    },
+    setWindowOpenHandler: (fn) => {
+      openPolicy = fn;
+    },
+  };
+  const warn = [];
+  guardExtensionWindow(contents, "rozenite://graphql/__rozenite_background__", "background", (m) =>
+    warn.push(m)
+  );
+  assert.ok(handlers["will-navigate"], "will-navigate is guarded");
+  assert.ok(handlers["will-redirect"], "will-redirect is guarded (a redirect is a navigation)");
+  assert.strictEqual(typeof openPolicy, "function", "window.open has a handler");
+  assert.deepStrictEqual(openPolicy({ url: "https://evil.test" }), { action: "deny" });
+
+  const attempt = (url) => {
+    let prevented = false;
+    handlers["will-navigate"]({ preventDefault: () => (prevented = true) }, url);
+    return prevented;
+  };
+  assert.strictEqual(attempt("rozenite://graphql/other.js"), false, "its own extension stays");
+  assert.strictEqual(attempt("https://evil.test/landed"), true);
+  assert.strictEqual(attempt("rozenite://altair/__rozenite_background__"), true);
+  assert.strictEqual(attempt("about:blank"), true);
+  assert.ok(warn.some((line) => line.includes("evil.test")), "a refusal says so, like the frontend's");
+});
+
+// ── the nine channels ask who is calling (F4) ────────────────────────────────
+test("all nine frontend-only channels go through the frontendOnly gate", () => {
+  // The set the issue names, from src/shared/ipc.js — pinned as a SET so a tenth channel
+  // cannot join it silently. (tests/security.test.js's own sendSync pin is the same kind of
+  // structural assertion; issue #28 replaces this with a general lint.)
+  const nine = [
+    "SHOW_CONTEXT_MENU",
+    "PREF_REGISTER",
+    "PREF_GET",
+    "PREF_GET_ALL",
+    "PREF_SET",
+    "PREF_REMOVE",
+    "PREF_CLEAR",
+    "WINDOW_BRING_TO_FRONT",
+    "WINDOW_CLOSE",
+  ];
+  assert.deepStrictEqual(nine.sort(), [
+    "PREF_CLEAR",
+    "PREF_GET",
+    "PREF_GET_ALL",
+    "PREF_REGISTER",
+    "PREF_REMOVE",
+    "PREF_SET",
+    "SHOW_CONTEXT_MENU",
+    "WINDOW_BRING_TO_FRONT",
+    "WINDOW_CLOSE",
+  ]);
+
+  // Whitespace-tolerant (`\s*`), so the pin is about the composition and not about the
+  // line breaks a formatter may choose.
+  const source = readCode("src", "main", "ipc.js");
+  for (const name of nine) {
+    const registration = new RegExp(`ipcMain\\.handle\\(\\s*${name},\\s*frontendOnly\\(\\s*${name},`);
+    assert.match(source, registration, `${name} is registered through frontendOnly`);
+  }
+  // And the gate is the same rule the file already applies to the HOST_* channels,
+  // composed through a gate that takes its checks as arguments — so issue #25 can add a
+  // context-role check to a channel without rewriting its gate.
+  assert.match(
+    source,
+    /const frontendOnly = senderOnly\(\s*REFUSED,\s*isFrontendFrame\s*\)/,
+    "one gate, built from the same frontend-frame rule the HOST_* channels use"
+  );
+  assert.match(
+    source,
+    /const senderOnly =\s*\(refused,\s*\.\.\.checks\)\s*=>\s*\(channel,\s*handler\)\s*=>\s*\(event,\s*\.\.\.args\)/,
+    "the wrapper is variadic in its checks, which is what lets a second role gate compose with this one"
+  );
+});
+
 // ── CSP ──────────────────────────────────────────────────────────────────────
 test("no declared CSP gets Chrome's MV3 extension policy, not nothing", () => {
   assert.deepStrictEqual(contentSecurityPolicyFor({}), {

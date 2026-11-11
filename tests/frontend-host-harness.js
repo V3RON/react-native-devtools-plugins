@@ -8,10 +8,18 @@
 // (A) and "somewhere else" (B). It drives every case itself and writes ONE `result` line.
 // The caller sets DEVTOOLS_TEST_OPEN_LOG / DEVTOOLS_TEST_SAVE_DIALOG, so nothing opens a
 // browser or raises a dialog.
-const { app, BrowserWindow } = require("electron");
+const { app, BrowserWindow, ipcMain } = require("electron");
 const { default: Store } = require("electron-store");
 const fs = require("fs");
 const http = require("http");
+const path = require("path");
+const {
+  PREF_SET,
+  PREF_GET_ALL,
+  PREF_CLEAR,
+  WINDOW_CLOSE,
+  HOST_CONFIG,
+} = require("../src/shared/ipc");
 
 const arg = (name) => {
   const found = process.argv.find((entry) => entry.startsWith(`--${name}=`));
@@ -94,11 +102,85 @@ app.whenReady().then(async () => {
     const winB = open();
     await winB.webContents.loadURL(`${b.origin}/other.html`);
     await sleep(500);
-    await winB.webContents.executeJavaScript(`InspectorFrontendHost.openInNewTab("https://example.com/from-other-origin")`);
-    await winB.webContents.executeJavaScript(`InspectorFrontendHost.save("evil.txt", "x", true, false)`);
-    result.hostConfigB = await winB.webContents.executeJavaScript(`new Promise((r) => InspectorFrontendHost.getHostConfig(r))`);
+    // F4, live: this is the shape a navigated-away extension window has — a main frame, the
+    // production preload, not the frontend's origin. The preload used to read that as "is the
+    // frontend" and install the host surface here; it now installs nothing. Called through
+    // `window.…` guards because after the fix there is no object to call: an unguarded call
+    // throws, and the point of the case is the absence, not an exception in the harness.
+    result.surfaceOnOtherOrigin = await winB.webContents.executeJavaScript(
+      `[typeof window.InspectorFrontendHostElectron, typeof window.chromeElectron]`
+    );
+    await winB.webContents.executeJavaScript(
+      `window.InspectorFrontendHostElectron && InspectorFrontendHost.openInNewTab("https://example.com/from-other-origin")`
+    );
+    await winB.webContents.executeJavaScript(
+      `window.InspectorFrontendHostElectron && InspectorFrontendHost.save("evil.txt", "x", true, false)`
+    );
+    result.hostConfigB = await winB.webContents.executeJavaScript(
+      `window.InspectorFrontendHostElectron ? new Promise((r) => InspectorFrontendHost.getHostConfig(r)) : "no surface"`
+    );
     await sleep(500);
     winB.destroy();
+
+    // 4b. the nine channels, at the channel boundary, in this real process: the same
+    // registered handlers the renderer's `invoke` reaches (ipcMain._invokeHandlers is the map
+    // ipcMain.handle fills, and this harness already leans on that map for --register-delay-ms),
+    // driven with events whose sender/senderFrame are REAL objects from REAL windows — the
+    // frontend's and a stranger's. The store is the production one, in this run's temp
+    // userData, so "refused" means the file on disk did not change.
+    //
+    // Why the event is built here instead of invoked from a page: after the fix, a
+    // non-frontend frame has NO surface from which to call these channels at all (case 4
+    // above), so the only way to exercise the gate is main's own side of the real IPC
+    // registry. The refusal then has two independent proofs, which is the defense in depth F4
+    // asks for: the surface is gone, and the channel would still refuse it.
+    const handlers = ipcMain._invokeHandlers;
+    const prefsFile = path.join(app.getPath("userData"), "frontend-preferences.json");
+    const readStore = () => (fs.existsSync(prefsFile) ? fs.readFileSync(prefsFile, "utf8") : "");
+    const storeUnchanged = (before) => readStore() === before;
+    const frameEvent = (win) => ({ sender: win.webContents, senderFrame: win.webContents.mainFrame });
+    const stranger = open();
+    await stranger.webContents.loadURL(`${b.origin}/other.html`);
+    await sleep(300);
+    const beforeStranger = readStore();
+    const strangerEvent = frameEvent(stranger);
+    const strangerResults = {
+      set: handlers.get(PREF_SET)(strangerEvent, "f4Stolen", "written-by-a-stranger"),
+      getAll: handlers.get(PREF_GET_ALL)(strangerEvent),
+      clear: handlers.get(PREF_CLEAR)(strangerEvent),
+      // The already-gated channel as a control, in the same shape: it refused a stranger
+      // before this fix too, so it is the reference for what "refused" looks like here.
+      hostConfig: handlers.get(HOST_CONFIG)(strangerEvent),
+    };
+    // An iframe of the frontend is another refusal: same WebContents, not the main frame.
+    const childFrame = contents.mainFrame.frames[0];
+    const childRefused =
+      Boolean(childFrame) &&
+      handlers.get(PREF_SET)({ sender: contents, senderFrame: childFrame }, "f4StolenChild", "no");
+    await sleep(200);
+    result.strangerRefused = {
+      ...strangerResults,
+      childFrame: childRefused,
+      // The store is what makes "refused" an observation rather than a return value.
+      storeUnchanged: storeUnchanged(beforeStranger),
+      storeText: readStore(),
+    };
+    // And the frontend's own main frame still gets through — the same call, the same
+    // handlers, the frame that is allowed. Without this the refusals above would only prove
+    // the handlers are broken.
+    const beforeFrontend = readStore();
+    result.frontendAccepted = {
+      set: handlers.get(PREF_SET)(frameEvent(winA), "f4Mine", "written-by-the-frontend"),
+      storeChanged: readStore() !== beforeFrontend,
+    };
+    await sleep(200);
+    result.frontendStoreText = readStore();
+    result.frontendSurface = await winA.webContents.executeJavaScript(
+      `typeof window.InspectorFrontendHostElectron`
+    );
+    // `stranger` stays open until case 7: a destroyed WebContents would be refused for the
+    // wrong reason there (`isMainFrameOf` checks liveness first), which is not the fact that
+    // case is about.
 
     // 5a. a reload (the frontend's own "Reconnect DevTools") is same-origin and untouched
     await call(`location.reload()`);
@@ -110,13 +192,20 @@ app.whenReady().then(async () => {
     await sleep(800);
     result.urlAfterNavigationAttempt = contents.getURL();
     // ...and if a navigation gets past the guard anyway (programmatic loadURL does not fire
-    // will-navigate), the origin check is what is left.
+    // will-navigate), two things remain. The origin check in main is one. The other is new
+    // with F4: the navigated document no longer gets the frontend's host surface at all, so
+    // the page has nothing to call — which is why these calls are guarded rather than direct.
     await contents.loadURL(`${b.origin}/other.html`);
     await sleep(500);
     result.originAfterLoad = new URL(contents.getURL()).origin === b.origin;
     result.movedMainAccepted = frame.isFrontendFrame({ sender: contents, senderFrame: contents.mainFrame });
-    await call(`InspectorFrontendHost.openInNewTab("https://example.com/from-navigated-away")`);
-    await call(`InspectorFrontendHost.save("moved.txt", "x", true, false)`);
+    result.surfaceAfterLoad = await call(`typeof window.InspectorFrontendHostElectron`);
+    await call(
+      `window.InspectorFrontendHostElectron && InspectorFrontendHost.openInNewTab("https://example.com/from-navigated-away")`
+    );
+    await call(
+      `window.InspectorFrontendHostElectron && InspectorFrontendHost.save("moved.txt", "x", true, false)`
+    );
     await sleep(800);
 
     // 6. chrome.tabs.create's policies through the real attachTabHost wiring: both
@@ -164,6 +253,12 @@ app.whenReady().then(async () => {
       result.windowFile = `rejected: ${error.message}`;
     }
     result.windowLoaded = loaded;
+
+    // 7. WINDOW_CLOSE last of all the stranger calls, because before the fix it is the one
+    //    that really does something: it closes the frontend window. Placed here so a pre-fix
+    //    run reaches every assertion above first; a refusal means the window is still here.
+    result.strangerClose = handlers.get(WINDOW_CLOSE)(frameEvent(stranger));
+    result.frontendWindowAlive = !winA.isDestroyed();
   } catch (error) {
     result.harnessError = error && error.stack;
   }

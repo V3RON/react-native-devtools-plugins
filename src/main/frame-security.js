@@ -31,8 +31,12 @@
 //       shipping one bundled, self-contained preload file, i.e. a build step
 //       this repo deliberately does not have. Still open — LIMITATIONS.md.
 //   webSecurity: true                 → `rozenite://` iframes DO still load
-//       inside the `http://127.0.0.1:8081` frontend: the scheme is registered
-//       standard + secure + `bypassCSP`, which is what the embedding needs.
+//       inside the `http://127.0.0.1:8081` frontend. What makes that work is the
+//       registration in src/main/extension-server.js: `standard` +
+//       `supportFetchAPI` + `bypassCSP`. Note what is NOT in it: `secure`. The
+//       scheme is not a secure context, and `isSecureContext` inside an extension
+//       frame is FALSE (measured on Electron 38, production privileges) — which is
+//       what decides `crypto.subtle`/clipboard availability, and is issue #30.
 //       So the off-switch is not required for panel hosting and is turned off
 //       here (it stays off for both frame classes, asserted by the same test).
 //
@@ -59,10 +63,19 @@ const basePreferences = ({ preloadPath }) => ({
   // http:// frontend (the scheme is registered standard + bypassCSP), inline
   // `<script>` in an extension page is refused, and per-extension CSP rides the
   // response headers (src/main/extension-server.js).
-  // What it does NOT do is separate one extension from another: every
-  // `rozenite://<id>` shares one origin, so a page in extension A can fetch a
-  // sibling's files. Measured, asserted, and recorded in docs/LIMITATIONS.md —
-  // webSecurity on is not the same as per-extension origin isolation.
+  // What it does NOT do is stop one extension reading another's files: every
+  // `rozenite://<id>` has its OWN origin (`location.origin` in a `rozenite://a.local`
+  // frame is `rozenite://a.local`, measured on Electron 38 with these exact
+  // preferences — the older note here claimed they "share one origin", which is
+  // wrong), and cross-extension reads survive anyway because the custom-scheme loader
+  // runs no CORS check: a page in extension A fetching `rozenite://B/file.js` gets
+  // status 200, `response.type === "basic"` and a readable body (measured; a
+  // `no-cors` fetch comes back the same way). So the gap is a missing CORS decision,
+  // not a missing origin separation — which is why the fix cannot be "turn
+  // webSecurity on" (it already is) and cannot live in `protocol.handle` either (its
+  // Request carries no Origin; docs/SECURITY-PLATFORM.md Fact 5). Recorded in
+  // docs/LIMITATIONS.md, asserted in tests/background-worker-electron.test.js, and
+  // tracked as issue #32.
   webSecurity: true,
   allowRunningInsecureContent: false,
   // Still false: a sandboxed preload cannot require this repo's preload modules

@@ -8,8 +8,11 @@ const repoRoot = path.join(__dirname, "..", "..");
 // core/sdk/WebSocketConnection to that host:port instead of using
 // InspectorFrontendHost.sendMessageToBackend. The CDP bridge (src/main/cdp-bridge.js)
 // listens there and owns the RN debugger session.
-const DEFAULT_FRONTEND_URL =
-  "http://127.0.0.1:8081/rozenite/rn_fusebox.html?ws=localhost:9223";
+// The DEFAULT lives in src/shared/frontend-identity.js, because the renderer has to apply
+// the same identity rule to decide which preload branch a frame gets (src/preload/index.js,
+// GitHub issue #24) and a preload cannot require this file. tests/security.test.js pins that
+// the two modules still agree on the default.
+const DEFAULT_FRONTEND_URL = require("../shared/frontend-identity").DEFAULT_FRONTEND_URL;
 
 // "off"/"disabled"/"false"/"0" -> the shell does not touch the CDP socket at all;
 // an external relay (npm run rn-cdp, npm run fake-cdp) must answer on the

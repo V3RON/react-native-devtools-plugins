@@ -88,7 +88,56 @@ suite("the frontend-only channels accept the frontend's main frame and nothing e
   // 4. a main frame on another origin with the same preload is refused end to end
   assert.ok(!opened.includes("https://example.com/from-other-origin"));
   assert.ok(!saved.includes("evil.txt"));
-  assert.deepStrictEqual(result.hostConfigB, {}, "getHostConfig answers nothing to a stranger");
+  // Changed by F4, and stronger for it. This used to assert `{}` — the stranger's call
+  // reached HOST_CONFIG and was refused there. Now the stranger never gets the surface to
+  // call with (src/preload/index.js installs it only for the frontend's own origin), so the
+  // page has nothing to invoke. The channel-level refusal is still asserted for the exact
+  // same frame below (strangerRefused.hostConfig), so nothing about the gate's behavior
+  // stopped being checked; what changed is that the surface it protected is also gone.
+  assert.strictEqual(result.hostConfigB, "no surface", "a stranger has no host surface at all");
+  assert.deepStrictEqual(
+    result.surfaceOnOtherOrigin,
+    ["undefined", "undefined"],
+    "the F4 window shape: a main frame, the production preload, not the frontend's origin — " +
+      "no InspectorFrontendHost and no chrome.*"
+  );
+
+  // 4b. the nine channels at the channel boundary, in a real process: the SAME handlers the
+  // renderer's `invoke` reaches, called with events built from real frames of real windows.
+  // This is the criterion "the nine channels refuse a non-frontend sender", for real: the
+  // production electron-store on disk is what proves a refusal is not just a return value.
+  const REFUSED = { ok: false, error: "not the DevTools frontend" };
+  assert.deepStrictEqual(result.strangerRefused.set, REFUSED, "PREF_SET from a stranger is refused");
+  assert.deepStrictEqual(result.strangerRefused.getAll, REFUSED, "PREF_GET_ALL too");
+  assert.deepStrictEqual(result.strangerRefused.clear, REFUSED, "and PREF_CLEAR");
+  assert.deepStrictEqual(
+    result.strangerRefused.childFrame,
+    REFUSED,
+    "an iframe of the frontend is not the frontend either"
+  );
+  assert.deepStrictEqual(
+    result.strangerRefused.hostConfig,
+    {},
+    "the already-gated control answers a stranger with the frontend's own 'nothing configured' " +
+      "shape (HOST_CONFIG's pre-existing refusal, unchanged here) — the nine now refuse on the " +
+      "same rule, and report it as a refusal because their callers are fire-and-forget"
+  );
+  assert.strictEqual(
+    result.strangerRefused.storeUnchanged,
+    true,
+    `the persisted store did not move: ${result.strangerRefused.storeText}`
+  );
+  assert.ok(
+    !/f4Stolen/.test(result.strangerRefused.storeText),
+    "no preference the stranger wrote reached the file"
+  );
+  // ...and the frontend's own main frame still gets through the same handler: without this,
+  // every refusal above would only prove the handlers are broken.
+  assert.strictEqual(result.frontendAccepted.set, undefined, "PREF_SET returns nothing, as it always did");
+  assert.strictEqual(result.frontendAccepted.storeChanged, true, "and it really wrote");
+  // The store file is pretty-printed, so match the pair rather than its exact bytes.
+  assert.match(result.frontendStoreText, /"f4Mine":\s*"written-by-the-frontend"/);
+  assert.strictEqual(result.frontendSurface, "object", "the frontend keeps its host surface");
 
   // 5. a navigated-away frontend: the guard holds the URL, and the origin check holds
   //    when something gets past the guard
@@ -98,6 +147,13 @@ suite("the frontend-only channels accept the frontend's main frame and nothing e
   assert.strictEqual(result.movedMainAccepted, false);
   assert.ok(!opened.includes("https://example.com/from-navigated-away"));
   assert.ok(!saved.includes("moved.txt"));
+  // F4's other half in the same window: once the main frame is off the frontend's origin,
+  // the preload installs nothing there either, so the page cannot even try those channels.
+  assert.strictEqual(
+    result.surfaceAfterLoad,
+    "undefined",
+    "the navigated-away document has no host surface — the identity check, not just the guard"
+  );
 
   // 6. chrome.tabs.create's open policies, through the real attachTabHost wiring: both
   //    decide with the same allowlist and refuse with the same message (F6).
@@ -121,4 +177,9 @@ suite("the frontend-only channels accept the frontend's main frame and nothing e
     ["https://example.com/from-tabs", "rozenite://probe.local/index.html"],
     "the refused file: URL never reached the window"
   );
+
+  // 7. WINDOW_CLOSE from a stranger is refused, and the frontend window is still standing —
+  //    which is the damage that used to be reachable from any frame with a preload.
+  assert.deepStrictEqual(result.strangerClose, REFUSED, "a stranger cannot close the DevTools window");
+  assert.strictEqual(result.frontendWindowAlive, true, "and it really did not close it");
 });
