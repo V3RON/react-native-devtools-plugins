@@ -129,6 +129,13 @@ module.exports = {
    *  app context, so a payload can never name another extension's script. */
   TABS_SEND_TO_APP: "tabs-send-to-app",
 
+  // ── chrome.scripting ─────────────────────────────────────────────────────────
+  /** ({files|func, args, world}) -> one Runtime.evaluate into the inspected app for the
+   *  CALLING frame's own extension (id from the frame url in main, never the payload).
+   *  Gated on the `scripting` grant AND the content-script opt-in; resolves
+   *  {ok, results} or {ok: false, error}. */
+  SCRIPTING_EXECUTE: "scripting-execute",
+
   // ── chrome.notifications (docs/features/SMALL-SHIMS.md) ──────────────────────
   /** ({id, title, message, silent}) -> show one system notification for the calling
    *  context. Main records the caller's OWN frame key as the owner, so a later click

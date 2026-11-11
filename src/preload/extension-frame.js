@@ -51,6 +51,7 @@ const {
   TABS_TARGET_INFO,
   TABS_OPEN,
   TABS_SEND_TO_APP,
+  SCRIPTING_EXECUTE,
   TABS_CLOSE,
   NOTIFICATION_SHOW,
   NOTIFICATION_CLEAR,
@@ -267,6 +268,12 @@ const chrome = createChromeNamespace({
     asRegisteredCaller(() => ipcRenderer.invoke(TABS_SEND_TO_APP, { message })).then(
       (reply) => reply || { ok: false, error: "tabs.sendMessage: the host did not answer" }
     ),
+  // chrome.scripting.executeScript -> Runtime.evaluate in the inspected app, for this
+  // frame's OWN extension (main reads the id from this frame's url).
+  executeInApp: (injection) =>
+    asRegisteredCaller(() => ipcRenderer.invoke(SCRIPTING_EXECUTE, injection)).then(
+      (reply) => reply || { ok: false, error: "scripting.executeScript: the host did not answer" }
+    ),
   // chrome.notifications -> the host's Electron Notification. The OWNER of a
   // notification is recorded in main from this frame's own identity, so the click
   // comes back to this context alone — the frame never names a recipient.
@@ -482,6 +489,25 @@ contextBridge.executeInMainWorld({
       get: () => bridge.runtime._getLastLastError(),
     });
     delete merged.runtime._getLastLastError; // internal helper stays shim-side
+
+    // scripting.executeScript({func}): the function must be serialized HERE. Across the
+    // contextBridge a function becomes a proxy whose source reads "[native code]", and
+    // Chrome sends `func` as source text anyway (which is why it cannot close over
+    // anything) — so the main world hands the shim that text, never the function.
+    if (bridge.scripting && typeof bridge.scripting.executeScript === "function") {
+      const execute = bridge.scripting.executeScript;
+      merged.scripting = {
+        ...bridge.scripting,
+        executeScript: (injection, callback) => {
+          const fn = injection && (injection.func || injection.function);
+          const sent =
+            typeof fn === "function"
+              ? { ...injection, func: Function.prototype.toString.call(fn), function: undefined }
+              : injection;
+          return typeof callback === "function" ? execute(sent, callback) : execute(sent);
+        },
+      };
+    }
 
     // Panel.onShown(window): Chrome passes the panel page's window, and a Window cannot
     // cross the contextBridge, so the main world resolves it. The panel iframe lives in

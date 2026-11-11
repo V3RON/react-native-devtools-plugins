@@ -33,6 +33,17 @@ const createMessageRouter = () => {
 
   const registerFrame = (frame) => frames.set(frame.key, frame);
 
+  /**
+   * Chrome's `MessageSender` for a context. A frame that stands for a tab (the inspected
+   * app's seat, src/main/content-bridge.js) carries that tab as `frame.tab`, read at
+   * send time. Chrome sets `sender.tab` (and `frameId`) for a content script, and
+   * extensions key their content-script ports on `sender.tab.id`.
+   */
+  const senderOf = (frame) =>
+    frame.tab
+      ? { id: frame.extensionId, url: frame.url, tab: frame.tab, frameId: 0 }
+      : { id: frame.extensionId, url: frame.url };
+
   const peersOf = (fromKey) => {
     const from = frames.get(fromKey);
     if (!from) {
@@ -91,7 +102,7 @@ const createMessageRouter = () => {
       return Promise.resolve(undefined); // Chrome: callback(undefined)
     }
     const id = nextRequestId++;
-    const sender = { id: from.extensionId, url: from.url };
+    const sender = senderOf(from);
     return new Promise((resolve) => {
       pending.set(id, {
         expected: new Set(targets.map(([key]) => key)),
@@ -133,7 +144,7 @@ const createMessageRouter = () => {
       return { ok: false, error: NO_RECEIVER };
     }
     const id = nextRequestId++;
-    const sender = { id: from.extensionId, url: from.url };
+    const sender = senderOf(from);
     const promise = new Promise((resolve, reject) => {
       pending.set(id, {
         expected: new Set([targetKey]),
@@ -223,7 +234,7 @@ const createMessageRouter = () => {
       initiator: fromKey,
       legs: new Set(targets.map(([key]) => key)),
     });
-    const initiator = { id: from.extensionId, url: from.url };
+    const initiator = senderOf(from);
     for (const [key, frame] of targets) {
       frame.send({ kind: "port-connect", payload: { portId, name, initiator } });
     }
@@ -236,7 +247,7 @@ const createMessageRouter = () => {
       return;
     }
     const from = frames.get(fromKey);
-    const fromInfo = { id: from.extensionId, url: from.url };
+    const fromInfo = senderOf(from);
     for (const key of members(port)) {
       if (key === fromKey) {
         continue;
