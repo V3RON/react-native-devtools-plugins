@@ -152,7 +152,7 @@ test("the Electron-backed options host is never built by this suite", () => {
   const attach = source.slice(source.indexOf("const attachOptionsHost"));
   assert.match(attach, /require\("electron"\)/, "the real opener is Electron-backed");
   assert.match(attach, /extensionFramePreferences/, "and gives an options page no more privileges than a panel");
-  assert.match(attach, /resolveExtensionFile/, "with the file server's containment rules");
+  assert.match(attach, /packageFor\(extensionId\)[\s\S]*\.entry\(innerPath\)\.kind === "refused"/, "with the package's containment rules");
   const here = fs.readFileSync(__filename, "utf8").replace(/^\s*\/\/.*$/gm, "");
   assert.doesNotMatch(here, /attachOptionsHost\s*\(/);
   assert.doesNotMatch(here, /getOptionsHost\s*\(/);

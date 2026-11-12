@@ -15,6 +15,15 @@ const EXTENSION_SCHEME = "rozenite";
 // server must reserve it in both directions.
 const I18N_BUNDLE_PATH = "__rozenite_i18n__";
 
+// The background worker's bootstrap document, synthesized by the file server
+// (./extension-server.js, docs/features/BACKGROUND-WORKER.md).
+const BACKGROUND_BOOTSTRAP_PATH = "__rozenite_background__";
+
+// Inner paths the host answers itself. No package file can be read or served under
+// them, so a file an extension ships at that name can never stand in for what the
+// host generates.
+const RESERVED_INNER_PATHS = new Set([BACKGROUND_BOOTSTRAP_PATH, I18N_BUNDLE_PATH]);
+
 /**
  * Parse `rozenite://<extension-id>/<path>`.
  * @returns {{ extensionId: string, innerPath: string } | null}
@@ -62,6 +71,8 @@ const panelIdFor = (extensionId, pagePath) => {
 module.exports = {
   EXTENSION_SCHEME,
   I18N_BUNDLE_PATH,
+  BACKGROUND_BOOTSTRAP_PATH,
+  RESERVED_INNER_PATHS,
   parseExtensionURL,
   buildExtensionURL,
   panelIdFor,

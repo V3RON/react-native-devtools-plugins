@@ -207,10 +207,8 @@ test("a leading slash stays extension-relative, and a reserved path is refused",
       // content scripts inherit that rather than inventing a second rule.
       const leading = resolveDeclaredPath("x", "/etc/passwd");
       assert.strictEqual(leading.ok, true);
-      assert.strictEqual(
-        leading.filePath,
-        path.join(path.resolve(root, "x"), "etc/passwd")
-      );
+      assert.strictEqual(leading.packagePath, "etc/passwd", "the extension's own etc/passwd");
+      assert.strictEqual(leading.entryKind, "missing", "which this extension does not have");
       assert.strictEqual(resolveDeclaredPath("x", "ok.js").ok, true);
     }
   ));

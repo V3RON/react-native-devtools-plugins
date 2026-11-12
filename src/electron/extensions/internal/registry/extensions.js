@@ -2,49 +2,29 @@
 // (docs/features/EXTENSION-MANAGEMENT.md). Replaces the old hardcoded fork
 // knowledge: the shell scans the folder, parses each manifest and enumerates
 // the devtools pages to the frontend (panel-host.js -> panel-bridge).
-const fs = require("fs");
-const path = require("path");
-const { settings: config } = require("../settings");
 const extensionServer = require("../scheme/extension-server");
 const contentScripts = require("../content/content-scripts");
 const { buildExtensionURL } = require("../scheme/protocol");
+const { listPackages } = require("./packages");
 
 /** Every installed extension folder name, in filesystem order. */
-const extensionFolders = () => {
-  try {
-    return fs
-      .readdirSync(config.extensionsDir, { withFileTypes: true })
-      .filter((entry) => entry.isDirectory())
-      .map((entry) => entry.name);
-  } catch {
-    return []; // no extensions dir -> no extensions
-  }
-};
+const extensionFolders = () => listPackages().map((pkg) => pkg.id);
 
 /**
  * Every extension folder with a `devtools_page` manifest entry.
  * @returns {{ extensionId: string, name: string, devtoolsPageURL: string }[]}
  */
 const scanExtensions = () => {
-  let entries;
-  try {
-    entries = fs.readdirSync(config.extensionsDir, { withFileTypes: true });
-  } catch {
-    return []; // no extensions dir -> no extensions
-  }
   const found = [];
-  for (const entry of entries) {
-    if (!entry.isDirectory()) {
-      continue;
-    }
-    const manifest = extensionServer.loadManifest(entry.name);
+  for (const { id } of listPackages()) {
+    const manifest = extensionServer.loadManifest(id);
     if (!manifest || !manifest.devtools_page) {
       continue;
     }
     found.push({
-      extensionId: entry.name,
-      name: manifest.name || entry.name,
-      devtoolsPageURL: buildExtensionURL(entry.name, manifest.devtools_page),
+      extensionId: id,
+      name: manifest.name || id,
+      devtoolsPageURL: buildExtensionURL(id, manifest.devtools_page),
     });
   }
   return found;
@@ -62,18 +42,9 @@ const scanExtensions = () => {
  * @returns {{ extensionId: string, name: string, script: string, type: "classic" | "module" }[]}
  */
 const scanBackgroundExtensions = () => {
-  let entries;
-  try {
-    entries = fs.readdirSync(config.extensionsDir, { withFileTypes: true });
-  } catch {
-    return []; // no extensions dir -> no extension
-  }
   const found = [];
-  for (const entry of entries) {
-    if (!entry.isDirectory()) {
-      continue;
-    }
-    const manifest = extensionServer.loadManifest(entry.name);
+  for (const { id } of listPackages()) {
+    const manifest = extensionServer.loadManifest(id);
     const background = manifest && manifest.background;
     if (!background || typeof background !== "object") {
       continue;
@@ -91,8 +62,8 @@ const scanBackgroundExtensions = () => {
       continue;
     }
     found.push({
-      extensionId: entry.name,
-      name: manifest.name || entry.name,
+      extensionId: id,
+      name: manifest.name || id,
       script,
       // `type: "module"` is Chrome's ESM opt-in for the service worker; the
       // bootstrap document has to say so on the <script> tag or the import

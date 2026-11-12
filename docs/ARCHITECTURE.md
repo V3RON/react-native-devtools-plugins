@@ -25,7 +25,7 @@ src/electron/
 │       ├── ExtensionHost.js composition root: builds every service, attachWindow, dispose
 │       ├── settings.js      the host's configuration (set by createExtensionHost; no env)
 │       ├── scheme/          rozenite:// privileges + session protocol handler, CSP, URL helpers
-│       ├── registry/        folder scan, manifests + i18n, install state
+│       ├── registry/        extension packages (packages/), scan, manifests + i18n, install state
 │       ├── broker/          extension IPC channels, frame principals, grants, delivery scope
 │       ├── frontend/        panel host, panel bridge (main-world source), theme, frontend guard
 │       ├── contexts/        message router, context registry/requests, background + options hosts,
@@ -110,14 +110,20 @@ expression `executeJavaScript`-ed into the frontend's main world, never `require
   `getBody` over async IPC. No Electron, no session import: `sendCommand` / `onEvent` are
   injected, so the model is unit-testable without a socket.
   [features/DEVTOOLS-NETWORK.md](features/DEVTOOLS-NETWORK.md).
+- `registry/packages/` — **extension packages**: one read-only object per installed
+  extension (`entry`, `list`, `read`, `readText`, `open(path, {start, end})`), addressed by
+  inner path and never handing out an OS path. Every reader of extension files goes through
+  one: the file server, the scans, i18n, content scripts, the broker's panel-page check.
+  Implementations: a folder under `extensions/` (`directory-package.js`) and an in-memory
+  one for tests (`memory-package.js`); `tests/extension-packages.test.js` runs one contract
+  suite against both. The folder's containment rule lives there once (it used to be copied
+  into the i18n reader): decided on `fs.realpath` of both the folder and the target, so a
+  symlink planted inside an extension cannot point outside it, and a symlinked folder is
+  never an extension root — the same verdict the scan reaches, because `readdir` +
+  `isDirectory()` never reports a link (`tests/extension-symlink-containment.test.js`).
 - `extension-server.js` — registers the privileged custom scheme **`rozenite://`**
-  mapping `rozenite://<extension-id>/<path>` → `extensions/<extension-id>/<path>`,
-  guarded against path traversal. **Installing an extension = dropping its unpacked
-  folder into `extensions/`.** Containment is decided on `fs.realpath` of both the folder
-  and the target, so a symlink planted inside an extension cannot point outside it, and a
-  symlinked folder is never an extension root — the same verdict the scan reaches, because
-  `readdir` + `isDirectory()` never reports a link
-  (`tests/extension-symlink-containment.test.js`). Every response carries that extension's CSP
+  mapping `rozenite://<extension-id>/<path>` to that extension's package. **Installing an
+  extension = dropping its unpacked folder into `extensions/`.** Every response carries that extension's CSP
   (`src/electron/extensions/internal/scheme/csp.js`): its own `content_security_policy`, or Chrome's MV3 default.
   The handler is **`protocol.handle`**, not the deprecated `registerFileProtocol`, because
   one response kind has no bytes on disk: the reserved path
@@ -126,8 +132,9 @@ expression `executeJavaScript`-ed into the frontend's main world, never `require
   generated — the extension folder is a read-only install — and its only body content is one
   same-origin `<script src=…>`, because the CSP this server itself enforces
   (`script-src 'self'`) would refuse the inline script the alternative implies. Files are
-  served through `net.fetch(pathToFileURL(…))` so Chromium picks the MIME type (a module
-  script with the wrong type is a hard load failure), with the CSP header re-applied.
+  streamed from the package with a type from `scheme/mime.js` (a module script with the
+  wrong type is a hard load failure; a name with no known extension gets no type, so
+  Chromium sniffs it as its `file://` loader did) and the extension's CSP.
   Reserved paths are reserved in both directions, so a real file cannot shadow the bootstrap
   and `?script=` cannot name a file outside the extension — it goes through the same
   containment check as any other request.

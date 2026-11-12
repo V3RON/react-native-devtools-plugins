@@ -21,8 +21,8 @@
 // session preload also runs in gets "no handler registered" for every invoke. It also
 // means no clash with the embedder's own ipcMain channels, and detaching removes exactly
 // what was installed.
-const fs = require("fs");
 const extensionServer = require("../scheme/extension-server");
+const { packageFor } = require("../registry/packages");
 // The grant filter `networkSenderFor` below applies to every host->frame network
 // push. Importing it here is load-bearing: the call sits inside the sender filter
 // that network-service's `broadcast` wraps in `try { … } catch {}`, so an unbound
@@ -199,12 +199,8 @@ const createBroker = ({
   /** Whether `pagePath` (query/hash ignored) names an existing file inside the extension. */
   const panelPageExists = (extensionId, pagePath) => {
     const file = pagePath.split(/[?#]/)[0].replace(/^\/+/, "");
-    const resolved = file && extensionServer.resolveExtensionFile(extensionId, file);
-    try {
-      return Boolean(resolved) && fs.statSync(resolved).isFile();
-    } catch {
-      return false;
-    }
+    const pkg = file ? packageFor(extensionId) : null;
+    return Boolean(pkg) && pkg.entry(file).kind === "file";
   };
 
   const makeFrameSender =
@@ -329,7 +325,9 @@ const createBroker = ({
       } catch {
         return { ok: false };
       }
-      if (!extensionServer.resolveExtensionFile(extensionId, "")) {
+      // An installed package, not just a plausible name: the frame's origin has to be
+      // an extension this host actually has.
+      if (!packageFor(extensionId)) {
         return { ok: false };
       }
       const key = `${event.sender.id}:${event.frameId}`;
@@ -781,7 +779,7 @@ const createBroker = ({
       } catch {
         return { ok: false, error: "openOptionsPage: the caller is not an extension page." };
       }
-      if (!extensionServer.resolveExtensionFile(extensionId, "")) {
+      if (!packageFor(extensionId)) {
         return { ok: false, error: "openOptionsPage: unknown extension." };
       }
       return optionsHost.openOptionsPage(extensionId);

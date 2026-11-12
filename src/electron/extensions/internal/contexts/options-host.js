@@ -130,10 +130,11 @@ const attachOptionsHost = ({ webPreferences, attachIpc = () => {}, ...deps } = {
   return createOptionsHost({
     readManifest: deps.readManifest || require("../scheme/extension-server").loadManifest,
     buildUrl: (extensionId, innerPath) => {
-      // Containment is the file server's call, same as every other extension URL:
-      // a manifest that names `../../etc/passwd` gets no URL, not a window on a 404.
-      const { resolveExtensionFile } = require("../scheme/extension-server");
-      if (!resolveExtensionFile(extensionId, innerPath)) {
+      // Containment is the package's call, same as every other extension URL: a
+      // manifest that names `../../etc/passwd` gets no URL, not a window on a 404.
+      const { packageFor } = require("../registry/packages");
+      const pkg = packageFor(extensionId);
+      if (!pkg || pkg.entry(innerPath).kind === "refused") {
         return null;
       }
       return buildExtensionURL(extensionId, innerPath);

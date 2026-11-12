@@ -15,6 +15,9 @@ const { settings: config } = require("../src/electron/extensions/internal/settin
 config.extensionsDir = require("../src/electron/shell/config").extensionsDir;
 const extensionServer = require("../src/electron/extensions/internal/scheme/extension-server");
 const i18nHost = require("../src/electron/extensions/internal/registry/i18n-host");
+const { createDirectoryPackage } = require("../src/electron/extensions/internal/registry/packages");
+/** The folder as the extension package the host reads it through. */
+const packageAt = (dir, id = "ext") => createDirectoryPackage({ id, root: dir });
 const i18n = require("../src/electron/extensions/internal/registry/i18n");
 
 const quiet = () => {
@@ -62,7 +65,7 @@ const FILES = {
 };
 
 const bundleFor = (dir, uiLocale, log) =>
-  i18nHost.loadBundle({ root: dir, extensionId: "ext", uiLocaleOverride: uiLocale, log });
+  i18nHost.loadBundle({ pkg: packageAt(dir), extensionId: "ext", uiLocaleOverride: uiLocale, log });
 
 test("the bundle merges the chain per message: pt-BR -> pt -> en", () => {
   withExtension(FILES, (dir) => {
@@ -203,10 +206,10 @@ test("an unknown __MSG_ name is left as written; a broken catalog never breaks t
 test("CSS localization: only files that use the marker are rewritten", () => {
   withExtension(FILES, (dir) => {
     const text = fs.readFileSync(path.join(dir, "panel.css"), "utf8");
-    const localized = i18nHost.localizeCssFile({ text, root: dir, extensionId: "ext", uiLocaleOverride: "ar", log: quiet().log });
+    const localized = i18nHost.localizeCssFile({ text, pkg: packageAt(dir), extensionId: "ext", uiLocaleOverride: "ar", log: quiet().log });
     assert.strictEqual(localized, "body{direction:rtl;content:'مرحبا'}");
     assert.strictEqual(
-      i18nHost.localizeCssFile({ text: "a{b:c}", root: dir, extensionId: "ext", uiLocaleOverride: "ar", log: quiet().log }),
+      i18nHost.localizeCssFile({ text: "a{b:c}", pkg: packageAt(dir), extensionId: "ext", uiLocaleOverride: "ar", log: quiet().log }),
       "a{b:c}"
     );
   });
@@ -236,7 +239,7 @@ test("the shipped sample extension is fully translated where it claims to be", (
     }
     assert.ok(other.heading && other.greeting, `${locale} translates the panel`);
   }
-  const bundle = i18nHost.loadBundle({ root: dir, extensionId: "sample-extension", uiLocaleOverride: "pt-BR", log: quiet().log });
+  const bundle = i18nHost.loadBundle({ pkg: packageAt(dir), extensionId: "sample-extension", uiLocaleOverride: "pt-BR", log: quiet().log });
   assert.strictEqual(i18n.getMessage(bundle, ["greeting", ["Ada", "3"]]), "Olá, Ada! Você tem 3 mensagens novas.");
   assert.strictEqual(i18n.getMessage(bundle, ["price"]), "Custa R$5 por mês");
   assert.strictEqual(i18n.getMessage(bundle, ["onlyDefault"]), "(this line exists only in the default locale, en)");
@@ -268,8 +271,8 @@ test("the bundle is cached until a catalog or the manifest changes, then rebuilt
 
 test("only CSS that contains a marker takes the localizing path", () => {
   withExtension({ ...FILES, "plain.css": "a{b:c}" }, (dir) => {
-    assert.strictEqual(i18nHost.cssUsesMessages(path.join(dir, "plain.css")), false);
-    assert.strictEqual(i18nHost.cssUsesMessages(path.join(dir, "panel.css")), true);
+    assert.strictEqual(i18nHost.cssUsesMessages(packageAt(dir), "plain.css"), false);
+    assert.strictEqual(i18nHost.cssUsesMessages(packageAt(dir), "panel.css"), true);
   });
 });
 

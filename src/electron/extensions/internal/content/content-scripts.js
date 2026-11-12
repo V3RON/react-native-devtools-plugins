@@ -17,25 +17,15 @@
 // This is the registry half only. Deciding WHETHER a script may run inside the
 // user's app is src/electron/extensions/internal/content/content-gate.js (default CLOSED), and actually running it
 // is src/electron/extensions/internal/content/content-bridge.js.
-const fs = require("fs");
-const { settings: config } = require("../settings");
-const { resolveExtensionFile, loadManifest } = require("../scheme/extension-server");
+const { loadManifest } = require("../scheme/extension-server");
+const { packageFor, listPackages } = require("../registry/packages");
 
 /**
- * The installed extension folders — the same list `extensions.js` walks. Read at
- * CALL time (like the scanners do), which is what lets a test point
- * `config.extensionsDir` at a throwaway folder.
+ * The installed extensions — the same list `extensions.js` walks. Read at CALL time
+ * (like the scanners do), which is what lets a test point `config.extensionsDir` at a
+ * throwaway folder.
  */
-const extensionFolders = () => {
-  try {
-    return fs
-      .readdirSync(config.extensionsDir, { withFileTypes: true })
-      .filter((entry) => entry.isDirectory())
-      .map((entry) => entry.name);
-  } catch {
-    return [];
-  }
-};
+const extensionFolders = () => listPackages().map((pkg) => pkg.id);
 
 // Chrome's defaults (developer.chrome.com/docs/extensions/reference/manifest/content-scripts).
 const DEFAULT_RUN_AT = "document_idle";
@@ -140,17 +130,18 @@ const parseContentScripts = (manifest) => {
 };
 
 /**
- * Resolve one declared inner path to a path on disk, or to a refusal.
+ * Resolve one declared inner path inside the extension's package, or to a refusal.
  *
- * `resolveExtensionFile` is the server's own guard (src/electron/extensions/internal/scheme/extension-server.js):
- * the same rule that decides what `rozenite://<id>/<path>` may serve. Going through
- * it rather than `path.join`ing here is the point — content scripts then cannot
- * reach a file the extension could not already fetch from its own origin, and a
- * sibling-escaping path comes back as `null`, i.e. refused, never read.
+ * The package's containment rule (../registry/packages) is the same one that decides
+ * what `rozenite://<id>/<path>` may serve, so content scripts cannot reach a file the
+ * extension could not already fetch from its own origin, and a sibling-escaping path
+ * comes back refused, never read. `packagePath` is the normalized name the package
+ * knows it by: a leading `/` is the extension's root (Chrome's rule).
  */
 const resolveDeclaredPath = (extensionId, innerPath) => {
-  const filePath = resolveExtensionFile(extensionId, innerPath);
-  if (!filePath) {
+  const pkg = packageFor(extensionId);
+  const info = pkg ? pkg.entry(innerPath) : { kind: "missing" };
+  if (info.kind === "refused") {
     return {
       ok: false,
       refused: true,
@@ -158,7 +149,12 @@ const resolveDeclaredPath = (extensionId, innerPath) => {
       reason: `refused: "${innerPath}" resolves outside extension "${extensionId}"`,
     };
   }
-  return { ok: true, innerPath, filePath };
+  return {
+    ok: true,
+    innerPath,
+    packagePath: String(innerPath || "").replace(/^\/+/, ""),
+    entryKind: info.kind,
+  };
 };
 
 /**
@@ -172,13 +168,7 @@ const resolveEntryPaths = (extensionId, entry) => {
     if (!resolved.ok) {
       return { ...resolved, kind };
     }
-    let isFile = false;
-    try {
-      isFile = fs.statSync(resolved.filePath).isFile();
-    } catch {
-      isFile = false;
-    }
-    if (!isFile) {
+    if (resolved.entryKind !== "file") {
       return {
         ok: false,
         missing: true,
@@ -187,7 +177,7 @@ const resolveEntryPaths = (extensionId, entry) => {
         reason: `${kind} "${innerPath}" is declared in the manifest but is not a file in ${extensionId}`,
       };
     }
-    return { ok: true, kind, innerPath, filePath: resolved.filePath };
+    return { ok: true, kind, innerPath, packagePath: resolved.packagePath };
   };
   return {
     js: entry.js.map(resolve("js")),
@@ -216,10 +206,12 @@ const readEntrySources = (extensionId, entry, mayRead = () => false) => {
       problems.push(`not read: "${file.innerPath}" (the injection gate did not allow it)`);
       continue;
     }
-    try {
-      sources.push({ innerPath: file.innerPath, source: fs.readFileSync(file.filePath, "utf8") });
-    } catch (error) {
-      problems.push(`could not read "${file.innerPath}": ${error.message}`);
+    const pkg = packageFor(extensionId);
+    const source = pkg ? pkg.readText(file.packagePath) : null;
+    if (source === null) {
+      problems.push(`could not read "${file.innerPath}": it is no longer a readable file of ${extensionId}`);
+    } else {
+      sources.push({ innerPath: file.innerPath, source });
     }
   }
   for (const file of entry.css) {

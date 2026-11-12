@@ -68,6 +68,9 @@ const {
   scanBackgroundExtensions,
 } = require("../src/electron/extensions/internal/registry/extensions");
 const i18nHost = require("../src/electron/extensions/internal/registry/i18n-host");
+const { createDirectoryPackage, packageFor } = require("../src/electron/extensions/internal/registry/packages");
+/** A folder handed to i18n-host directly, as the package it reads through. */
+const packageAt = (root) => createDirectoryPackage({ id: path.basename(root), root });
 const i18n = require("../src/electron/extensions/internal/registry/i18n");
 
 const REAL_EXTENSIONS_DIR = config.extensionsDir;
@@ -315,7 +318,7 @@ suite("a symlinked extension root is refused by the server and skipped by the sc
       const linkedRoot = path.join(config.extensionsDir, "linked.ext");
       const { log, warnings } = quiet();
       const bundle = i18nHost.loadBundle({
-        root: linkedRoot,
+        pkg: packageAt(linkedRoot),
         extensionId: "linked.ext",
         uiLocaleOverride: "en",
         log,
@@ -329,7 +332,7 @@ suite("a symlinked extension root is refused by the server and skipped by the sc
         i18nHost.localizeManifest({
           manifest: { name: "__MSG_extName__" },
           rawText: '{"name":"__MSG_extName__"}',
-          root: linkedRoot,
+          pkg: packageAt(linkedRoot),
           extensionId: "linked.ext",
           uiLocaleOverride: "en",
           log,
@@ -460,7 +463,7 @@ suite("the reserved inner paths keep their rules, and main-side reads still reso
       const warnings = [];
       const log = { warn: (message) => warnings.push(message), log() {}, error() {} };
       const bundle = i18nHost.loadBundle({
-        root,
+        pkg: packageAt(root),
         extensionId: "reserved",
         uiLocaleOverride: "en",
         log,
@@ -470,7 +473,7 @@ suite("the reserved inner paths keep their rules, and main-side reads still reso
         i18nHost.localizeManifest({
           manifest: { name: "__MSG_extName__" },
           rawText: '{"name":"__MSG_extName__"}',
-          root,
+          pkg: packageAt(root),
           extensionId: "reserved",
           uiLocaleOverride: "en",
           log,
@@ -490,11 +493,11 @@ suite("the reserved inner paths keep their rules, and main-side reads still reso
         real(path.join(extensionsDir, "reserved/styles/panel.css")),
         "a stylesheet behind an in-folder link resolves to the real file"
       );
-      assert.strictEqual(i18nHost.cssUsesMessages(cssPath), true, "the marker is seen");
+      assert.strictEqual(i18nHost.cssUsesMessages(packageFor("reserved"), "styles-link/panel.css"), true, "the marker is seen");
       assert.strictEqual(
         i18nHost.localizeCssFile({
           text: fs.readFileSync(cssPath, "utf8"),
-          root,
+          pkg: packageAt(root),
           extensionId: "reserved",
           uiLocaleOverride: "en",
           log,
@@ -514,7 +517,7 @@ suite("the reserved inner paths keep their rules, and main-side reads still reso
       //     reports and what the frame is served must be the same string.
       const linkedManifest = loadManifest("linked-manifest");
       const linkedBundle = i18nHost.loadBundle({
-        root: resolveInsideExtension("linked-manifest", ""),
+        pkg: packageFor("linked-manifest"),
         extensionId: "linked-manifest",
         uiLocaleOverride: "en",
         log,
@@ -621,7 +624,7 @@ suite("the i18n and CSS-localisation reads are contained too: an escaping _local
       const root = resolveInsideExtension("victim", "");
       const { log, warnings } = quiet();
       const bundle = i18nHost.loadBundle({
-        root,
+        pkg: packageAt(root),
         extensionId: "victim",
         uiLocaleOverride: "en",
         log,
@@ -634,7 +637,7 @@ suite("the i18n and CSS-localisation reads are contained too: an escaping _local
         i18nHost.localizeManifest({
           manifest: { name: "__MSG_extName__" },
           rawText: '{"name":"__MSG_extName__"}',
-          root,
+          pkg: packageAt(root),
           extensionId: "victim",
           uiLocaleOverride: "en",
           log,
@@ -644,7 +647,7 @@ suite("the i18n and CSS-localisation reads are contained too: an escaping _local
       );
       const css = i18nHost.localizeCssFile({
         text: fs.readFileSync(resolveExtensionFile("victim", "styles/panel.css"), "utf8"),
-        root,
+        pkg: packageAt(root),
         extensionId: "victim",
         uiLocaleOverride: "en",
         log,
@@ -682,7 +685,7 @@ suite("the i18n and CSS-localisation reads are contained too: an escaping _local
       const root = resolveInsideExtension("by-locale", "");
       const { log, warnings } = quiet();
       const bundle = i18nHost.loadBundle({
-        root,
+        pkg: packageAt(root),
         extensionId: "by-locale",
         uiLocaleOverride: "pt",
         log,
@@ -712,7 +715,7 @@ suite("the i18n and CSS-localisation reads are contained too: an escaping _local
       // name every caller starts from.
       const { log, warnings } = quiet();
       const bundle = i18nHost.loadBundle({
-        root: resolveInsideExtension("fake-manifest", ""),
+        pkg: packageFor("fake-manifest"),
         extensionId: "fake-manifest",
         uiLocaleOverride: "pt",
         log,
@@ -757,7 +760,7 @@ suite("the i18n and CSS-localisation reads are contained too: an escaping _local
     () => {
       const { log, warnings } = quiet();
       const bundle = i18nHost.loadBundle({
-        root: resolveInsideExtension("linked-locale", ""),
+        pkg: packageFor("linked-locale"),
         extensionId: "linked-locale",
         uiLocaleOverride: "en",
         log,
@@ -821,7 +824,7 @@ suite("the cache signature stamps the contained path, so a relink cannot keep a 
       const extRoot = resolveInsideExtension("stamper", "");
       const load = (logs) =>
         i18nHost.loadBundle({
-          root: extRoot,
+          pkg: packageAt(extRoot),
           extensionId: "stamper",
           uiLocaleOverride: "en",
           log: logs.log,
