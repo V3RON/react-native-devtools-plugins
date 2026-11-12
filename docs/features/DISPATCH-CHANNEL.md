@@ -2,7 +2,7 @@
 
 | | |
 | --- | --- |
-| **Status** | 🟨 partial — channel live; **frontend→backend messaging is structurally unused** (the CDP bridge owns the socket instead) |
+| **Status** | 🟨 partial — channel live; **frontend→backend messaging is structurally unused** (the host opens its own CDP session instead) |
 | **Tier** | 1 (infrastructure; unblocks most of Tier 1/2) |
 | **Blocks** | save flow, eye-dropper, device discovery |
 
@@ -69,24 +69,28 @@ function Co(e) {
 `sendMessageToBackend` is used by `MainConnection` **alone** (`sendRawMessage` →
 `InspectorFrontendHostInstance.sendMessageToBackend(e)`; replies arrive as
 `dispatchMessage`/`dispatchMessageChunk` events). Our frontend URL carries
-`?ws=localhost:9223` (`src/electron/shell/config.js`), so the factory returns
+`?ws=<Metro's inspector-proxy URL for the target>` (`src/electron/shell/frontend-target.js`
+adds it from Metro's `/json/list`), so the factory returns
 `WebSocketConnection` and `MainConnection` is never constructed — the frontend dials
 the socket itself. The host therefore cannot reach the backend *through* the
 frontend, and `src/electron/shell/frontend-host.js`'s no-op is correct, not missing work.
 
-**Replaced by:** the shell owning the socket. `src/electron/extensions/internal/cdp/cdp-bridge.js` accepts the
-frontend's connection, keeps the upstream session to Metro, and exposes
-`sendCommand(method, params)` / `onEvent(method, handler)` to the host — multiplexed
-onto the frontend's own session by message id, so no second debugger appears on the
-app. First consumer: [inspected-window](INSPECTED-WINDOW.md).
+**Replaced by:** the host's own CDP session.
+`src/electron/extensions/internal/cdp/cdp-session.js` opens a second, independent session to
+the target in the frontend URL's `ws=`, next to the frontend's, and exposes
+`sendCommand(method, params)` / `onEvent(method, handler)` / `onAttach` to the host. Nothing
+sits between the frontend and the app. It needs the target to report
+`supportsMultipleDebuggers` (checked on Metro's `/json/list` before every dial), because
+otherwise a second debugger would evict the frontend. First consumer:
+[inspected-window](INSPECTED-WINDOW.md).
 
-Because that dial is made by the *frontend document itself*, the `Origin` it presents on
-the upgrade is the origin of its own URL — `http://127.0.0.1:8081` on the default
+Because the frontend's dial is made by the *frontend document itself*, the `Origin` it
+presents on the upgrade is the origin of its own URL — `http://127.0.0.1:8081` on the default
 frontend URL, and whatever `DEVTOOLS_FRONTEND_URL` says otherwise [inferred from the URL;
-the header itself is Chrome's WebSocket behaviour, not measured against the fork here].
-That is the origin the bridge allowlists (issue #23): `src/electron/shell/config.js` derives it from
-the same `frontendURL` the window loads, so the frontend is let in by construction, and
-anything else needs `DEVTOOLS_CDP_ALLOWED_ORIGINS`.
+the header itself is Chrome's WebSocket behaviour, not measured against the fork here]. The
+host's session sends that same origin explicitly (`Origin: <frontend URL origin>`), which is
+what Metro's inspector proxy accepts. (The bridge on `:9223` that used to allowlist it,
+issue #23, has been removed.)
 Still missing:
 
 - No producer yet for `colorThemeChanged`/etc.; they only become meaningful as
@@ -105,12 +109,12 @@ Still missing:
    every IPC hop in the shell is `invoke`/`handle` (see `src/electron/extensions/internal/broker/channels.js`).
 3. ~~Wire `sendMessageToBackend` → the CDP socket the frontend owns~~ ✅ **resolved
    differently**: the escape hatch is structurally dead with `?ws=` in the URL, so the
-   shell took over the socket instead (`src/electron/extensions/internal/cdp/cdp-bridge.js`). Do **not** wire
+   host opens its own session instead (`src/electron/extensions/internal/cdp/cdp-session.js`). Do **not** wire
    `sendMessageToBackend` — it would only work by dropping `?ws=` and switching the
    frontend to `MainConnection`, trading a real socket for a chunked event protocol.
 4. ~~Replace the `Events` postMessage bridge~~ ✅ done: the `Events` global is deleted
    (it had no producers left) and [devtools-network](DEVTOOLS-NETWORK.md) /
-   [webRequest](WEBREQUEST.md) are consumers of the CDP bridge
+   [webRequest](WEBREQUEST.md) are consumers of the host's CDP session
    (`onEvent("Network.*")` in `src/electron/extensions/internal/cdp/network-model.js`), not a parallel transport.
 
 ## Definition of done
@@ -121,7 +125,7 @@ back.
 
 *Progress:* `contextMenuItemSelected` round-trip implemented (awaiting manual
 verification against the running fork). The CDP-command round-trip is implemented
-through the bridge instead of `sendMessageToBackend` — `chrome.devtools.inspectedWindow
+over the host's own CDP session instead of `sendMessageToBackend` — `chrome.devtools.inspectedWindow
 .eval` is an extension-issued CDP command with a real reply, asserted live in
 `extensions/sample-extension/panel.html` (needs a device: unrun = unverified).
 `showPanel` has a producer: `panelHost.showPanel(panelId)` selects a panel this host

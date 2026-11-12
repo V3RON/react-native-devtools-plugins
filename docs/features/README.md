@@ -10,10 +10,10 @@ needed. Legend and tiers: [../README.md](../README.md). Last reviewed: 2026-10-1
 | [Extension management & manifest support](EXTENSION-MANAGEMENT.md) | 🟨 scan (pages + backgrounds) + manifest parse + per-extension CSP + permission enforcement + install/version record; no lifecycle UI | 1 | — |
 | [DevTools panels](DEVTOOLS-PANELS.md) (`chrome.devtools.panels`) | 🟨 create + theme + `Panel.onShown/onHidden` work; `sources`/`performance`/`network.getHAR` implementable; `panels.elements.*` 🚷 no anchor | 1 | — |
 | [DevTools network](DEVTOOLS-NETWORK.md) (`chrome.devtools.network`) | 🟨 real CDP model (`Network.*`), unverified on device; `onNavigated` diverges | 1 | RN network inspection |
-| [Inspected window](INSPECTED-WINDOW.md) (`chrome.devtools.inspectedWindow`) | 🟨 `eval` + `reload` real via the CDP bridge; `getResources` open, `getSelectedNode` 🚷 no anchor | 1 | — |
+| [Inspected window](INSPECTED-WINDOW.md) (`chrome.devtools.inspectedWindow`) | 🟨 `eval` + `reload` real over the host's CDP session; `getResources` open, `getSelectedNode` 🚷 no anchor | 1 | — |
 | [Runtime messaging](RUNTIME-MESSAGING.md) (`chrome.runtime`, Ports, event contract) | 🟨 surface + sendMessage + Ports + background peer + `onInstalled`/`onStartup` real | 1 | — |
 | [Storage & i18n](STORAGE-AND-I18N.md) (`chrome.storage`, `chrome.i18n`) | 🟨 storage real for local/sync/session, host-owned per extension with cross-context `onChanged`; managed missing; **i18n real** (sync `getMessage`, `__MSG_` manifest/CSS; `detectLanguage` stub) | 1 | — |
-| [Host→frontend dispatch channel](DISPATCH-CHANNEL.md) (`InspectorFrontendAPI` / `events`) | 🟨 channel live (context-menu round-trip); frontend→backend messaging is structurally unused — the CDP bridge owns the socket | 1 (infrastructure) | — |
+| [Host→frontend dispatch channel](DISPATCH-CHANNEL.md) (`InspectorFrontendAPI` / `events`) | 🟨 channel live (context-menu round-trip); frontend→backend messaging is structurally unused — the host opens its own CDP session | 1 (infrastructure) | — |
 
 ## Tier 2 — real extensions ask for these
 
@@ -69,10 +69,10 @@ Both are in [../ROADMAP.md](../ROADMAP.md#what-we-can-actually-implement-the-pru
 ## Dependency sketch
 
 ```
-cdp-bridge (src/electron/extensions/internal/cdp/cdp-bridge.js) ──┬── inspected-window.eval ──► content-scripts
-                                      │   (panels.elements 🚷: no anchor)
-                                      ├── devtools-network ── webRequest
-                                      └── device discovery (later)
+cdp-session (src/electron/extensions/internal/cdp/cdp-session.js) ──┬── inspected-window.eval ──► content-scripts
+  (the host's own session to Metro's proxy, │   (panels.elements 🚷: no anchor)
+   next to the frontend's)                  ├── devtools-network ── webRequest
+                                            └── device discovery (later)
 dispatch-channel ──┬── devtools-panels (events, theme, context menus)
                    └── save/downloads
 extension-management ──► background-worker (live) ──► alarms, tabs, notifications

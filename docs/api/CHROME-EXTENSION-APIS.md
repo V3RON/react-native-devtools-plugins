@@ -27,7 +27,7 @@ Per-namespace plans live in [../features/README.md](../features/README.md).
   [features/DEVTOOLS-NETWORK.md](../features/DEVTOOLS-NETWORK.md).
 - **`devtools.inspectedWindow`** — 🟨 `eval` and `reload` are **real**: CDP
   `Runtime.evaluate` (`returnByValue`, `awaitPromise`) and `Page.reload` over the
-  shell's CDP bridge, answering Chrome's `[value, exceptionInfo]` pair. `frameURL` /
+  host's CDP session, answering Chrome's `[value, exceptionInfo]` pair. `frameURL` /
   `useContentScriptContext` accepted-and-ignored; `getResources` inert (open, implementable) and
   `getSelectedNode` 🚷 (its anchor is the Elements panel, which RN DevTools has no notion of) → [features/INSPECTED-WINDOW.md](../features/INSPECTED-WINDOW.md). (Against a
   real Hermes backend this is asserted by the sample panel, not yet run on a device.)

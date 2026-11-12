@@ -30,7 +30,7 @@ src/electron/
 │       ├── frontend/        panel host, panel bridge (main-world source), theme, frontend guard
 │       ├── contexts/        message router, context registry/requests, background + options hosts,
 │       │                    frame policy (webPreferences)
-│       ├── cdp/             CDP bridge, inspectedWindow, network model/service
+│       ├── cdp/             the host's CDP session, inspectedWindow, network model/service
 │       ├── content/         content-script registry, gate, bridge + in-app loader
 │       ├── services/        storage, notifications, downloads/save, tabs, external open
 │       ├── preload/         the extension preload (registered on the session): extension
@@ -39,10 +39,12 @@ src/electron/
 └── shell/                   development shell — stands in for upstream's debugger-shell; not ported
     ├── main.js, window.js   lifecycle + the frontend window, over the public API only
     ├── config.js            DEVTOOLS_* env → the shell's options + extensionHostConfig()
+    ├── frontend-target.js   picks the app from Metro's /json/list when the URL names no ws=
     ├── preload.js           the window's own preload → frontend-host.js (InspectorFrontendHost)
     └── ipc.js, channels.js, frontend-frame.js, host-files.js, host-config.js,
         context-menu.js, dispatch.js, window-open-policy.js
-src/tools/                   dev-only tools (fake-cdp, rn-cdp CLI wrapper)
+src/tools/                   dev-only tools (fake-cdp)
+scripts/bundle-preload.js    bundles each preload into one file (both run sandboxed)
 extensions/                  "installed extensions": sample-extension/, graphql/, altair/, showcase/
 ```
 
@@ -62,52 +64,50 @@ expression `executeJavaScript`-ed into the frontend's main world, never `require
 - `extensions/internal/ExtensionHost.js` — the composition root. `createExtensionHost`
   registers the scheme handler and the extension preload on the session, builds every
   service and the IPC broker; `attachWindow` (one window in v1) starts the frontend guard,
-  panel host, CDP bridge, content bridge and background contexts, and the window's `closed`
+  panel host, its own CDP session, content bridge and background contexts, and the window's `closed`
   detaches them — worker windows close with it, so `window-all-closed` quits as usual;
   `dispose` (on `will-quit`) flushes storage and unregisters everything.
 - `shell/main.js` — the development shell's lifecycle wiring, over the public API only.
   `shell/window.js` — BrowserWindow + frontend load.
-  `shell/config.js` — frontend URL (`http://127.0.0.1:8081/rozenite/rn_fusebox.html?ws=localhost:9223`),
-  extensions dir, CDP-bridge knobs; all env-overridable: `DEVTOOLS_FRONTEND_URL`,
-  `DEVTOOLS_EXTENSIONS_DIR`, `DEVTOOLS_CDP_BRIDGE` (`off` = external relay),
+  `shell/config.js` — frontend URL (`http://127.0.0.1:8081/rozenite/rn_fusebox.html`, no
+  `ws=`), extensions dir, target filters; all env-overridable: `DEVTOOLS_FRONTEND_URL`,
+  `DEVTOOLS_EXTENSIONS_DIR`,
   `DEVTOOLS_SHOW_PANEL` (`<extensionId>[/<pagePath>]`: open on that extension's panel),
-  `DEVTOOLS_METRO_HOST` / `DEVTOOLS_METRO_PORT`, `DEVTOOLS_CDP_HOST` / `DEVTOOLS_CDP_PORT`,
-  `DEVTOOLS_CDP_ALLOWED_ORIGINS` (extra browser origins for the CDP socket; default: the
-  frontend's own origin only),
-  `DEVTOOLS_APP_FILTER` / `DEVTOOLS_DEVICE_FILTER`, `DEVTOOLS_CDP_REQUEST_TIMEOUT_MS`,
+  `DEVTOOLS_METRO_HOST` / `DEVTOOLS_METRO_PORT`,
+  `DEVTOOLS_APP_FILTER` / `DEVTOOLS_DEVICE_FILTER`, `DEVTOOLS_CDP_REQUEST_TIMEOUT_MS` (the
+  host session's command timeout),
   `DEVTOOLS_UI_LOCALE` (UI locale `chrome.i18n` reports; default: Electron's).
+  `shell/frontend-target.js` — when the frontend URL names no `ws=`/`wss=`, polls Metro's
+  `/json/list`, takes the first `type: node` target that passes the app/device filters and
+  loads the frontend with that target's debugger URL as `?ws=`. The frontend then dials
+  Metro's inspector proxy directly, as it does when dev-middleware launches it upstream.
   The frontend is a patched RN
   DevTools fork ("rozenite") that renders extension panels as iframes; it is **not** in
   this repo.
-- `cdp-bridge.js` — **the shell owns the RN debugger session**. Accepts the frontend's
-  CDP WebSocket (the `ws` host:port from its URL), keeps the upstream socket to Metro's
-  inspector proxy (target discovery via `/json/list`, re-attach loop, bounded
-  reconnect buffer, `127.0.0.1` Origin), and exposes the host-side APIs
-  `sendCommand(method, params) → Promise` and `onEvent(method, handler)`. Host commands
-  are correlated by a reserved message-id range (`HOST_ID_BASE`), so they ride the
-  frontend's own session — the app never sees a second debugger — and their replies are
-  consumed in main instead of being forwarded to the frontend. Everything else relays
-  verbatim. Injected transports/timers/logging (no Electron import) keep it unit-testable
-  against a fake upstream (`tests/cdp-bridge.test.js`). `DEVTOOLS_CDP_BRIDGE=off` leaves
-  the socket to an external relay.
-  **Who may dial it:** bound to `127.0.0.1` and `::1` (both, because the frontend dials
-  `?ws=localhost:…` and `localhost` may resolve to either family) and gated at the
-  WebSocket upgrade: an `Origin` must be the frontend's own or one named by
-  `DEVTOOLS_CDP_ALLOWED_ORIGINS`; a missing `Origin` is accepted from a loopback peer
-  only (a browser cannot omit that header, so its absence means a local tool). Exactly
-  one client owns the session — a second is refused with `close 4001` rather than
-  evicting the first, and a newcomer's frames are held until it wins or is refused.
-  A reload reattaches: the close frees the seat, and an owner that stops answering pings
-  loses it after ~1 s. `docs/SECURITY-PLATFORM.md` F3 is the reasoning.
+- `cdp-session.js` — **the host's own debugger session**, a second CDP session to the
+  target in the attached frontend URL's `ws=` (or `wss=`), next to the frontend's. Nothing
+  sits between the frontend and the app: no listening socket, no URL rewrite, no id
+  multiplexing. It sends `Origin: <frontend URL origin>` (the dev server's, which the
+  inspector proxy requires), and before every dial it GETs `<dev server>/json/list`, finds
+  the entry for that `ws=` and requires `reactNative.capabilities.supportsMultipleDebuggers
+  === true`; otherwise it does not connect, because a second debugger would evict the
+  frontend, and every command rejects with the reason (`status().reason`). Each new session
+  sends `Runtime.enable`, then fires `onAttach`, where consumers re-arm what a session owns
+  (`Network.enable`, `Runtime.addBinding`). A lost socket is re-dialled with back-off. It
+  exposes `sendCommand(method, params) → Promise`, `onEvent(method, handler)`, `onAttach`
+  and `status()`. Injected transports/logging (no Electron import) keep it unit-testable
+  against a fake inspector proxy (`tests/cdp-session.test.js`). Per-session isolation is the
+  backend's: `Runtime.bindingCalled` reaches only sessions that added that binding, and
+  `Network.*` fans out to each session that enabled the domain.
 - `inspected-window.js` — `chrome.devtools.inspectedWindow.eval` / `.reload` as
   `Runtime.evaluate` / `Page.reload` on that session, with the pure CDP → Chrome
   `[value, exceptionInfo]` mapping (`mapEvaluation`).
 - `network-model.js` + `network-service.js` — the shell's own network model, built from the
-  bridge's `Network.*` notifications (`requestWillBeSent` → `loadingFinished`/`loadingFailed`)
+  host session's `Network.*` notifications (`requestWillBeSent` → `loadingFinished`/`loadingFailed`)
   with lazy single-flight `Network.enable`, a bounded record buffer, HAR 1.2 output and lazy
   `Network.getResponseBody` bodies. The service fans one message per lifecycle step out to
   the extension frames that asked for network data and serves `getHar` / `getStatus` /
-  `getBody` over async IPC. No Electron, no bridge import: `sendCommand` / `onEvent` are
+  `getBody` over async IPC. No Electron, no session import: `sendCommand` / `onEvent` are
   injected, so the model is unit-testable without a socket.
   [features/DEVTOOLS-NETWORK.md](features/DEVTOOLS-NETWORK.md).
 - `extension-server.js` — registers the privileged custom scheme **`rozenite://`**
@@ -144,7 +144,10 @@ expression `executeJavaScript`-ed into the frontend's main world, never `require
   in `electron-store`, under `userData`), and therefore whether a worker's first event is
   `onInstalled{install}`, `onInstalled{update}`, or `onStartup`.
 - `frame-security.js` — the one place webPreferences are decided, with the measured
-  reasons for each option. `ipc.js` registers every channel and gates each call on the
+  reasons for each option. `ipc.js` collects every channel's handler and installs them on
+  `webContents.ipc` of each WebContents the host attached (the frontend window, every
+  background and options window, before they load), never on `ipcMain`, so any other
+  WebContents gets "no handler" for every extension channel. It gates each call on the
   calling frame (`event.senderFrame` + `event.frameId`, pinned to the principal that
   registered it), and consults `delivery-scope.js` so a frame only receives deliveries
   its declared permissions cover.
@@ -172,19 +175,19 @@ production preload):
 | `nodeIntegration` | `false` | no `require`/`process`/`Buffer` in any page world (asserted) |
 | `allowRunningInsecureContent` | `false` | with `webSecurity` on, otherwise a secure extension page could pull `http://` subresources |
 | `nodeIntegrationInSubFrames` | `true` | **load-bearing**: with it off the extension-frame preload never runs, so no `chrome.*` exists at all |
-| `sandbox` | `false` | **still open**: a sandboxed preload cannot `require` this repo's preload modules, so enabling it means shipping one bundled preload file — a build step this PoC does not have |
+| `sandbox` | `true` | a sandboxed preload can `require` only `electron` (and `events`/`timers`/`url`), so each preload is one bundled file (`scripts/bundle-preload.js`, output in gitignored `dist/`). Measured by the Electron suites on Electron 38: the session preload still runs in `rozenite://` iframes, and `chrome.*`, messaging, workers and options pages work |
 
 So an extension page reaches the host only through named, validated `invoke` channels,
 and each channel re-derives identity from the calling frame. The remaining gaps are
-listed honestly in [LIMITATIONS.md](LIMITATIONS.md): sandbox off, one shared
-`webPreferences`, and therefore a renderer compromise still being a Node compromise.
+listed honestly in [LIMITATIONS.md](LIMITATIONS.md): one shared `webPreferences`, and one
+shared `rozenite://` origin for every extension.
 
 The end-to-end assertions for all of this live in `tests/extension-frame-electron.test.js`
 + `tests/extension-frame-harness.js`, which boots a production-shaped shell headlessly
-(`show: false`, `DEVTOOLS_CDP_BRIDGE=off`, no Metro) — an extension frame needs neither a
+(`show: false`, no Metro, so no CDP session) — an extension frame needs neither a
 device nor the frontend to be observable. One run goes further: `--fake-rn-app=on` serves a
 fake inspected app inside the harness (on a port the OS picks, reported back on the NDJSON
-`harness` line) and starts the real CDP bridge against it, which is how
+`harness` line) and points the real CDP session at it, which is how
 `tests/delivery-scope.test.js` proves a live network push actually reaches a subscribed frame
 and records the pushes main addressed to each frame, so a filtered-out one is visible too
 (see F6 in [SECURITY-PLATFORM.md](SECURITY-PLATFORM.md) for why those assertions exist).
@@ -298,45 +301,42 @@ network); `chrome.tabs` answers with the one tab this shell has
 ### `src/tools/fake-cdp.js` — dev convenience (`npm run fake-cdp`)
 
 WebSocket proxy: DevTools frontend ⇄ a real Chrome tab's CDP endpoint (port 9222,
-`--target-url` selects the tab). Lets extension behavior be developed against a web
-app. Since the shell now binds the frontend's `ws` port itself, run the shell with
-`DEVTOOLS_CDP_BRIDGE=off` while this proxy holds that port.
-
-### `src/tools/rn-cdp.js` — optional external relay (`npm run rn-cdp`)
-
-A thin CLI over `src/electron/extensions/internal/cdp/cdp-bridge.js`, for running the relay **outside** the shell.
-The shell does this internally now, so the usual flow is just `npm start`. Keep it for
-the external-bridge mode (`DEVTOOLS_CDP_BRIDGE=off npm start` + `npm run rn-cdp`), or
-to serve the frontend from another host. Flags: `--metro-host/--metro-port`,
-`--listen-port`, `--app`, `--device`.
+`--target-url` selects the tab), listening on `:9223`. Lets extension behavior be developed
+against a web app: start the shell with
+`DEVTOOLS_FRONTEND_URL=…/rn_fusebox.html?ws=localhost:9223`. It feeds the frontend only; the
+host's own session does not attach, because the proxy does not answer like Metro's
+`/json/list`, so CDP-backed extension APIs report no session.
 
 ## Data flows (current)
 
 ```
-        RN app  ⇄  Metro /inspector/debug
-                        ▲
-                        │ upstream socket (/json/list discovery + re-attach loop)
-                        ▼
-   host ──► CDP BRIDGE (src/electron/extensions/internal/cdp/cdp-bridge.js) ◄──► DevTools frontend (main frame)
-            │  sendCommand(method, params) → Promise     │ InspectorFrontendHost.* (preload stubs)
-            │  onEvent(method, handler)                  │ setInjectedScriptForOrigin ──► no-op
-            │                                            ▼
-            │  ids ≥ HOST_ID_BASE: consumed here,     extension iframes  rozenite://<id>/<page>
-            │  never forwarded to the frontend;       (preload: chrome shim, no Node surface)
-            │  everything else relays verbatim              ▲
-            │                                               │ async IPC
-            ├── Runtime.evaluate / Page.reload ◄── main/inspected-window.js
-            │                                       (DEVTOOLS_EVAL / DEVTOOLS_RELOAD)
-            └── Network.* ◄─► main/network-model.js ──► network-service.js
-                                (lazy Network.enable,      │  one delivery per lifecycle step,
-                                 HAR 1.2, bodies)          ▼
-                                              chrome.devtools.network + chrome.webRequest
+   RN app  ⇄  Metro inspector proxy (/inspector/debug, /json/list)
+                 ▲                              ▲
+                 │ session 1: the frontend's    │ session 2: the host's own
+                 │ own (?ws= from               │ (Origin: dev server; dialled only
+                 │  frontend-target.js)         │  if supportsMultipleDebuggers)
+                 ▼                              │
+   DevTools frontend (main frame)               │
+   │ InspectorFrontendHost.* (preload stubs)    │
+   │ setInjectedScriptForOrigin ──► no-op       │
+   ▼                                            ▼
+   extension iframes  rozenite://<id>/<page>    host ──► CdpSession (internal/cdp/cdp-session.js)
+   (preload: chrome shim, no Node surface)      │  sendCommand(method, params) → Promise
+        ▲                                       │  onEvent / onAttach (re-arm on reconnect)
+        │ async IPC (per-WebContents handlers)  │
+        └──────────────────────────────────────►├── Runtime.evaluate / Page.reload ◄── inspected-window.js
+                                                │                       (DEVTOOLS_EVAL / DEVTOOLS_RELOAD)
+                                                └── Network.* ◄─► network-model.js ──► network-service.js
+                                                     (Network.enable per session,    │  one delivery per lifecycle step,
+                                                      HAR 1.2, bodies)               ▼
+                                                                  chrome.devtools.network + chrome.webRequest
 ```
 
-One upstream session serves the frontend **and** host commands: the app never learns
-about a second debugger, and the frontend never sees a command it did not send. One
-`Network.enable` session likewise serves the frontend's own Network panel, Rozenite's
-middleware, and every extension frame — the model accumulates once in main and fans out.
+Two sessions to the same target, each with its own subscriptions: the backend scopes
+`Runtime.bindingCalled` to the session that added the binding and fans `Network.*` out to
+each session that enabled the domain, so the frontend never sees a host command, event or
+binding, and the host never sees the frontend's. The host's `Network.enable` session serves
+every extension frame — the model accumulates once in main and fans out.
 
 ## Execution contexts, current
 

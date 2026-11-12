@@ -170,7 +170,7 @@ lands after the first call. Options weighed:
 | Option | Verdict |
 | --- | --- |
 | `ipcRenderer.sendSync` | forbidden by the house rule, and it blocks the renderer on main with no framing |
-| `fs` in the preload (`sandbox: false`, so it can) | synchronous and no IPC, but duplicates path containment and locale/placeholder logic in the privileged preload, needs the extensions dir smuggled in via `additionalArguments`, and puts file-reading policy where a page-world bug would be worst |
+| `fs` in the preload (possible while `sandbox` was false; ruled out now that the preload is sandboxed) | synchronous and no IPC, but duplicates path containment and locale/placeholder logic in the privileged preload, needs the extensions dir smuggled in via `additionalArguments`, and puts file-reading policy where a page-world bug would be worst |
 | async IPC at registration (like the manifest) | too late: the first `getMessage` has already run |
 | **synchronous `XMLHttpRequest` to the frame's own `rozenite://<id>/__rozenite_i18n__`** | **chosen** |
 

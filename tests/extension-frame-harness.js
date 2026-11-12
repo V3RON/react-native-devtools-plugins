@@ -498,8 +498,8 @@ app
           url: frame.url,
           processId: frame.processId,
           // Distinct renderer process = out-of-process frame. Recorded rather
-          // than assumed: while sandbox is false this is all the isolation that
-          // exists, so the docs have to describe exactly this and nothing more.
+          // than assumed, so the docs describe exactly the process isolation that
+          // exists (the renderer sandbox is FRAME_POLICY's) and nothing more.
           separateProcess: frame.processId !== main.processId,
         }));
       } catch {

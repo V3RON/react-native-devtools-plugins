@@ -69,9 +69,9 @@ Known deviations (deliberate, PoC):
   `addListener` dedupe, `removeListener` and `hasListener` are all real *inside* the
   shim — this is purely the world boundary. `hasListeners()` needs no identity and is
   the observable from page code; that is what the end-to-end security test asserts
-  (`tests/extension-frame-electron.test.js`). Fixing it properly means either
-  per-callback wrapper handles or a bundled sandboxed preload, neither of which this
-  PoC has.
+  (`tests/extension-frame-electron.test.js`). Fixing it properly means per-callback
+  wrapper handles, which this PoC does not have. (A bundled sandboxed preload, once listed
+  here as the other route, now exists; whether it changes this has not been measured.)
 - Port payloads are JSON-only (no structured-clone transferables through contextBridge yet).
 - `sender` carries `{id, url}` — no `tab`/`frame` objects until tabs shims exist.
 - `onDisconnect`'s `lastError` is a snapshot set before the event, not a live property.

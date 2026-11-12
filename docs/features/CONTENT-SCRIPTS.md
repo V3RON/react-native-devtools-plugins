@@ -4,7 +4,7 @@
 | --- | --- |
 | **Status** | 🟨 implemented behind an explicit opt-in (`DEVTOOLS_CONTENT_SCRIPTS`, default OFF) and **observed on a real device** — see [Live run](#live-run-the-definition-of-done-observed-on-a-device). The two fidelity gaps that run found are fixed and re-observed on the same device ([After the run](#after-the-run-the-two-gaps-fixed-and-re-observed)) |
 | **Tier** | 2 — but strategically the most important Tier-2 item |
-| **Blocked by** | [RUNTIME-MESSAGING.md](RUNTIME-MESSAGING.md) (real now); the CDP transport is real too ([src/electron/extensions/internal/cdp/cdp-bridge.js](../../src/electron/extensions/internal/cdp/cdp-bridge.js)) |
+| **Blocked by** | [RUNTIME-MESSAGING.md](RUNTIME-MESSAGING.md) (real now); the CDP transport is real too: the host's own session ([src/electron/extensions/internal/cdp/cdp-session.js](../../src/electron/extensions/internal/cdp/cdp-session.js)), which needs a target reporting `supportsMultipleDebuggers` |
 | **Code** | [src/electron/extensions/internal/content/content-scripts.js](../../src/electron/extensions/internal/content/content-scripts.js) (registry), [src/electron/extensions/internal/content/content-gate.js](../../src/electron/extensions/internal/content/content-gate.js) (opt-in), [src/electron/extensions/internal/content/content-bridge.js](../../src/electron/extensions/internal/content/content-bridge.js) (runner + app-side loader) |
 
 ## Why this matters
@@ -58,7 +58,7 @@ Key properties:
    can pollute app globals. Document it.
 3. **Messaging**: Chrome hands content scripts `chrome.runtime` for free; in RN our
    injected loader must polyfill a minimal `chrome.runtime` (`sendMessage`, `connect`,
-   `onMessage`) into the app context. **Transport: the existing CDP connection — no
+   `onMessage`) into the app context. **Transport: the host's CDP session to the app — no
    secondary bridge.** Hermes supports `Runtime.addBinding`, and React Native DevTools
    already uses the addBinding + `Runtime.evaluate` round-trip to pass React DevTools
    data between app and frontend; the content-bridge reuses exactly that channel:
@@ -244,7 +244,7 @@ project's Metro is what produced a target:
 Metro's port was moved to 8099 precisely so that other project's 8081 stayed untouched.
 
 That produced a real CDP target on Metro — `type: "node"`, which is exactly what the bridge's
-discovery filters for — with no dev-menu interaction and no app-code change:
+discovery filtered for (today `src/electron/shell/frontend-target.js` does) — with no dev-menu interaction and no app-code change:
 
 ```
 "title": "com.aitwar.devtoolspoc (unknown Android SDK built for arm64)"
@@ -275,6 +275,12 @@ DEVTOOLS_METRO_PORT=8099 DEVTOOLS_CDP_PORT=9224 \
 DEVTOOLS_FRONTEND_URL="http://127.0.0.1:8099/rozenite/rn_fusebox.html?ws=localhost:9224" \
 npm start
 ```
+
+This run, and the re-run below, used the CDP bridge on `:9223` that has since been removed
+(with `DEVTOOLS_CDP_PORT` and `rn-cdp.js`); the commands are kept as the record. Today the
+same launch is `DEVTOOLS_METRO_PORT=8099` with no `DEVTOOLS_FRONTEND_URL`: the shell picks the
+target from Metro's `/json/list` and the host opens its own session, which needs the target to
+report `supportsMultipleDebuggers`. That combination has not been re-run on the device.
 
 ### 1. The gate let it through, and the runner injected it
 

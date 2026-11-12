@@ -81,7 +81,7 @@ breaks the stubbing rule ([../OVERVIEW.md](../OVERVIEW.md)).
 
 | Method | Status |
 | --- | --- |
-| `query` / `get` / `update` / `getCurrent` | **real for one tab** — all four answer with the SAME tab, read live from the host each time. `id` is the number `chrome.devtools.inspectedWindow.tabId` reports, so both APIs talk about one thing. `url`/`title` come from `Target.getTargetInfo` while the CDP bridge is attached (or from the bridge's own target record if the method is refused). |
+| `query` / `get` / `update` / `getCurrent` | **real for one tab** — all four answer with the SAME tab, read live from the host each time. `id` is the number `chrome.devtools.inspectedWindow.tabId` reports, so both APIs talk about one thing. `url`/`title` come from `Target.getTargetInfo` while the host's CDP session is attached (or from the session's own target record, the dev server's `/json/list` entry, if the method is refused). |
 | no-session fallback | **documented constants, not a guess** — url `about:blank`, title `""`, and `status`/`windowId` are ABSENT rather than filled in: there is no loaded document and no window to be in. |
 | `create({url})` | **real descriptor, policy-driven side effect** — returns an `id` and a resolved url (a bare path resolves against the extension origin, which is what Altair's `o.url.includes(id)` check needs), fires `onCreated`, and adds one non-Chrome field: `openedVia` = `"external"` / `"window"` / `null`, saying what actually opened. |
 | `remove` | closes what `create` opened (by the host's own handle), fires `onRemoved`; for the inspected id it is a **resolving no-op** with one console line; an unknown id fails with Chrome's `No tab with id: N.` |

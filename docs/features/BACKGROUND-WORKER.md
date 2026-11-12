@@ -117,7 +117,7 @@ the harness ends its run with `app.exit(0)`, which bypasses `will-quit` entirely
 
 `tests/background-worker-electron.test.js` boots the production shell headless (production
 scheme privileges, file server, IPC, `webPreferences`, preload + the production background
-host; `show: false`, `DEVTOOLS_CDP_BRIDGE=off`, no Metro, no device, no frontend fork) and
+host; `show: false`, no Metro, so no CDP session, no device, no frontend fork) and
 observes, against a fixture extension in a temp extensions dir with a temp
 `--user-data-dir`:
 
@@ -176,8 +176,9 @@ Two of the above could not have worked until the verification found them:
   no `window` object to hand out. The host could not fabricate an honest one either — the
   worker's `WebContents` belongs to a window the host does not expose to other frames. `null`
   or a fake window object would both be worse than `undefined`.
-- **No sandboxing beyond what panels have.** `sandbox: false` still, so the worker context is
-  a separate renderer process, not a sandboxed one ([../LIMITATIONS.md](../LIMITATIONS.md)).
+- **No sandboxing beyond what panels have.** The worker context is a separate renderer
+  process under the same policy as a panel, `sandbox: true` included: sandboxed, but no more
+  contained than a panel ([../LIMITATIONS.md](../LIMITATIONS.md)).
 
 ## Why `sample-extension` still has no background
 

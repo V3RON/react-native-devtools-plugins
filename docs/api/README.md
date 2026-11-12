@@ -20,7 +20,8 @@ Legend used in both docs: ✅ implemented in `src/preload`/`src/electron/extensi
 🚷 **no anchor** — the RN DevTools panel or browser surface this method extends does not exist
 ([the anchor list](../OVERVIEW.md#what-rn-devtools-actually-offers-the-anchor-list)); no
 channel work or backend work makes it meaningful, so it is closed, not deferred.
-Host-side CDP access itself is no longer a gap: `src/electron/extensions/internal/cdp/cdp-bridge.js` owns the
-session, so 🔌 items are now fidelity questions rather than transport questions.
+Host-side CDP access itself is no longer a gap: the host opens its own session to the app
+(`src/electron/extensions/internal/cdp/cdp-session.js`), so 🔌 items are now fidelity questions
+rather than transport questions (given a target that reports `supportsMultipleDebuggers`).
 
 **Feasibility verdict** (can everything be wired?): in [../ROADMAP.md](../ROADMAP.md).

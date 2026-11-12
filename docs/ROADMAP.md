@@ -28,7 +28,7 @@ below has an anchor:
 | # | Item | Why it's now real work |
 | --- | --- | --- |
 | 1 | **The device run**: verify `devtools.network` + `webRequest` *and* the `inspectedWindow.eval` live checks from this checkout | all three are implemented and unit-covered; the app-side half has never been walked against a device here, and until it passes those statuses stay 🟨 ("unrun = unverified"). Closes the highest-leverage Tier-1 item |
-| 2 | **`sandbox: true`** (bundled preload = the one build step) | the guardrail content-script injection is stacked behind |
+| 2 | ~~**`sandbox: true`**~~ ✅ done (`scripts/bundle-preload.js` bundles both preloads; measured by the Electron suites on Electron 38) | it was the guardrail content-script injection was stacked behind, so #3 is no longer blocked on it |
 | 3 | **Manifest-driven content-script injection** (drop the `DEVTOOLS_CONTENT_SCRIPTS` opt-in once #2 lands) + a thin `document` no-op shim | the runner is real and device-proven; today it injects only what a developer whitelists by hand |
 | 4 | **`panels.network.getHAR`** | the HAR builder already exists; one more exposed name |
 | 5 | **`panels.sources.openInFrontend`** + `inspectedWindow.getResources` / `getResourceContent` | RN DevTools has a Sources panel; `Debugger.getScriptParsed` is the source |
@@ -74,13 +74,14 @@ work makes them meaningful, so they are closed rather than planned. See
 2. **Dispatch channel — the prerequisite (days):** ~~host→frontend events
    (`InspectorFrontendAPI` via IPC)~~ ✅ live. ~~`sendMessageToBackend`→CDP socket~~
    ✅ **resolved differently and closed**: with `?ws=` in the frontend URL the frontend
-   talks to the socket directly, so that hook is never called. The shell took the socket
-   instead → [cdp-bridge.js](../src/electron/extensions/internal/cdp/cdp-bridge.js)
+   talks to the socket directly, so that hook is never called. The host opens its own
+   second CDP session to the same target instead →
+   [cdp-session.js](../src/electron/extensions/internal/cdp/cdp-session.js)
    ([features/DISPATCH-CHANNEL.md](features/DISPATCH-CHANNEL.md)). ~~menus/theme events,
    save flow~~ real already (`showContextMenuAtPoint`, `colorThemeChanged`, the `savedURL`
    family). Remaining producers: workspace, device discovery.
 3. **RN/CDP-dependent (weeks; fidelity capped by the backend):**
-   ~~`inspectedWindow.eval`~~ ✅ real (`Runtime.evaluate` over the bridge);
+   ~~`inspectedWindow.eval`~~ ✅ real (`Runtime.evaluate` over the host's CDP session);
    `network`/`webRequest` observability (as good as RN network inspection — the transport
    is now in place, so this is a backend-fidelity question),
    **device discovery** (genuinely *better than Chrome* for RN: enumerate emulators/devices
@@ -106,7 +107,7 @@ work makes them meaningful, so they are closed rather than planned. See
 2. runtime-messaging + contract rules (promise/callback, lastError, Events, Ports)
 3. extension-management        (manifest parse, ids, enumerate to frontend)
 4. inspected-window.eval       (state-debugger extensions work)          ✅ done
-   └── with it: the CDP bridge, which is now the prerequisite for the next item
+   └── with it: host-side CDP (since replaced by the host's own session), the prerequisite for the next item
 5. devtools-network            (real requests/bodies on Network.* → the GraphQL
                                 inspector is real; highest-leverage item left)
 6. storage session + i18n + small-shims   (crash → degrade for many extensions)
@@ -116,7 +117,7 @@ work makes them meaningful, so they are closed rather than planned. See
    `notifications`, `alarms`) are the next thing that actually unblocks anything
 8. content-bridge runner       (app-facing extensions with zero app-code changes)  🟨 the
    runner is real and observed on a device, but injection is opt-in
-   (`DEVTOOLS_CONTENT_SCRIPTS`); making it manifest-driven is stacked behind `sandbox: true`
+   (`DEVTOOLS_CONTENT_SCRIPTS`); making it manifest-driven was stacked behind `sandbox: true`, which is done
 9. the pruned list above: device discovery, panels.sources / panels.performance,
    panels.network.getHAR, commands.onCommand, lifecycle UI, save/workspace, i18n polish
    └── ~~panels.elements sidebars~~ 🚷 removed 2026-10-14: no Elements panel to anchor on
@@ -139,17 +140,16 @@ Independent of order, fix first: ~~**preferences persistence**~~ ✅ done
 - **Security debt — mostly paid; what's left:** ~~`sendSync`~~ (gone, the house rule is now
   unconditional), ~~`new Function` on a host-stored script~~ (channel deleted), ~~exposed
   `ipcRenderer`~~, ~~`webSecurity:false`~~ (on, and `rozenite://` proved not to need it off),
-  ~~per-extension CSP~~, ~~permission gating~~. Still open, in rough order of value:
-  `sandbox: true` (needs one bundled preload file, i.e. a build step), extension frames on
-  their own `WebContentsView`/partition so the frontend and extension pages can have
-  different policies, and `host_permissions` meaning something. Until sandbox lands, the
-  guards limit what an extension page can *ask* for — a renderer compromise is still a Node
-  compromise, which is why the background worker and content-script injection are stacked
-  *after* this rather than before it.
+  ~~per-extension CSP~~, ~~permission gating~~, ~~`sandbox: true`~~ (done: one bundled file
+  per preload, `scripts/bundle-preload.js`; a renderer compromise now also needs an OS sandbox
+  escape). Still open, in rough order of value: extension frames on their own
+  `WebContentsView`/partition so the frontend and extension pages can have different
+  policies, and `host_permissions` meaning something.
   **Deviation, recorded:** the background worker landed *before* `sandbox: true`. It was
   stacked after this guardrail on purpose and the stack order was overridden, so the state is
-  stated rather than glossed: the worker context is a separate hidden renderer, **not** a
-  sandboxed one, and it has no more isolation than a panel iframe ever had
-  (`docs/LIMITATIONS.md` §Security). What it does not have is a privileged channel either — it
-  reaches the host through the same validated `RUNTIME_REGISTER`/`RUNTIME_DELIVER` path a panel
-  uses. Content-script injection is still held until sandbox lands.
+  stated rather than glossed: until the sandbox landed, the worker context was a separate
+  hidden renderer, **not** a sandboxed one. It is sandboxed now, under the same policy as a
+  panel iframe and with no more isolation than one (`docs/LIMITATIONS.md` §Security). What it
+  does not have is a privileged channel either — it reaches the host through the same
+  validated `RUNTIME_REGISTER`/`RUNTIME_DELIVER` path a panel uses. Content-script injection
+  was held until sandbox landed; the remaining step is item 3 of the pruned list.
