@@ -24,6 +24,8 @@ docs/
 ├── LIMITATIONS.md                         What the prototype is NOT (extension model, API
 │                                          fidelity, frontend coupling, security)
 ├── SECURITY-PLATFORM.md                   Threat model, FS/code-exec audit, target security architecture
+├── SPEC-DEBUGGER-SHELL-EXTENSIONS.md      Spec: porting the host into upstream @react-native/debugger-shell
+│                                          behind a CLI flag (public API, lifetimes, CDP, won't-do, open Qs)
 ├── ROADMAP.md                             Definition of done (5 levels), the PRUNED list of
 │                                          what we can actually implement, 5 implementation
 │                                          buckets, recommended build order, guardrails
