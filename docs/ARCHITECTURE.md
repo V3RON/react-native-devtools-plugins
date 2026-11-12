@@ -114,9 +114,12 @@ expression `executeJavaScript`-ed into the frontend's main world, never `require
   extension (`entry`, `list`, `read`, `readText`, `open(path, {start, end})`), addressed by
   inner path and never handing out an OS path. Every reader of extension files goes through
   one: the file server, the scans, i18n, content scripts, the broker's panel-page check.
-  Implementations: a folder under `extensions/` (`directory-package.js`) and an in-memory
-  one for tests (`memory-package.js`); `tests/extension-packages.test.js` runs one contract
-  suite against both. The folder's containment rule lives there once (it used to be copied
+  Implementations: a folder under `extensions/` (`directory-package.js`), a signed `.crx`
+  in that folder read in place (`crx-package.js` over `crx.js` + `zip.js`: CRX3 verified as
+  Chromium's verifier does, Chrome's id from the signing key, ranges by seeking a stored
+  entry or inflating a deflated one), and an in-memory one for tests (`memory-package.js`);
+  `tests/extension-packages.test.js` runs one contract suite against all three. A folder
+  wins over a `.crx` with the same id. The folder's containment rule lives there once (it used to be copied
   into the i18n reader): decided on `fs.realpath` of both the folder and the target, so a
   symlink planted inside an extension cannot point outside it, and a symlinked folder is
   never an extension root — the same verdict the scan reaches, because `readdir` +

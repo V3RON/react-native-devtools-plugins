@@ -9,8 +9,10 @@ const path = require("node:path");
 const {
   createDirectoryPackage,
   createMemoryPackage,
+  createCrxPackage,
   innerPathOf,
 } = require("../src/electron/extensions/internal/registry/packages");
+const { buildCrx } = require("./crx-fixture");
 const { contentTypeFor } = require("../src/electron/extensions/internal/scheme/mime");
 
 const FILES = {
@@ -38,12 +40,23 @@ const implementations = {
     return createDirectoryPackage({ id: "x", root });
   },
   memory: () => createMemoryPackage({ id: "x", files: FILES, mtimeMs: 7 }),
+  // A signed .crx read in place; one entry stored, the rest deflated.
+  crx: (t) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rozenite-pkg-crx-"));
+    t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+    const { bytes } = buildCrx({
+      entries: Object.entries(FILES).map(([name, data]) => ({ name, data, method: name.endsWith(".js") ? 0 : 8 })),
+    });
+    const file = path.join(dir, "x.crx");
+    fs.writeFileSync(file, bytes);
+    return createCrxPackage({ file });
+  },
 };
 
 for (const [kind, make] of Object.entries(implementations)) {
   test(`${kind} package: entry, list and read answer by inner path`, (t) => {
     const pkg = make(t);
-    assert.equal(pkg.id, "x");
+    assert.equal(pkg.id, kind === "crx" ? pkg.id : "x", "a .crx is named by its key");
     assert.equal(pkg.source, kind);
     assert.equal(pkg.entry("panel/app.js").kind, "file");
     assert.equal(pkg.entry("panel/app.js").size, 10);

@@ -69,8 +69,9 @@ Notes:
 - `app/` — Expo test app (SDK 57, blank TS template + Rozenite wiring + REST/GraphQL
   buttons). Its Metro server also serves the patched RN DevTools frontend ("rozenite")
   the Electron shell loads; the frontend itself is not part of this repo.
-- "Installed" extensions are unpacked extension folders in `extensions/`, served under
-  the custom `rozenite://<extension-id>/...` protocol. The shell scans the folder itself —
+- "Installed" extensions are unpacked extension folders in `extensions/`, or signed `.crx`
+  files dropped there (read in place, never unpacked; the id is Chrome's, from the signing
+  key), served under the custom `rozenite://<extension-id>/...` protocol. The shell scans the folder itself —
   no frontend-fork knowledge required:
   - a manifest with `devtools_page` gets a hidden devtools page and its `panels.create`
     calls become real tabs, and `Panel.onShown(window)` / `onHidden` fire as the tab is

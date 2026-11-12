@@ -309,6 +309,13 @@
   (`src/electron/extensions/internal/cdp/cdp-session.js`), and the backend delivers
   `Runtime.bindingCalled` only to sessions that added that binding, so the host's binding
   stays in the host's session.
+- **A `.crx` is verified for integrity, not for origin.** The CRX3 signatures are checked
+  as Chromium's verifier checks them (every proof verifies, one key matches the signed id),
+  so a changed file is refused. The Web Store's own signature is not checked, so a `.crx`
+  proves who signed it, not that the Web Store published it. CRX2 and ZIP64 archives are
+  refused. A `.crx` replaced while it is being read can mix the old index with new bytes
+  until its next mtime check; whole-entry reads catch that by CRC, a byte range cannot.
+  A range late in a large deflated entry inflates everything before it on each request.
 - **Per-extension CSP.** Every `rozenite://` response carries that extension's
   `content_security_policy`; an extension declaring none gets Chrome's MV3 default
   (`script-src 'self'; object-src 'self'`, plus `wasm-unsafe-eval` when it has a service
