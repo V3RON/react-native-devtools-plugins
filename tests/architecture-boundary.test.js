@@ -70,6 +70,9 @@ test("the extension host imports nothing from the shell and reads no environment
       );
     }
     assert.doesNotMatch(codeOf(file), /process\.env/, `${name} reads process.env`);
+    // Channels go on each attached WebContents (broker/ipc.js attachContents), so the
+    // embedder's own ipcMain stays the embedder's (spec §5.5).
+    assert.doesNotMatch(codeOf(file), /\bipcMain\b/, `${name} uses the global ipcMain`);
   }
 });
 

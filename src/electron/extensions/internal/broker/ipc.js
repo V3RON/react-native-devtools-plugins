@@ -3,7 +3,7 @@
 // §5.5). Built by the extension host (../ExtensionHost.js) with every service it routes to;
 // nothing here is created at import time.
 //
-// Every channel is async (`ipcMain.handle` + `invoke`) — the house rule in
+// Every channel is async (`handle` + `invoke`) — the house rule in
 // ./channels.js, unconditional since the injected-script channel went away.
 // The two `sendSync` handlers that used to sit at the top of this function were
 // the whole point of that exception: they handed extension frames a
@@ -13,8 +13,15 @@
 //
 // The embedding shell's own channels (InspectorFrontendHost, window ops) are not here:
 // src/electron/shell/ipc.js.
+//
+// Handlers live on each WebContents the host owns (`attachContents`: the attached
+// frontend window, every background and options window), never on the global ipcMain
+// (spec §5.5). A WebContents nobody attached has no extension channel at all: a second
+// frontend window, a `chrome.tabs` window, or any other page of the embedder that the
+// session preload also runs in gets "no handler registered" for every invoke. It also
+// means no clash with the embedder's own ipcMain channels, and detaching removes exactly
+// what was installed.
 const fs = require("fs");
-const { ipcMain } = require("electron");
 const extensionServer = require("../scheme/extension-server");
 // The grant filter `networkSenderFor` below applies to every host->frame network
 // push. Importing it here is load-bearing: the call sits inside the sender filter
@@ -83,7 +90,8 @@ const {
  * @param {object} deps.saveService ../services/save-service.js
  * @param {object} deps.optionsHost ../contexts/options-host.js
  * @param {() => object|null} deps.getContentBridge the attached window's content bridge
- * @param {object} [deps.ipc] where handlers are installed (default ipcMain)
+ * @param {(channel: string, handler: function) => function} [deps.wrapHandler] test-only:
+ *        decorates each handler before it is installed (tests/extension-frame-harness.js)
  */
 const createBroker = ({
   router,
@@ -101,7 +109,7 @@ const createBroker = ({
   saveService,
   optionsHost,
   getContentBridge,
-  ipc = ipcMain,
+  wrapHandler = (_channel, handler) => handler,
 }) => {
   // frameKey -> WebFrameMain that registered it: every later call claiming a
   // frameKey must come from the same principal object (a frame cannot spoof
@@ -233,11 +241,47 @@ const createBroker = ({
     return principals.get(key) === event.senderFrame ? key : null;
   };
 
-  // Every channel this broker installed, so `dispose` removes exactly those.
-  const installed = [];
+  // Every channel's handler, collected by `register` and installed on each WebContents
+  // `attachContents` is given.
+  const handlers = new Map();
   const handle = (channel, handler) => {
-    ipc.handle(channel, handler);
-    installed.push(channel);
+    handlers.set(channel, wrapHandler(channel, handler));
+  };
+
+  // WebContents -> its detach, so `dispose` removes exactly what was installed.
+  const attached = new Map();
+
+  /**
+   * Install every extension channel on `contents.ipc`. Call it before the WebContents
+   * loads anything: a frame's first act is RUNTIME_GET_MANIFEST / RUNTIME_REGISTER.
+   * A destroyed WebContents takes its handlers with it.
+   *
+   * @returns {() => void} detach: removes the handlers again (idempotent)
+   */
+  const attachContents = (contents) => {
+    if (!contents || contents.isDestroyed() || attached.has(contents)) {
+      return attached.get(contents) || (() => {});
+    }
+    for (const [channel, handler] of handlers) {
+      contents.ipc.handle(channel, handler);
+    }
+    const onDestroyed = () => {
+      attached.delete(contents);
+    };
+    const detach = () => {
+      if (!attached.delete(contents)) {
+        return;
+      }
+      contents.removeListener("destroyed", onDestroyed);
+      if (!contents.isDestroyed()) {
+        for (const channel of handlers.keys()) {
+          contents.ipc.removeHandler(channel);
+        }
+      }
+    };
+    contents.once("destroyed", onDestroyed);
+    attached.set(contents, detach);
+    return detach;
   };
 
   const register = () => {
@@ -746,8 +790,8 @@ const createBroker = ({
   };
 
   const dispose = () => {
-    for (const channel of installed.splice(0)) {
-      ipc.removeHandler(channel);
+    for (const detach of [...attached.values()]) {
+      detach();
     }
     if (unregisterRouterFrame) {
       for (const key of [...principals.keys()]) {
@@ -756,7 +800,7 @@ const createBroker = ({
     }
   };
 
-  return { register, dispose, subscribeRouterFrames };
+  return { register, attachContents, dispose, subscribeRouterFrames };
 };
 
 module.exports = { createBroker };

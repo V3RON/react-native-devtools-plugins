@@ -288,7 +288,7 @@ app
     // rules, and the open-window tracking are the production host's own.
     const openedOptions = [];
     hooks.options = ({
-      openWindow: (url) => {
+      openWindow: (url, { attachIpc } = {}) => {
         const record = { url, extensionId: (() => {
           try {
             return new URL(url).hostname;
@@ -319,6 +319,7 @@ app
           win.webContents.on("did-fail-load", (_e, code, description) =>
             note({ kind: "options-fail-load", code, description, url: record.url })
           );
+          attachIpc(win.webContents);
           win.loadURL(url).catch(() => {});
         }
         note({ kind: "options-window", url, extensionId: record.extensionId, mode: optionsWindowMode });
@@ -349,6 +350,19 @@ app
         })
       : false;
 
+    if (registerDelayMs > 0) {
+      // Test-only: hold every RUNTIME_REGISTER reply back, so a page script that runs in
+      // that window provably cannot have learned anything from it (tests/theme-electron.test.js).
+      const { RUNTIME_REGISTER } = require("../src/electron/extensions/internal/broker/channels");
+      hooks.wrapIpcHandler = (channel, handler) =>
+        channel !== RUNTIME_REGISTER
+          ? handler
+          : async (event, ...rest) => {
+              await new Promise((resolve) => setTimeout(resolve, registerDelayMs));
+              return handler(event, ...rest);
+            };
+    }
+
     // The extension host, built as the shell builds it (src/electron/shell/main.js):
     // scheme handler and preload on the session, every service, the IPC broker. A
     // frame's first act is RUNTIME_GET_MANIFEST / RUNTIME_REGISTER, so without these
@@ -356,19 +370,6 @@ app
     const extensionHost = createExtensionHost(config.extensionHostConfig(), {}, hooks);
     const internals = () => extensionHost._internals();
     const policyFor = internals().policyFor;
-    if (registerDelayMs > 0) {
-      // Test-only: hold every RUNTIME_REGISTER reply back, so a page script that runs in
-      // that window provably cannot have learned anything from it (tests/theme-electron.test.js).
-      const { ipcMain } = require("electron");
-      const { RUNTIME_REGISTER } = require("../src/electron/extensions/internal/broker/channels");
-      const original = ipcMain._invokeHandlers.get(RUNTIME_REGISTER);
-      ipcMain.removeHandler(RUNTIME_REGISTER);
-      ipcMain.handle(RUNTIME_REGISTER, async (event, ...rest) => {
-        await new Promise((resolve) => setTimeout(resolve, registerDelayMs));
-        return original(event, ...rest);
-      });
-    }
-
     // Loopback "frontend": an http:// page hosting the extension frames, which is
     // what src/electron/extensions/internal/frontend/panel-bridge.js does for real panels.
     const server = http.createServer((request, response) => {

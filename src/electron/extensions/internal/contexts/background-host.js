@@ -111,6 +111,8 @@ const consoleRecord = (args) => {
  *        raw worker console records, bypassing the log prefixing
  * @param {object} [deps.webPreferences] the worker window's webPreferences: the frame
  *        policy plus the host's session (the session supplies the preload)
+ * @param {(contents: object) => void} [deps.attachIpc] installs the broker's channels
+ *        on a worker window's WebContents, before it loads (broker/ipc.js attachContents)
  * @param {object} [deps.log]
  */
 const createBackgroundHost = ({
@@ -121,6 +123,7 @@ const createBackgroundHost = ({
   readManifest = loadManifest,
   onWorkerConsole = null,
   webPreferences = extensionFramePreferences(),
+  attachIpc = () => {},
   log = console,
 } = {}) => {
   const windows = new Map(); // extensionId -> {win, url, script, reported}
@@ -146,6 +149,8 @@ const createBackgroundHost = ({
   const makeWindow = (entry) => {
     const options = windowOptions(entry);
     const win = createWindow ? createWindow(options, entry) : new BrowserWindow(options);
+    // The worker's first act is RUNTIME_REGISTER, so its channels go on before it loads.
+    attachIpc(win.webContents);
     // A worker that dies must be reported, never swallowed: these three events
     // are the only way the failure is visible at all, because there is no window
     // to look at.

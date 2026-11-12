@@ -118,8 +118,11 @@ const createOptionsHost = ({
 };
 
 // ── the Electron-backed host the extension host builds (ExtensionHost.js) ─────────
-/** @param {object} deps `webPreferences` carries the host's session; the rest override. */
-const attachOptionsHost = ({ webPreferences, ...deps } = {}) => {
+/**
+ * @param {object} deps `webPreferences` carries the host's session; `attachIpc` installs
+ *        the broker's channels on each options window before it loads; the rest override.
+ */
+const attachOptionsHost = ({ webPreferences, attachIpc = () => {}, ...deps } = {}) => {
   const { BrowserWindow } = require("electron");
   const { extensionFramePreferences } = require("./frame-security");
   const { buildExtensionURL } = require("../scheme/protocol");
@@ -143,6 +146,7 @@ const attachOptionsHost = ({ webPreferences, ...deps } = {}) => {
         // extension page, not a privileged one (src/electron/extensions/internal/contexts/frame-security.js).
         webPreferences: webPreferences || extensionFramePreferences(),
       });
+      attachIpc(win.webContents);
       win.loadURL(url).catch(() => {});
       return win.id;
     },
@@ -155,6 +159,8 @@ const attachOptionsHost = ({ webPreferences, ...deps } = {}) => {
       return false;
     },
     ...deps,
+    // A replacement opener (the headless harness) still owes its window the channels.
+    ...(deps.openWindow ? { openWindow: (url) => deps.openWindow(url, { attachIpc }) } : {}),
   });
 };
 

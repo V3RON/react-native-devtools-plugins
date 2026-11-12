@@ -9,9 +9,11 @@
 //                                               registry settings, storage, install
 //                                               state, router, context registry, request
 //                                               queue, notifications, save, options,
-//                                               theme, the CDP bridge and the broker
-//   attachment  attachWindow() (one in v1)      frontend guard, panel host, the CDP
-//                                               bridge's listener, content bridge,
+//                                               theme, the CDP bridge and the broker's
+//                                               handler table
+//   attachment  attachWindow() (one in v1)      frontend guard, the broker's channels on
+//                                               the window's WebContents, panel host, the
+//                                               CDP bridge's listener, content bridge,
 //                                               background contexts
 //
 // Background contexts belong to the attachment: `detach()` (the window's `closed`)
@@ -65,7 +67,8 @@ const prefixed = (prefix) => (level, message) => {
  * @param {object} [hooks] test-only collaborators (never read from the environment):
  *        `notifications`, `save`, `options`, `tabs` override the matching service's
  *        Electron-backed defaults; `background` is the background host's options, or
- *        `false` for no background contexts; `installState` replaces the store
+ *        `false` for no background contexts; `installState` replaces the store;
+ *        `wrapIpcHandler(channel, handler)` decorates each broker handler
  * @returns {{webPreferences: function, attachWindow: function, dispose: function}}
  */
 const createExtensionHost = (config = {}, options = {}, hooks = {}) => {
@@ -107,7 +110,14 @@ const createExtensionHost = (config = {}, options = {}, hooks = {}) => {
     testSaveDialog: settings.testSaveDialog,
     ...(hooks.save || {}),
   });
-  const optionsHost = attachOptionsHost({ webPreferences: windowPreferences, ...(hooks.options || {}) });
+  // The broker's channels go on each WebContents the host owns, never on ipcMain
+  // (broker/ipc.js). Late-bound: options windows open only after the broker exists.
+  const attachIpc = (contents) => broker.attachContents(contents);
+  const optionsHost = attachOptionsHost({
+    webPreferences: windowPreferences,
+    attachIpc,
+    ...(hooks.options || {}),
+  });
   const externalOpener = electronExternalOpener({ testOpenLog: settings.testOpenLog });
 
   // The debugger session extensions use (today: the in-process bridge in front of the
@@ -122,7 +132,7 @@ const createExtensionHost = (config = {}, options = {}, hooks = {}) => {
   const tabHost = attachTabHost({ cdp, externalOpener, policy: settings.tabsOpen, ...(hooks.tabs || {}) });
 
   const frontendGuard = createFrontendGuard();
-  let attachment = null; // {win, panelHost, backgroundHost, cdpStarted}
+  let attachment = null; // {win, panelHost, detachIpc, backgroundHost, cdpStarted}
   let contentBridge = null;
 
   /**
@@ -163,6 +173,7 @@ const createExtensionHost = (config = {}, options = {}, hooks = {}) => {
     saveService,
     optionsHost,
     getContentBridge: ensureContentBridge,
+    wrapHandler: hooks.wrapIpcHandler,
   });
   broker.register();
 
@@ -170,9 +181,10 @@ const createExtensionHost = (config = {}, options = {}, hooks = {}) => {
     if (!attachment) {
       return;
     }
-    const { backgroundHost } = attachment;
+    const { backgroundHost, detachIpc } = attachment;
     attachment = null;
     frontendGuard.detach();
+    detachIpc();
     if (backgroundHost) {
       backgroundHost.closeAll();
     }
@@ -186,9 +198,11 @@ const createExtensionHost = (config = {}, options = {}, hooks = {}) => {
     }
     const contents = win.webContents;
     frontendGuard.attach(contents, frontendUrl);
+    // Before loadURL: the frontend's main frame and its extension iframes call these.
+    const detachIpc = broker.attachContents(contents);
     const panelHost = createPanelHost({ showPanel: settings.showPanel });
     panelHost.attach(contents);
-    attachment = { win, panelHost, backgroundHost: null, cdpStarted: null };
+    attachment = { win, panelHost, detachIpc, backgroundHost: null, cdpStarted: null };
 
     // Owns the RN debugger session before the frontend dials its `?ws=` socket.
     // Rejected only when the port is taken; the shell still runs and
@@ -206,6 +220,7 @@ const createExtensionHost = (config = {}, options = {}, hooks = {}) => {
         installState,
         observeFrame: broker.subscribeRouterFrames,
         webPreferences: windowPreferences,
+        attachIpc,
         ...(hooks.background || {}),
       });
     }

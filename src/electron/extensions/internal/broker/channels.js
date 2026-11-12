@@ -4,7 +4,8 @@
 // src/electron/shell/channels.js.
 //
 // House rule (unconditional): every channel is async
-// (`ipcMain.handle` + `ipcRenderer.invoke`). There are no `sendSync` channels
+// (`webContents.ipc.handle` + `ipcRenderer.invoke`, installed per WebContents by
+// ./ipc.js `attachContents`). There are no `sendSync` channels
 // left — the last two (`STORE_/GET_INJECTED_SCRIPT`, which let the frontend
 // hand an arbitrary script to extension frames) were deleted together with the
 // `new Function` that evaluated them: `chrome.devtools.*` is implemented

@@ -573,10 +573,16 @@ pinned by `tests/architecture-boundary.test.js`.
 - One pre-existing router race was fixed. An empty `sendMessage` leg that settled after a real
   answer replaced it, and starting workers before the page made it reproducible.
 
+**Per-WebContents IPC: done.** The broker collects its handlers once and installs them on
+each WebContents the host owns (`broker.attachContents`): the attached frontend window, every
+background window and every options window, each before it loads. Nothing under `extensions/`
+touches `ipcMain` (asserted in `tests/architecture-boundary.test.js`). A WebContents nobody
+attached, such as a second frontend window or a `chrome.tabs` window, gets "no handler" for
+every extension channel.
+
 **Still to do before PR 1**, all behaviour changes:
 - launch flags instead of env (§5.9);
 - the `CdpSession` (§5.6) in place of the man-in-the-middle bridge;
-- per-WebContents IPC (`webContents.ipc`) in place of `ipcMain`;
 - document-relative frontend imports;
 - the upstream partition;
 - a bundled sandboxed preload (Q2).
@@ -607,7 +613,7 @@ The in-place restructure (§10) already moved the code. Paths are under `src/ele
 | `extensions/index.js`, `internal/ExtensionHost.js`, `internal/settings.js` | `main/index.js`, `window.js`, `config.js` (in part) | lifecycle and window creation stay in the shell; config becomes host settings |
 | `internal/scheme/` | `main/extension-server.js`, `shared/csp.js`, `shared/protocol.js` | handler on `session.protocol` |
 | `internal/registry/` | `main/extensions.js`, `install-state.js`, `i18n-host.js`, `shared/i18n.js` | |
-| `internal/broker/` | `main/ipc.js` (extension channels), `delivery-scope.js`, `shared/permissions.js`, `shared/ipc.js` (extension channels) | `createBroker(deps)`; still `ipcMain` |
+| `internal/broker/` | `main/ipc.js` (extension channels), `delivery-scope.js`, `shared/permissions.js`, `shared/ipc.js` (extension channels) | `createBroker(deps)`; channels per WebContents (`attachContents`) |
 | `internal/frontend/` | `main/panel-host.js`, `theme-host.js`, `frontend-frame.js`, `frontend/panel-bridge.js`, `shared/theme.js` | panel host and frontend guard per attachment |
 | `internal/contexts/` | `main/message-router.js`, `context-registry.js`, `context-request.js`, `background-host.js`, `options-host.js`, `frame-security.js` | windows on the host's session |
 | `internal/cdp/` | `main/cdp-bridge.js`, `inspected-window.js`, `network-model.js`, `network-service.js` | bridge built by the host; → `CdpSession` (§5.6) |
