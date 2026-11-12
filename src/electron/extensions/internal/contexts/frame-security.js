@@ -4,14 +4,14 @@
 // There is exactly ONE webPreferences object per WebContents, and every
 // extension page today lives in the *frontend's own frame tree* as an iframe:
 // panel-host.js hands the frontend a devtools-page/panel URL list and
-// src/frontend/panel-bridge.js creates the iframes itself
+// src/electron/extensions/internal/frontend/panel-bridge.js creates the iframes itself
 // (docs/features/DEVTOOLS-PANELS.md). So the frontend frame and the extension
 // frames are not separable by preference — whatever is set here applies to
 // both. That is the constraint this table encodes, and the reason the two
 // entries below are identical today.
 //
 // An extension's background context is the one exception: it is the main frame of
-// a hidden window of its own (src/main/background-host.js), so it has its own
+// a hidden window of its own (src/electron/extensions/internal/contexts/background-host.js), so it has its own
 // WebContents and COULD be given its own policy. It is given this one anyway —
 // see extensionFramePreferences for why that is a decision rather than an
 // oversight.
@@ -45,9 +45,20 @@
 // `ipcRenderer` exposure that used to hand every extension folder a Node-level
 // IPC handle is gone (asserted).
 
-/** The shared baseline for every frame in the DevTools window. */
-const basePreferences = ({ preloadPath }) => ({
-  preload: preloadPath,
+const path = require("path");
+
+/**
+ * The extension preload (./preload/index.js). It is not a `webPreferences.preload`:
+ * the host registers it on the session (`session.registerPreloadScript`, ExtensionHost.js),
+ * so the embedding shell keeps its own preload for the frontend and every window on the
+ * session (the frontend, background and options windows) runs this one too. Measured
+ * with Electron 38: a session-registered frame preload runs in the frontend's main
+ * frame, in its `rozenite://` iframes and in a hidden window's main frame.
+ */
+const EXTENSION_PRELOAD_PATH = path.join(__dirname, "..", "preload", "index.js");
+
+/** The policy every frame in an extension-hosting window runs under. */
+const FRAME_POLICY = Object.freeze({
   // Extension pages are hosted by the frontend; the preload must run in those
   // iframes (see header — measured: without it no chrome.* exists).
   nodeIntegrationInSubFrames: true,
@@ -58,7 +69,7 @@ const basePreferences = ({ preloadPath }) => ({
   // Same-origin policy enforced: `rozenite://` frames still load inside the
   // http:// frontend (the scheme is registered standard + bypassCSP), inline
   // `<script>` in an extension page is refused, and per-extension CSP rides the
-  // response headers (src/main/extension-server.js).
+  // response headers (src/electron/extensions/internal/scheme/extension-server.js).
   // What it does NOT do is separate one extension from another: every
   // `rozenite://<id>` shares one origin, so a page in extension A can fetch a
   // sibling's files. Measured, asserted, and recorded in docs/LIMITATIONS.md —
@@ -70,8 +81,15 @@ const basePreferences = ({ preloadPath }) => ({
   sandbox: false,
 });
 
-/** Preferences for the BrowserWindow holding the frontend (+ its extension iframes). */
-const frontendPreferences = ({ preloadPath }) => basePreferences({ preloadPath });
+/** The shared baseline for every frame in an extension-hosting window. */
+const basePreferences = () => ({ ...FRAME_POLICY });
+
+/**
+ * Preferences for the BrowserWindow holding the frontend (+ its extension iframes):
+ * the embedder's own preferences — its preload and partition included — with the frame
+ * policy laid over them. `ExtensionHost.webPreferences(base)` is this function.
+ */
+const frontendPreferences = (base = {}) => ({ ...base, ...FRAME_POLICY });
 
 /**
  * Preferences for extension frames.
@@ -80,15 +98,18 @@ const frontendPreferences = ({ preloadPath }) => basePreferences({ preloadPath }
  * more: an extension's devtools page and panels are iframes inside the frontend
  * (same WebContents, so the policy is unavoidably the frontend's), while an
  * extension's background context is the main frame of its own hidden window
- * (src/main/background-host.js) and so could be given a different policy.
+ * (src/electron/extensions/internal/contexts/background-host.js) and so could be given a different policy.
  *
  * It is not given one, on purpose: a worker must not be able to reach anything a
  * panel cannot, and the day someone wants them to differ is the day this function
- * stops being an alias — which is the only reason it exists separately.
+ * stops being an alias — which is the only reason it exists separately. `extra` is the
+ * window's session (the host's partition); no preload, because the session supplies it.
  */
-const extensionFramePreferences = ({ preloadPath }) => basePreferences({ preloadPath });
+const extensionFramePreferences = (extra = {}) => ({ ...extra, ...FRAME_POLICY });
 
 module.exports = {
+  EXTENSION_PRELOAD_PATH,
+  FRAME_POLICY,
   basePreferences,
   frontendPreferences,
   extensionFramePreferences,

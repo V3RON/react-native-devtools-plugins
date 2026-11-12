@@ -20,7 +20,7 @@
 //     really announced and refuses anything else with the backend's own wording.
 //
 // Nothing here is production code — it is the peer the production CDP bridge
-// (src/main/cdp-bridge.js) talks to, and it binds 127.0.0.1 only.
+// (src/electron/extensions/internal/cdp/cdp-bridge.js) talks to, and it binds 127.0.0.1 only.
 //
 // This file is also the single home of the CDP lifecycle SHAPE
 // (`cdpRequestLifecycle` below), which tests/network-end-to-end.test.js builds its

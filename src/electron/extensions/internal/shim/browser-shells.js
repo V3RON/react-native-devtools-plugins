@@ -26,7 +26,7 @@
 //     up". Every other accepted call resolves only where the resolve claims nothing beyond
 //     "this call was handled"; a resolve standing for a window would be the worse-than-
 //     absent case (the same reasoning behind downloads' refused save in
-//     src/chrome-shim/downloads.js and runtime.openOptionsPage's refusal);
+//     src/electron/extensions/internal/shim/downloads.js and runtime.openOptionsPage's refusal);
 //   - Chrome's OWN validation is kept, because a rejected call is the extension learning
 //     about its own mistake — with Chromium's own message text where Chromium has one
 //     ("Cannot create item with duplicate id", "Cannot find menu item with id", "All menu
@@ -39,11 +39,11 @@
 //     bookkeeping is exercised for real: `contextMenus` keeps its registry (a rebuild loop
 //     gets honest answers about ids it owns) and `sidePanel` round-trips the options it was
 //     handed instead of dropping them. The read-backs are NON-ENUMERABLE (`_`-prefixed):
-//     these three APIs are ungated, so the gate's `_`-filter (src/chrome-shim/permission-
+//     these three APIs are ungated, so the gate's `_`-filter (src/electron/extensions/internal/shim/permission-
 //     gate.js) is not in play here and contextBridge would otherwise hand them to the page.
 //
 // Ungated, like Chrome's: none of these needs a manifest permission, and
-// src/shared/permissions.js lists all three under UNGATED_APIS.
+// src/electron/extensions/internal/broker/permissions.js lists all three under UNGATED_APIS.
 const { createEvent } = require("./event");
 const { promiseOrCallback } = require("./async-style");
 

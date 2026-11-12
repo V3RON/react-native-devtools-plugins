@@ -39,7 +39,7 @@ Notes:
   sentence.
 - `app/` needs a *debuggable* connection to Metro (dev build; Dev Menu →
   "Connect to debugger" if the app doesn't show up in Metro's `/json/list`).
-- The shell runs the CDP bridge in-process (`src/main/cdp-bridge.js`): it discovers the
+- The shell runs the CDP bridge in-process (`src/electron/extensions/internal/cdp/cdp-bridge.js`): it discovers the
   app through Metro's `/json/list` and answers on the frontend's `ws` port. Knobs:
   `DEVTOOLS_METRO_HOST` / `DEVTOOLS_METRO_PORT`, `DEVTOOLS_APP_FILTER` /
   `DEVTOOLS_DEVICE_FILTER`, `DEVTOOLS_CDP_PORT`.
@@ -92,7 +92,7 @@ Notes:
   instead of an RN app (`npm run fake-cdp`, needs Chrome with `--remote-debugging-port=9222`;
   run the shell with `DEVTOOLS_CDP_BRIDGE=off` so the port is free).
 - `src/tools/rn-cdp.js` — the RN sibling, now a CLI over the shell's own
-  `src/main/cdp-bridge.js`. Only needed to run the relay outside the shell
+  `src/electron/extensions/internal/cdp/cdp-bridge.js`. Only needed to run the relay outside the shell
   (`DEVTOOLS_CDP_BRIDGE=off npm start` + `npm run rn-cdp`); `--metro-port`, `--app`,
   `--device` filters. Against `../expo56` the same recipe applies (`WITH_ROZENITE=true
   npx expo start` there, then `DEVTOOLS_METRO_PORT=<port> npm start` here).

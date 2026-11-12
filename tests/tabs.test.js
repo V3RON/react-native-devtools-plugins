@@ -1,5 +1,5 @@
-// chrome.tabs — the one-tab model (src/chrome-shim/tabs.js + tab-model.js) and the
-// host's open policy (src/main/tab-host.js). GitHub issue #4.
+// chrome.tabs — the one-tab model (src/electron/extensions/internal/shim/tabs.js + tab-model.js) and the
+// host's open policy (src/electron/extensions/internal/services/tab-host.js). GitHub issue #4.
 //
 // Everything the model cannot know is injected: the inspected target's real
 // url/title, the capability to open something, the capability to close it. No test
@@ -9,16 +9,16 @@
 const test = require("node:test");
 const assert = require("node:assert");
 
-const { createTabs, UNKNOWN_URL } = require("../src/chrome-shim/tabs");
-const { queryMatcher } = require("../src/chrome-shim/tab-model");
-const { createChromeNamespace } = require("../src/chrome-shim");
-const { createMemoryBackend, createExtensionStorage } = require("../src/chrome-shim/storage");
-const { createGrantGate } = require("../src/shared/permissions");
-const { createTabHost } = require("../src/main/tab-host");
-const { createExternalOpener } = require("../src/main/external-open");
+const { createTabs, UNKNOWN_URL } = require("../src/electron/extensions/internal/shim/tabs");
+const { queryMatcher } = require("../src/electron/extensions/internal/shim/tab-model");
+const { createChromeNamespace } = require("../src/electron/extensions/internal/shim");
+const { createMemoryBackend, createExtensionStorage } = require("../src/electron/extensions/internal/shim/storage");
+const { createGrantGate } = require("../src/electron/extensions/internal/broker/permissions");
+const { createTabHost } = require("../src/electron/extensions/internal/services/tab-host");
+const { createExternalOpener } = require("../src/electron/extensions/internal/services/external-open");
 const fs = require("node:fs");
 const path = require("node:path");
-const { tabIdFor } = require("../src/chrome-shim/devtools");
+const { tabIdFor } = require("../src/electron/extensions/internal/shim/devtools");
 
 const ATTACHED = { attached: true, url: "ws://10.0.0.5:8081/debugger-proxy?role=debugger", title: "RnApp" };
 
@@ -94,7 +94,7 @@ test("query filters: only the ones this shell can answer match", async () => {
 });
 
 test("query's url filter uses the same match-pattern compiler as chrome.webRequest", () => {
-  const { urlMatchesPattern } = require("../src/chrome-shim/web-request");
+  const { urlMatchesPattern } = require("../src/electron/extensions/internal/shim/web-request");
   const matches = queryMatcher((tab) => tab.id === 4242);
   const tab = { id: 4242, active: true, url: "https://a.example.com/x" };
   assert.strictEqual(matches(tab, { url: ["https://*.example.com/*"] }, urlMatchesPattern), true);
@@ -166,7 +166,7 @@ test("a tab failure reaches chrome.runtime.lastError through the real namespace 
     chrome.tabs.get(999999, function (tab) {
       // Chrome's shape: no value to work with, and the error lives on runtime.lastError.
       // `runtime.lastError` is a static `null` on a bare namespace because contextBridge
-      // cloning loses getters — src/preload/extension-frame.js re-defines it as a live
+      // cloning loses getters — src/electron/extensions/internal/preload/extension-frame.js re-defines it as a live
       // getter over this same holder. `_getLastLastError()` is that holder.
       observed = {
         tab,
@@ -439,7 +439,7 @@ test("chrome.tabs is gated on the declared tabs permission, promise and callback
   assert.match(String(rejected && rejected.message), /permission 'tabs'/);
 });
 
-// ── the host's open policy (src/main/tab-host.js) ────────────────────────────
+// ── the host's open policy (src/electron/extensions/internal/services/tab-host.js) ────────────────────────────
 test("targetInfo answers about:blank-equivalent when the bridge is not attached, without asking", async () => {
   let asked = 0;
   const host = createTabHost({
@@ -501,7 +501,7 @@ test("open: the default policy opens nothing and says so; external and window ar
   // caller's string — the same rule the window branch follows at the bottom of this test. It
   // moved here because the host used to pass the raw string through and leave the check to
   // the injected opener, which is a filter only for as long as the injected opener is the
-  // one from src/main/external-open.js. Both assertions below this one therefore fail against
+  // one from src/electron/extensions/internal/services/external-open.js. Both assertions below this one therefore fail against
   // the code as it stood before this commit, unlike the pins in the tests further down.
   assert.deepEqual(launched, ["https://example.com/"]);
   launched.length = 0;
@@ -586,7 +586,7 @@ const REFUSALS = [
 ];
 
 test("the window policy refuses every scheme the external policy refuses, before opening anything", async () => {
-  // One shared verdict, composed the way attachTabHost composes it (src/main/tab-host.js
+  // One shared verdict, composed the way attachTabHost composes it (src/electron/extensions/internal/services/tab-host.js
   // filters in BOTH branches and each refusal travels as a throw): a URL cannot be openable to
   // one policy and refused to the other.
   const opened = [];
@@ -713,7 +713,7 @@ test("the window policy still opens http(s) and the extension's own rozenite:// 
     "https://example.com/page",
     "http://localhost:8081/index",
     // Altair's `create({url: "altair-app/index.html"})` arrives like this: the shim
-    // resolves a bare path against the extension origin (src/chrome-shim/tabs.js).
+    // resolves a bare path against the extension origin (src/electron/extensions/internal/shim/tabs.js).
     "rozenite://altair.local/altair-app/index.html",
     "rozenite://altair.local/index.html?x=1#frag",
   ]) {
@@ -724,7 +724,7 @@ test("the window policy still opens http(s) and the extension's own rozenite:// 
   // A rozenite:// URL naming no extension is refused rather than handed to a window: the
   // file server has nothing to serve for it, and "we tried" is not what a filter is for.
   await assert.rejects(() => host.open({ url: "rozenite://" }), /refused to open a URL/);
-  // A port is not part of `id == hostname` (src/shared/protocol.js), so this names no folder
+  // A port is not part of `id == hostname` (src/electron/extensions/internal/scheme/protocol.js), so this names no folder
   // this protocol can serve. Pre-fix it LOADED: the old prefix rule took `a.b:8080` as the id,
   // and the file server's own id rule is what turned the window into a 404 — the failure mode a
   // filter is supposed to prevent, so this is a regression guard, not a pin.
@@ -756,7 +756,7 @@ test("the window policy still opens http(s) and the extension's own rozenite:// 
 
 test("the extension scheme stays outside the external policy: shell.openExternal never sees it", async () => {
   // `openableWindowUrl`'s extra scheme is scoped to the window branch. Composed the way
-  // attachTabHost composes it (src/main/tab-host.js), `external` still refuses rozenite://:
+  // attachTabHost composes it (src/electron/extensions/internal/services/tab-host.js), `external` still refuses rozenite://:
   // the OS launcher has no handler for this shell's protocol, so handing it over would open
   // "nothing" or whatever the OS guesses, and claim the tab opened externally.
   const launched = [];
@@ -777,13 +777,13 @@ test("the extension scheme stays outside the external policy: shell.openExternal
 
   // And the shared allowlist itself never learned the scheme (tests/host-primitives.test.js
   // pins the same refusal from the other side).
-  const { ALLOWED_PROTOCOLS, openableUrl } = require("../src/main/external-open");
+  const { ALLOWED_PROTOCOLS, openableUrl } = require("../src/electron/extensions/internal/services/external-open");
   assert.deepEqual(ALLOWED_PROTOCOLS, ["http:", "https:"]);
   assert.strictEqual(openableUrl("rozenite://altair.local/index.html"), null);
 });
 
 // Two of the three hops a refusal travels are an IPC boundary and a frame preload, which no
-// unit test can cross (registerIpcHandlers needs a real ipcMain; openTabIn runs in a frame's
+// unit test can cross (the broker's register() needs a real ipcMain; openTabIn runs in a frame's
 // renderer), so they are pinned from source — the idiom tests/security.test.js and
 // tests/tier2-honesty.test.js use, over CODE rather than comments. The third hop, what the
 // real shim does with a host that opened nothing, is asserted for real below.
@@ -795,11 +795,11 @@ const codeOf = (source) =>
     .split("\n")
     .filter((line) => !/^\s*(\/\/|\*|\*\/)/.test(line))
     .join("\n");
-/** The body of one `ipcMain.handle(CHANNEL, …)` registration, comment-free. */
+/** The body of one `handle(CHANNEL, …)` registration (the broker's ipcMain.handle), comment-free. */
 const channelHandler = (channel) => {
-  const source = codeOf(readSource("src", "main", "ipc.js"));
-  const start = source.indexOf(`ipcMain.handle(${channel},`);
-  assert.ok(start >= 0, `src/main/ipc.js registers ${channel}`);
+  const source = codeOf(readSource("src", "electron", "extensions", "internal", "broker", "ipc.js"));
+  const start = source.indexOf(`handle(${channel},`);
+  assert.ok(start >= 0, `src/electron/extensions/internal/broker/ipc.js registers ${channel}`);
   return source.slice(start, source.indexOf("});", start));
 };
 
@@ -819,7 +819,7 @@ test("the throw becomes the frame's {ok: false, error}, and the shim reports not
   );
 
   // hop 2 — the frame keeps Chrome's shape (create never fails here) and says why.
-  const preload = codeOf(readSource("src", "preload", "extension-frame.js"));
+  const preload = codeOf(readSource("src", "electron", "extensions", "internal", "preload", "extension-frame.js"));
   assert.match(
     preload,
     /tabs\.create opened nothing: \$\{reply\.error\}/,

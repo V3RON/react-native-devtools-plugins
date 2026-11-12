@@ -13,32 +13,61 @@ Electron provides all three.
 
 ## Repository layout
 
+The code follows the layout the upstream port will have
+([SPEC-DEBUGGER-SHELL-EXTENSIONS.md](SPEC-DEBUGGER-SHELL-EXTENSIONS.md) §5.1–§5.3): the
+extension host behind one public entry, and this repository's development shell beside it.
+
 ```
-src/
-├── shared/          cross-realm contracts only: ipc channel names, protocol scheme/helpers
-├── chrome-shim/     pure chrome.* logic; backends & transports injected by the caller
-├── main/            Electron main process: state + services
-├── preload/         thin transport layer (frontend-host / extension-frame)
-├── frontend/        code evaluated into the frontend's main world (panel-bridge)
-└── tools/           dev-only tools (fake-cdp, rn-cdp CLI wrapper)
-extensions/          "installed extensions": sample-extension/, graphql/, altair/, showcase/
+src/electron/
+├── extensions/              the extension host (what gets ported)
+│   ├── index.js             public API: registerExtensionSchemes, createExtensionHost
+│   └── internal/
+│       ├── ExtensionHost.js composition root: builds every service, attachWindow, dispose
+│       ├── settings.js      the host's configuration (set by createExtensionHost; no env)
+│       ├── scheme/          rozenite:// privileges + session protocol handler, CSP, URL helpers
+│       ├── registry/        folder scan, manifests + i18n, install state
+│       ├── broker/          extension IPC channels, frame principals, grants, delivery scope
+│       ├── frontend/        panel host, panel bridge (main-world source), theme, frontend guard
+│       ├── contexts/        message router, context registry/requests, background + options hosts,
+│       │                    frame policy (webPreferences)
+│       ├── cdp/             CDP bridge, inspectedWindow, network model/service
+│       ├── content/         content-script registry, gate, bridge + in-app loader
+│       ├── services/        storage, notifications, downloads/save, tabs, external open
+│       ├── preload/         the extension preload (registered on the session): extension
+│       │                    frame (chrome.*) | frontend bridge (__RN_DEVTOOLS_EXTENSIONS__)
+│       └── shim/            pure chrome.* logic; backends & transports injected by the caller
+└── shell/                   development shell — stands in for upstream's debugger-shell; not ported
+    ├── main.js, window.js   lifecycle + the frontend window, over the public API only
+    ├── config.js            DEVTOOLS_* env → the shell's options + extensionHostConfig()
+    ├── preload.js           the window's own preload → frontend-host.js (InspectorFrontendHost)
+    └── ipc.js, channels.js, frontend-frame.js, host-files.js, host-config.js,
+        context-menu.js, dispatch.js, window-open-policy.js
+src/tools/                   dev-only tools (fake-cdp, rn-cdp CLI wrapper)
+extensions/                  "installed extensions": sample-extension/, graphql/, altair/, showcase/
 ```
 
-Layering rule (imports point downward only): `shared` ← `chrome-shim` ← `main/*` ←
-`preload/*`. Preloads contain no policy; the shim never touches `window`/`ipcRenderer`.
-`frontend/` is off this graph: its files are plain expressions `executeJavaScript`-ed
-into the frontend's main world, never `require`d at runtime.
+Boundary rules, asserted by `tests/architecture-boundary.test.js`: the shell imports
+`extensions/index.js` only (two allowlisted exceptions: its InspectorFrontendHost save and
+open-in-new-tab reuse `services/save-service` and `services/external-open`); nothing under
+`extensions/` imports the shell or reads `process.env`; nothing under `extensions/internal`
+builds a service at import time. Inside the host, imports point downward:
+`shim` ← `preload`; the preload contains no policy and the shim never touches
+`window`/`ipcRenderer`. `frontend/panel-bridge.js` is off the graph: it is a plain
+expression `executeJavaScript`-ed into the frontend's main world, never `require`d.
 
 ## Components
 
-### Electron main process (`src/main/`)
+### Electron main process (`src/electron/`)
 
-- `index.js` — lifecycle wiring only (`start()` the bridge on ready, `stop()` on quit), plus
-  the one place that decides **what counts as an application window**: the hidden background
-  worker windows are not user-closable, so they neither keep the app alive nor block
-  `activate` (see `docs/features/BACKGROUND-WORKER.md` § App shutdown).
-  `window.js` — BrowserWindow + frontend load.
-  `config.js` — frontend URL (`http://127.0.0.1:8081/rozenite/rn_fusebox.html?ws=localhost:9223`),
+- `extensions/internal/ExtensionHost.js` — the composition root. `createExtensionHost`
+  registers the scheme handler and the extension preload on the session, builds every
+  service and the IPC broker; `attachWindow` (one window in v1) starts the frontend guard,
+  panel host, CDP bridge, content bridge and background contexts, and the window's `closed`
+  detaches them — worker windows close with it, so `window-all-closed` quits as usual;
+  `dispose` (on `will-quit`) flushes storage and unregisters everything.
+- `shell/main.js` — the development shell's lifecycle wiring, over the public API only.
+  `shell/window.js` — BrowserWindow + frontend load.
+  `shell/config.js` — frontend URL (`http://127.0.0.1:8081/rozenite/rn_fusebox.html?ws=localhost:9223`),
   extensions dir, CDP-bridge knobs; all env-overridable: `DEVTOOLS_FRONTEND_URL`,
   `DEVTOOLS_EXTENSIONS_DIR`, `DEVTOOLS_CDP_BRIDGE` (`off` = external relay),
   `DEVTOOLS_SHOW_PANEL` (`<extensionId>[/<pagePath>]`: open on that extension's panel),
@@ -89,7 +118,7 @@ into the frontend's main world, never `require`d at runtime.
   symlinked folder is never an extension root — the same verdict the scan reaches, because
   `readdir` + `isDirectory()` never reports a link
   (`tests/extension-symlink-containment.test.js`). Every response carries that extension's CSP
-  (`src/shared/csp.js`): its own `content_security_policy`, or Chrome's MV3 default.
+  (`src/electron/extensions/internal/scheme/csp.js`): its own `content_security_policy`, or Chrome's MV3 default.
   The handler is **`protocol.handle`**, not the deprecated `registerFileProtocol`, because
   one response kind has no bytes on disk: the reserved path
   `rozenite://<id>/__rozenite_background__?script=<path>&type=<classic|module>` returns a
@@ -105,7 +134,7 @@ into the frontend's main world, never `require`d at runtime.
 - `background-host.js` — one hidden `BrowserWindow` (`show: false`) per extension that
   declares a background (`docs/features/BACKGROUND-WORKER.md`). It is **a third execution
   context**, next to the frontend's main frame and the extension iframes inside it: the
-  worker's document is the main frame of its own window, so `src/preload/index.js` dispatches
+  worker's document is the main frame of its own window, so `src/electron/extensions/internal/preload/index.js` dispatches
   on the **protocol first** (an extension page is an extension page whether it is an iframe or
   a window's top frame) and the worker gets the same shim, gate, and `RUNTIME_REGISTER` seat
   as a panel. `did-fail-load`, `render-process-gone`, `unresponsive` and the worker's console
@@ -124,10 +153,10 @@ into the frontend's main world, never `require`d at runtime.
   Chrome response-settling, Port lifecycle. `dispatch.js` + `context-menu.js` — the
   host→frontend dispatch channel and its first consumer.
 
-### Security model (`src/main/frame-security.js`)
+### Security model (`src/electron/extensions/internal/contexts/frame-security.js`)
 
 One `webPreferences` object per `WebContents`. Every extension **iframe** (devtools page,
-panels) lives inside the frontend's own frame tree — `src/frontend/panel-bridge.js` creates
+panels) lives inside the frontend's own frame tree — `src/electron/extensions/internal/frontend/panel-bridge.js` creates
 them — so the frontend and those frames necessarily share one policy, and that is what
 `basePreferences` encodes. An extension's **background context** has its own `WebContents` and
 could therefore have a different policy; it uses the same table anyway, deliberately: the two
@@ -160,7 +189,7 @@ fake inspected app inside the harness (on a port the OS picks, reported back on 
 and records the pushes main addressed to each frame, so a filtered-out one is visible too
 (see F6 in [SECURITY-PLATFORM.md](SECURITY-PLATFORM.md) for why those assertions exist).
 
-### Main-frame preload (`src/preload/frontend-host.js`)
+### Main-frame preload (`src/electron/shell/frontend-host.js`)
 
 - Implements **`InspectorFrontendHost`** — the ~60-method host interface the frontend
   expects Chrome to provide. Methods are grouped into explicit **[REAL] / [FAKE] /
@@ -171,22 +200,22 @@ and records the pushes main addressed to each frame, so a filtered-out one is vi
 - `setInjectedScriptForOrigin(origin, script)` is a documented **no-op**. It used to be the
   channel through which the frontend fork shipped a `chrome.devtools.*` implementation into
   extension frames, to be stored in main and `new Function`'d into every frame of that
-  origin. `chrome.devtools.*` is now implemented shell-side in `src/chrome-shim/devtools.js`,
+  origin. `chrome.devtools.*` is now implemented shell-side in `src/electron/extensions/internal/shim/devtools.js`,
   so the channel, its in-memory store, and the two `sendSync` exceptions that carried it are
-  all gone — which makes the async-IPC house rule in `src/shared/ipc.js` unconditional.
+  all gone — which makes the async-IPC house rule in `src/electron/extensions/internal/broker/channels.js` unconditional.
 
-### Extension-iframe preload (`src/preload/extension-frame.js`)
+### Extension-iframe preload (`src/electron/extensions/internal/preload/extension-frame.js`)
 
 Any iframe loaded under `rozenite:` (hostname = extension id) gets, in order — and this is
 also what an extension's **background context** gets, since that is a `rozenite:` document in
 a hidden window of its own:
 
-- the **`chrome` namespace** assembled by `src/chrome-shim`, merged onto `window.chrome`
+- the **`chrome` namespace** assembled by `src/electron/extensions/internal/shim`, merged onto `window.chrome`
   (its `devtools.inspectedWindow.eval` / `.reload` are wired to the async `DEVTOOLS_EVAL`
-  / `DEVTOOLS_RELOAD` IPC channels, answered by `src/main/inspected-window.js`; its network
+  / `DEVTOOLS_RELOAD` IPC channels, answered by `src/electron/extensions/internal/cdp/inspected-window.js`; its network
   APIs are wired to `NETWORK_SUBSCRIBE` / `NETWORK_GET_HAR` / `NETWORK_GET_STATUS` /
   `NETWORK_GET_BODY`, with `NETWORK_DELIVER` as the host's push channel);
-- a **permission gate** (`src/shared/permissions.js` + `src/chrome-shim/permission-gate.js`)
+- a **permission gate** (`src/electron/extensions/internal/broker/permissions.js` + `src/electron/extensions/internal/shim/permission-gate.js`)
   seeded from the grants `RUNTIME_REGISTER` derives from the manifest **on disk** — so the
   verdict is the host's, and a page-world script cannot widen it by replacing
   `chrome.runtime.getManifest`;
@@ -197,15 +226,15 @@ a hidden window of its own:
 - nothing else. No raw `ipcRenderer`, no injected-script fetch, no Node globals: the page
   world has named channels only.
 
-### Chrome API shim (`src/chrome-shim/`)
+### Chrome API shim (`src/electron/extensions/internal/shim/`)
 
 Pure modules; `index.js` assembles the namespace from injected deps:
 
 - `storage.js` — real `chrome.storage.local/sync/session` ([REAL]): the API shape (promise +
   callback, `lastError`, per-area and global `onChanged`) as a thin client of the HOST's store
-  (`src/main/storage-service.js`: one store per extension for all its contexts, electron-store
+  (`src/electron/extensions/internal/services/storage-service.js`: one store per extension for all its contexts, electron-store
   for local/sync, memory for session, change events fanned out to every context of that
-  extension over `STORAGE_DELIVER`). The semantics live in `src/shared/storage-core.js`.
+  extension over `STORAGE_DELIVER`). The semantics live in `src/electron/extensions/internal/services/storage-core.js`.
 - `network-bridge.js` — `chrome.devtools.network` **and** `chrome.webRequest`, both fed by
   the host's one CDP network model: the frame subscribes on its first listener, the host
   pushes one delivery per lifecycle step, and this module decides which Chrome event each
@@ -246,14 +275,14 @@ Pure modules; `index.js` assembles the namespace from injected deps:
   `inspectedWindow.eval` against an injected `evalInPage` host dependency
   ([features/INSPECTED-WINDOW.md](features/INSPECTED-WINDOW.md)), `panels.network.getHAR`
   on the shared network bridge, a live `panels.themeName`/`setThemeChangeHandler` fed by the host's
-  theme state (`src/main/theme-host.js`), and otherwise inert panel events
+  theme state (`src/electron/extensions/internal/frontend/theme-host.js`), and otherwise inert panel events
   ([features/DEVTOOLS-PANELS.md](features/DEVTOOLS-PANELS.md)). `tabs.js` answers with the
   ONE tab this shell has — the inspected RN target, under the id
   `devtools.inspectedWindow.tabId` reports — with url/title read from the host's CDP target
   info and `create`/`remove` driving the host's own open policy.
   Full gap analysis: [api/CHROME-EXTENSION-APIS.md](api/CHROME-EXTENSION-APIS.md).
 
-### Shell-driven extension hosting (`src/main/extensions.js`, `src/main/panel-host.js`, `src/frontend/panel-bridge.js`)
+### Shell-driven extension hosting (`src/electron/extensions/internal/registry/extensions.js`, `src/electron/extensions/internal/frontend/panel-host.js`, `src/electron/extensions/internal/frontend/panel-bridge.js`)
 
 Replaces hardcoded fork knowledge end-to-end
 ([features/DEVTOOLS-PANELS.md](features/DEVTOOLS-PANELS.md)): `extensions.js` scans
@@ -275,7 +304,7 @@ app. Since the shell now binds the frontend's `ws` port itself, run the shell wi
 
 ### `src/tools/rn-cdp.js` — optional external relay (`npm run rn-cdp`)
 
-A thin CLI over `src/main/cdp-bridge.js`, for running the relay **outside** the shell.
+A thin CLI over `src/electron/extensions/internal/cdp/cdp-bridge.js`, for running the relay **outside** the shell.
 The shell does this internally now, so the usual flow is just `npm start`. Keep it for
 the external-bridge mode (`DEVTOOLS_CDP_BRIDGE=off npm start` + `npm run rn-cdp`), or
 to serve the frontend from another host. Flags: `--metro-host/--metro-port`,
@@ -288,7 +317,7 @@ to serve the frontend from another host. Flags: `--metro-host/--metro-port`,
                         ▲
                         │ upstream socket (/json/list discovery + re-attach loop)
                         ▼
-   host ──► CDP BRIDGE (src/main/cdp-bridge.js) ◄──► DevTools frontend (main frame)
+   host ──► CDP BRIDGE (src/electron/extensions/internal/cdp/cdp-bridge.js) ◄──► DevTools frontend (main frame)
             │  sendCommand(method, params) → Promise     │ InspectorFrontendHost.* (preload stubs)
             │  onEvent(method, handler)                  │ setInjectedScriptForOrigin ──► no-op
             │                                            ▼
@@ -314,9 +343,9 @@ middleware, and every extension frame — the model accumulates once in main and
 | Context | Where it runs | Frame tree | Created by |
 | --- | --- | --- | --- |
 | DevTools frontend | main frame of the visible `BrowserWindow` | its own | `window.js` |
-| devtools page, panel pages | `rozenite://` iframes | **the frontend's** | `src/frontend/panel-bridge.js` |
-| **background context** (MV3 worker) | main frame of a hidden `BrowserWindow`, one per extension | **its own** | `src/main/background-host.js` |
-| injected content scripts | **inside the inspected app**, not in any Electron context | none — the app is not a frame tree | `src/main/content-bridge.js`, over the CDP session, only for extensions named in `DEVTOOLS_CONTENT_SCRIPTS` |
+| devtools page, panel pages | `rozenite://` iframes | **the frontend's** | `src/electron/extensions/internal/frontend/panel-bridge.js` |
+| **background context** (MV3 worker) | main frame of a hidden `BrowserWindow`, one per extension | **its own** | `src/electron/extensions/internal/contexts/background-host.js` |
+| injected content scripts | **inside the inspected app**, not in any Electron context | none — the app is not a frame tree | `src/electron/extensions/internal/content/content-bridge.js`, over the CDP session, only for extensions named in `DEVTOOLS_CONTENT_SCRIPTS` |
 
 ```
  frontend window (visible)                      extension windows (show:false, one per extension)

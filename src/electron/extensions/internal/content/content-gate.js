@@ -49,8 +49,8 @@
 //
 // Both cases are reported. What is NOT true in either case: that this shell behaves
 // like Chrome. It is stricter by design, and the strictness is the point.
-const { urlMatchesPattern } = require("../chrome-shim/web-request");
-const { declaredPermissions } = require("../shared/permissions");
+const { urlMatchesPattern } = require("../shim/web-request");
+const { declaredPermissions } = require("../broker/permissions");
 
 /** The conventional token: every extension, for the one inspected RN target. */
 const ALL_RN_TARGETS = "<all_rn_targets>";

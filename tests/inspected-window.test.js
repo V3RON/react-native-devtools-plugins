@@ -1,4 +1,4 @@
-// inspectedWindow.eval mapping tests (src/main/inspected-window.js): the pure
+// inspectedWindow.eval mapping tests (src/electron/extensions/internal/cdp/inspected-window.js): the pure
 // CDP -> Chrome contract rules from docs/features/INSPECTED-WINDOW.md, plus the
 // timeout / no-session degradation paths driven through an injected command
 // sender (no socket, no Electron).
@@ -12,7 +12,7 @@ const {
   createEvalInPage,
   createReloadInPage,
   TIMEOUT_SLACK_MS,
-} = require("../src/main/inspected-window");
+} = require("../src/electron/extensions/internal/cdp/inspected-window");
 
 test("Runtime.evaluate params are the Chrome-fidelity ones", () => {
   assert.deepStrictEqual(toEvaluateParams("globalThis.__REDUX_DEVTOOLS"), {
@@ -195,7 +195,7 @@ test("evalInPage: a timed-out command settles as isError", async () => {
   const { value, exceptionInfo } = await evalInPage("while(true){}", { timeout: 5 });
   assert.strictEqual(value, undefined);
   assert.strictEqual(exceptionInfo.isError, true);
-  // Chrome's timeout + the bridge's slack (src/main/inspected-window.js).
+  // Chrome's timeout + the bridge's slack (src/electron/extensions/internal/cdp/inspected-window.js).
   assert.match(exceptionInfo.value, new RegExp(`timed out after ${5 + TIMEOUT_SLACK_MS}ms`));
 });
 

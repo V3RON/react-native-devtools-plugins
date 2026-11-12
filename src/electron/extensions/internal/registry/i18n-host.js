@@ -4,11 +4,11 @@
 //
 // Why a bundle served over the extension protocol and not an IPC call: extensions call
 // `chrome.i18n.getMessage` at the top of their first script, so the answer has to exist
-// before any page script runs. Every IPC channel here is async (src/shared/ipc.js — no
+// before any page script runs. Every IPC channel here is async (src/electron/extensions/internal/broker/channels.js — no
 // sendSync), and an async answer would arrive after the first call. The extension
 // protocol is already the one sanctioned way for a frame to read its own files, and a
 // synchronous XMLHttpRequest to the frame's OWN origin reads it without any new
-// channel (src/preload/extension-frame.js).
+// channel (src/electron/extensions/internal/preload/extension-frame.js).
 // The frame decides nothing: the extension id is the request's own hostname, the UI
 // locale is the host's, and every file read happens here under a containment check —
 // but NOT under the protocol server's guard. That guard decides containment for the
@@ -18,7 +18,7 @@
 // how an escaping `_locales` once reached a bundle (docs/SECURITY-PLATFORM.md §3.2).
 const fs = require("fs");
 const path = require("path");
-const i18n = require("../shared/i18n");
+const i18n = require("./i18n");
 
 const LOCALES_DIR = "_locales";
 // A catalog larger than this is not a message catalog; refusing it keeps one
@@ -36,7 +36,7 @@ const readJson = (file) => {
 /**
  * The realpath rule, applied HERE rather than left to the caller.
  *
- * `src/main/extension-server.js` decides containment for the path a REQUEST names,
+ * `src/electron/extensions/internal/scheme/extension-server.js` decides containment for the path a REQUEST names,
  * but the reads in this file are for paths this file DERIVES — `manifest.json`,
  * `_locales/<locale>/messages.json` — and a derived path never passes that guard.
  * One `victim/_locales -> outside` link therefore left the message bundle reading
@@ -52,7 +52,7 @@ const readJson = (file) => {
  * must be the root or start with it plus a separator (docs/SECURITY-PLATFORM.md §3.2).
  *
  * That rule therefore exists twice: `resolveInsideExtension` in
- * src/main/extension-server.js, and `containmentFor` here. It cannot be shared,
+ * src/electron/extensions/internal/scheme/extension-server.js, and `containmentFor` here. It cannot be shared,
  * because extension-server requires THIS module and a shared guard would close the
  * cycle in the wrong direction — so the two are deliberately the same rule, and a
  * change to one is a change to the other. It is not one rule enforced in two places by
@@ -67,7 +67,7 @@ const containmentFor = (root) => {
   // The linked-root refusal lives HERE as well as in the request guard, not only in the
   // callers: the doctrine "a symlinked folder is never an extension root" is a property
   // of THIS module's reads, and until now it held only because every caller (
-  // src/main/extension-server.js) had refused a linked root before handing it in. A
+  // src/electron/extensions/internal/scheme/extension-server.js) had refused a linked root before handing it in. A
   // caller that forgot would get a bundle out of a folder the scanner would not even
   // list — the permissive disagreement the guard's docblock rules out. `lstat` decides,
   // because `realpath` resolves the link and would make a linked root look ordinary.

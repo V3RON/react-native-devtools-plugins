@@ -5,7 +5,7 @@
 // The harness's loopback page stands in for the frontend: it serves a FAKE
 // /rozenite/ui/legacy/legacy.js (InspectorView + SimpleView, ~25 lines, the same
 // wasShown/willHide/setHideOnDetach contract the real widget has) and a `.main-tabbed-pane`,
-// so the PRODUCTION src/frontend/panel-bridge.js boots in it exactly as it does in the app.
+// so the PRODUCTION src/electron/extensions/internal/frontend/panel-bridge.js boots in it exactly as it does in the app.
 // The page then plays the user: it selects tabs through the fake's `__select`.
 // Run: npm test (needs a display; the Electron suites skip without Electron).
 const test = require("node:test");
@@ -162,7 +162,7 @@ const hostPage = `<!DOCTYPE html>
     await sleep(500);
     if (!sessionStorage.getItem("phase2")) {
       window.__addPlain("network");
-      await window.__SHELL_HOST__.reportTheme("dark");
+      await window.__RN_DEVTOOLS_EXTENSIONS__.reportTheme("dark");
       await sleep(300);
       window.__select(${JSON.stringify(A1)});   await sleep(2500);
       window.__select("network");               await sleep(800);

@@ -9,7 +9,7 @@
 //     producer arrives with the background host (bucket 3).
 const { createEvent } = require("./event");
 const { promiseOrCallback } = require("./async-style");
-const { buildExtensionURL } = require("../shared/protocol");
+const { buildExtensionURL } = require("../scheme/protocol");
 
 /**
  * @param {object} deps
@@ -19,7 +19,7 @@ const { buildExtensionURL } = require("../shared/protocol");
  * @param {{value: any}} deps.lastError shared mutable holder — the messaging
  *        client sets it around callback invocations (Chrome scoping).
  * @param {() => Promise<{ok: boolean, url?: string, error?: string}>} [deps.openOptionsPage]
- *        host capability behind `runtime.openOptionsPage` (src/main/options-host.js).
+ *        host capability behind `runtime.openOptionsPage` (src/electron/extensions/internal/contexts/options-host.js).
  *        Absent = this context cannot have an options page opened for it, which the
  *        shim reports as Chrome's failure rather than a silent no-op.
  */
@@ -111,7 +111,7 @@ const createRuntime = ({
     // listener and callback invocations; extensions branch on this.
     // Exposed as a data placeholder + an accessor helper — contextBridge
     // cloning loses live getters, so the frame preload re-defines `lastError`
-    // as a real getter in the main world (see src/preload/extension-frame.js).
+    // as a real getter in the main world (see src/electron/extensions/internal/preload/extension-frame.js).
     lastError: null,
     _getLastLastError: () => lastError.value,
   };

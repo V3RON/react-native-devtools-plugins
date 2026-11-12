@@ -2,7 +2,7 @@
 //
 // NOT a module: main process reads this file and evaluates it as an
 // expression via webContents.executeJavaScript in the FRONTEND's main world
-// on every page load (src/main/panel-host.js). Config arrives via
+// on every page load (src/electron/extensions/internal/frontend/panel-host.js). Config arrives via
 // window.__SHELL_EXT_CONFIG__ = { devtoolsPages, panels }.
 //
 // The dynamic import resolves to the very module instance the frontend (and
@@ -35,7 +35,7 @@
   // `ui-theme` setting ("default" | "dark" | "systemPreferred") against the
   // system's prefers-color-scheme and dispatches `themechange` after applying it.
   // Reported BEFORE the extension frames are created, and also carried on each frame's
-  // URL (`?__rozenite_theme=`, src/shared/theme.js), so they boot with the answer.
+  // URL (`?__rozenite_theme=`, src/electron/extensions/internal/frontend/theme.js), so they boot with the answer.
   //
   // Best effort, never on the critical path: a moved module or a stuck IPC costs the
   // extensions their theme (they stay on "default"), not their panels.
@@ -46,7 +46,7 @@
     const themeSupport = themeModule.ThemeSupport.instance();
     const reportTheme = () => {
       currentTheme = themeSupport.themeName() === "dark" ? "dark" : "default";
-      return window.__SHELL_HOST__?.reportTheme(currentTheme);
+      return window.__RN_DEVTOOLS_EXTENSIONS__?.reportTheme(currentTheme);
     };
     if (!window.__SHELL_THEME_LISTENER__) {
       // The bridge re-runs on every page load, but a load is a fresh window; this
@@ -66,7 +66,7 @@
     console.warn("[extensions] theme reporting unavailable:", error);
   }
 
-  // The frame URL's theme hint; same literal as THEME_PARAM in src/shared/theme.js.
+  // The frame URL's theme hint; same literal as THEME_PARAM in src/electron/extensions/internal/frontend/theme.js.
   // Never stamped when the theme could not be read: a guessed "default" would boot a dark
   // frontend's frames wrong and flip them once the register reply arrived.
   const withTheme = (url) => {
@@ -96,7 +96,7 @@
   const reportVisibility = (view, panelId, frame) => {
     const report = (shown) => {
       try {
-        window.__SHELL_HOST__.reportPanelVisible(panelId, shown);
+        window.__RN_DEVTOOLS_EXTENSIONS__.reportPanelVisible(panelId, shown);
       } catch {
         // host without the shell method: panel events simply stay quiet
       }
@@ -151,7 +151,7 @@
     // Named so the creating devtools page can obtain this frame's window for
     // Panel.onShown(window): `window.open("", name)` resolves an existing named frame
     // without navigating it (the panel frame lives in a shadow tree, so it is not in
-    // window.parent.frames). src/preload/extension-frame.js has the other half.
+    // window.parent.frames). src/electron/extensions/internal/preload/extension-frame.js has the other half.
     frame.name = panelId;
     frame.style.cssText = "width:100%;height:100%;border:0";
     view.contentElement.appendChild(frame);
@@ -160,7 +160,17 @@
     return true;
   };
 
-  window.__SHELL_EXT_PANELS__ = { addPanel, version: 1 };
+  // Select a tab this host added (DEVTOOLS_SHOW_PANEL). Only our own panels: the
+  // host checks its registry first, and this checks the frontend still has the view.
+  const showPanel = (panelId) => {
+    if (!inspectorView.hasPanel(panelId)) {
+      return false;
+    }
+    Promise.resolve(inspectorView.showPanel(panelId)).catch(() => {});
+    return true;
+  };
+
+  window.__SHELL_EXT_PANELS__ = { addPanel, showPanel, version: 1 };
 
   // Chrome-style hidden devtools page per extension: the extension-frame
   // preload arms these frames with chrome.*, and their

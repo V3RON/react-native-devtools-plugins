@@ -1,4 +1,4 @@
-// CDP bridge tests (src/main/cdp-bridge.js) against a fake Metro inspector proxy
+// CDP bridge tests (src/electron/extensions/internal/cdp/cdp-bridge.js) against a fake Metro inspector proxy
 // and a fake frontend — both real WebSockets in this process, using the `ws`
 // dependency the repo already has. Covers what the layers above depend on: host
 // command id correlation, non-matching ids relayed untouched, notification
@@ -26,7 +26,7 @@ const {
   REFUSE_CLOSE_CODE,
   isLoopbackAddress,
   upgradeAllowed,
-} = require("../src/main/cdp-bridge");
+} = require("../src/electron/extensions/internal/cdp/cdp-bridge");
 
 // A source address that is NOT loopback, for the one test that has to prove what
 // a peer on another machine sees. Empty on a machine with no LAN interface.
@@ -1347,7 +1347,7 @@ test("rn-cdp.js with no --listen-host keeps the loopback default", async (t) => 
 });
 
 test("DEVTOOLS_CDP_ALLOWED_ORIGINS is unset-by-default and additive", () => {
-  // src/main/config.js resolves this at LOAD time, so the env has to be set in a
+  // src/electron/shell/config.js resolves this at LOAD time, so the env has to be set in a
   // real child process — a mutated `process.env` here would not be the thing the
   // shell actually reads.
   const read = (env) => {
@@ -1368,7 +1368,7 @@ test("DEVTOOLS_CDP_ALLOWED_ORIGINS is unset-by-default and additive", () => {
       [
         "-e",
         "process.stdout.write(JSON.stringify(require(process.argv[1]).cdpBridge))",
-        path.join(__dirname, "..", "src", "main", "config.js"),
+        path.join(__dirname, "..", "src", "electron", "shell", "config.js"),
       ],
       { env: childEnv, encoding: "utf8" }
     );

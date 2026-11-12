@@ -69,7 +69,7 @@ Both are in [../ROADMAP.md](../ROADMAP.md#what-we-can-actually-implement-the-pru
 ## Dependency sketch
 
 ```
-cdp-bridge (src/main/cdp-bridge.js) ──┬── inspected-window.eval ──► content-scripts
+cdp-bridge (src/electron/extensions/internal/cdp/cdp-bridge.js) ──┬── inspected-window.eval ──► content-scripts
                                       │   (panels.elements 🚷: no anchor)
                                       ├── devtools-network ── webRequest
                                       └── device discovery (later)

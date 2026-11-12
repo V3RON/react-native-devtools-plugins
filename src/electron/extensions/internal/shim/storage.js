@@ -1,11 +1,11 @@
 // chrome.storage for one extension context (docs/features/STORAGE-AND-I18N.md).
 //
 // What an area MEANS (get/set/remove/clear, quota, change detection, JSON copies) lives
-// in src/shared/storage-core.js and runs wherever the state lives. This file is the
+// in src/electron/extensions/internal/services/storage-core.js and runs wherever the state lives. This file is the
 // API shape around it — promise AND callback style, lastError, the per-area and global
 // `onChanged` events — and it runs in one of two modes, chosen by what is injected:
 //
-//   call      — the production mode. The state is the HOST's (src/main/storage-service.js):
+//   call      — the production mode. The state is the HOST's (src/electron/extensions/internal/services/storage-service.js):
 //               every call is an async round trip, and every change to the extension's
 //               storage, from this context or any other, comes back as a delivery that
 //               `handleDelivery` turns into events. A write's callback is held until its
@@ -19,7 +19,7 @@
 //   delete(key): void  clear(): void
 const { createEvent } = require("./event");
 const { promiseOrCallback } = require("./async-style");
-const core = require("../shared/storage-core");
+const core = require("../services/storage-core");
 
 // In-memory backend for the in-process mode (the production session area is the
 // host's, shared by the extension's contexts).
@@ -185,7 +185,7 @@ const createExtensionStorage = ({ createBackend, call }) => {
     storage[area] = createArea(area);
   }
   storage.onChanged = globalChanged;
-  // Host -> context entry points; src/chrome-shim/index.js does not expose them, it only
+  // Host -> context entry points; src/electron/extensions/internal/shim/index.js does not expose them, it only
   // reads the three areas and `onChanged`.
   storage.handleDelivery = handleDelivery;
   storage.bindLastError = (pair) => {

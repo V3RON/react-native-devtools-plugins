@@ -6,7 +6,7 @@
 //
 // The harness's loopback page stands in for the frontend (`--frontend-host=on` names it
 // as the frontend window), and acts as the panel bridge: it creates the extension
-// iframes and reports the theme through the same `window.__SHELL_HOST__` the real
+// iframes and reports the theme through the same `window.__RN_DEVTOOLS_EXTENSIONS__` the real
 // bridge uses. Run: npm test (needs a display; the Electron suites skip without Electron).
 const test = require("node:test");
 const assert = require("node:assert");
@@ -43,7 +43,7 @@ log({
   search: location.search,
   hash: location.hash,
   panelKeys: Object.getOwnPropertyNames(panels),
-  hostBridge: typeof window.__SHELL_HOST__,
+  hostBridge: typeof window.__RN_DEVTOOLS_EXTENSIONS__,
 });
 panels.setThemeChangeHandler((name) => log({ phase: "changed", arg: name, theme: panels.themeName }));
 setTimeout(() => log({ phase: "later", theme: panels.themeName }), 2500);
@@ -61,7 +61,7 @@ const hostPage = `<!DOCTYPE html>
 <script>
   const say = (m) => console.log("[theme-test] " + m);
   const report = (name) =>
-    window.__SHELL_HOST__.reportTheme(name).then((r) => say("report " + name + " -> " + JSON.stringify(r)));
+    window.__RN_DEVTOOLS_EXTENSIONS__.reportTheme(name).then((r) => say("report " + name + " -> " + JSON.stringify(r)));
   const frame = (src, delay) =>
     setTimeout(() => {
       const f = document.createElement("iframe");

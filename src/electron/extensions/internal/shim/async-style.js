@@ -13,7 +13,7 @@
 // `runtime.lastError` failures: Chrome sets lastError for the duration of the
 // callback and hands the callback NO value to work with. Without them a shim would
 // either report a failure as a successful `undefined`, or leak a value alongside the
-// error. The gate in src/chrome-shim/permission-gate.js does the same thing for
+// error. The gate in src/electron/extensions/internal/shim/permission-gate.js does the same thing for
 // permission denials; this is the same contract for a shim's own errors.
 //
 // Whatever is handed to `setError` must carry `.message`: a callback caller's code is

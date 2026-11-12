@@ -323,7 +323,7 @@ const createSaveService = ({
       saveAs: Boolean(saveAs),
       // A path the CALLER already settled (InspectorFrontendHost.save re-saving a url
       // it holds a handle for): no dialog, no suggestion. Never taken from an
-      // extension — only src/main/host-files.js passes it.
+      // extension — only src/electron/shell/host-files.js passes it.
       fixedPath: typeof filePath === "string" && filePath ? filePath : null,
       title: typeof title === "string" ? title : "",
       error: "",
@@ -460,7 +460,7 @@ const createSaveService = ({
      * Chrome's `search`, answered from what this shell really tracked.
      *
      * The filters implemented here are exactly the ones the shim declares supported
-     * (SUPPORTED_QUERY in src/chrome-shim/downloads.js); anything else is IGNORED,
+     * (SUPPORTED_QUERY in src/electron/extensions/internal/shim/downloads.js); anything else is IGNORED,
      * and the shim reports that, because a filter silently treated as
      * match-everything is a wrong answer handed back as a right one.
      */
@@ -512,23 +512,24 @@ const createSaveService = ({
   };
 };
 
-// ── the Electron-backed singleton src/main/ipc.js installs ───────────────────
-let instance;
-
-const attachSaveService = (deps = {}) => {
+// ── the Electron-backed service the extension host builds (ExtensionHost.js) ─────
+/**
+ * @param {object} deps
+ * @param {object} [deps.contextRegistry] who receives onChanged (extension downloads)
+ * @param {object} [deps.requestQueue] the filename-suggestion round trip
+ * @param {string|null} [deps.testSaveDialog] test seam the embedding shell decides on
+ *        (src/electron/shell/config.js): a directory to auto-answer into, or "cancel"
+ */
+const attachSaveService = ({ contextRegistry = null, requestQueue = null, testSaveDialog = null, ...deps } = {}) => {
   const { dialog } = require("electron");
   const os = require("os");
   const path = require("path");
   const fs = require("fs/promises");
   const { default: nodeFetch } = require("node-fetch");
-  const { getContextRegistry } = require("./context-registry");
-  const { getRequestQueue } = require("./context-request");
-  const { createSaveService: build } = require("./save-service");
 
-  instance = build({
+  return createSaveService({
     showSaveDialog: (options) => {
-      // Test seam, off unless DEVTOOLS_TEST_SAVE_DIALOG is set (src/main/config.js).
-      const answer = require("./config").testSaveDialog;
+      const answer = testSaveDialog;
       if (answer) {
         if (answer === "cancel") return { canceled: true };
         return { canceled: false, filePath: path.join(answer, path.basename(options.defaultPath)) };
@@ -545,18 +546,16 @@ const attachSaveService = (deps = {}) => {
     writeFile: (target, data, options) => fs.writeFile(target, data, options),
     unlink: (target) => fs.unlink(target),
     downloadsDir: () => path.join(os.homedir(), "Downloads"),
-    contextRegistry: getContextRegistry(),
+    contextRegistry,
     // `chrome.downloads.onDeterminingFilename` needs a request/response round trip,
     // not a push: Chrome pauses the download until the extension answers, and only
     // the context that started the download is allowed to answer.
-    askContext: (frameKey, delivery, options) =>
-      getRequestQueue().request(frameKey, delivery, options),
+    askContext: requestQueue
+      ? (frameKey, delivery, options) => requestQueue.request(frameKey, delivery, options)
+      : null,
     ...deps,
   });
-  return instance;
 };
-
-const getSaveService = () => instance || attachSaveService();
 
 module.exports = {
   CANCELED,
@@ -568,5 +567,4 @@ module.exports = {
   nameFromUrl,
   safeName,
   attachSaveService,
-  getSaveService,
 };

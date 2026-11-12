@@ -19,7 +19,7 @@
 //     error instead of answering with a tab the extension did not name.
 //
 // Pure: the inspected target's real url/title and the open/close capabilities are
-// injected by the caller (src/preload/extension-frame.js), so nothing here knows
+// injected by the caller (src/electron/extensions/internal/preload/extension-frame.js), so nothing here knows
 // about Electron or IPC — the layering rule in docs/ARCHITECTURE.md.
 
 /** Chrome's "no document loaded" url — the honest answer when nothing is attached. */
@@ -62,7 +62,7 @@ const syntheticTab = ({ tabId, attached, url, title }) => ({
  * all), so it matches none of those filters.
  *
  * The caller passes the predicate rather than this module guessing from a field: the
- * inspected tab's identity is the shim's business (src/chrome-shim/tabs.js), and
+ * inspected tab's identity is the shim's business (src/electron/extensions/internal/shim/tabs.js), and
  * nothing about a descriptor should be inferable into "you are the inspected one".
  *
  * @param {(tab: object) => boolean} isInspected

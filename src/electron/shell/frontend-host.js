@@ -13,31 +13,23 @@
 // consumer (contextMenuItemSelected / contextMenuCleared).
 //
 // `sendMessageToBackend` is a no-op **by design, not by omission**: the frontend
-// URL carries `?ws=` (src/main/config.js), so the frontend build selects
+// URL carries `?ws=` (src/electron/shell/config.js), so the frontend build selects
 // core/sdk/WebSocketConnection and talks to the CDP socket itself — MainConnection,
 // the only user of sendMessageToBackend, is never constructed. The host reaches
-// the backend on that socket instead (src/main/cdp-bridge.js).
+// the backend on that socket instead (src/electron/extensions/internal/cdp/cdp-bridge.js).
 
 const { contextBridge, ipcRenderer, webFrame } = require("electron");
 const {
   HOST_EVENT,
   SHOW_CONTEXT_MENU,
-  PREF_REGISTER,
-  PREF_GET,
-  PREF_GET_ALL,
-  PREF_SET,
-  PREF_REMOVE,
-  PREF_CLEAR,
   WINDOW_BRING_TO_FRONT,
   WINDOW_CLOSE,
   HOST_SAVE,
-  THEME_REPORT,
   HOST_APPEND,
   HOST_CLOSE_FILE,
   HOST_OPEN_EXTERNAL,
   HOST_CONFIG,
-  EXT_PANEL_VISIBILITY,
-} = require("../shared/ipc");
+} = require("./channels");
 
 // ── dispatch channel receiver ───────────────────────────────────────────────
 // main -> HOST_EVENT -> window.InspectorFrontendAPI[name](...args).
@@ -107,10 +99,10 @@ const InspectorFrontendHost = {
   // ── [STUB] injected-script channel (deliberately inert) ──────────────────
   // The fork's channel for shipping a `chrome.devtools.*` implementation into
   // extension frames. It no longer exists here: `chrome.devtools.*` is
-  // implemented shell-side (src/chrome-shim/devtools.js), so there is no script
+  // implemented shell-side (src/electron/extensions/internal/shim/devtools.js), so there is no script
   // to hand over, and the host will not evaluate one it is handed — the path
   // used to store the string and `new Function` it in every frame of that origin
-  // (docs/features/DEVTOOLS-PANELS.md, src/shared/ipc.js house rule).
+  // (docs/features/DEVTOOLS-PANELS.md, src/electron/extensions/internal/broker/channels.js house rule).
   // Accepting and ignoring the call keeps the frontend's call site working.
   async setInjectedScriptForOrigin(origin, script) {
     // async like the previous implementation, so a frontend that awaits it is
@@ -126,7 +118,7 @@ const InspectorFrontendHost = {
   },
   openInNewTab(url) {
     // [REAL] the OS browser through main's http(s)-only allowlist
-    // (src/main/external-open.js). This used to be `window.open`, which made a new
+    // (src/electron/extensions/internal/services/external-open.js). This used to be `window.open`, which made a new
     // window of THIS shell with the DevTools preload attached.
     ipcRenderer
       .invoke(HOST_OPEN_EXTERNAL, { url: String(url) })
@@ -137,7 +129,7 @@ const InspectorFrontendHost = {
       })
       .catch((error) => console.warn(`InspectorFrontendHost.openInNewTab: ${error && error.message}`));
   },
-  // save / append / close are one family (src/main/host-files.js). `url` is the
+  // save / append / close are one family (src/electron/shell/host-files.js). `url` is the
   // frontend's own key for the file, sent verbatim: main derives the dialog's default
   // name from it, remembers the chosen path per url, and answers on the dispatch
   // channel with savedURL(url, path) / canceledSaveURL(url) / appendedToURL(url) — the
@@ -175,38 +167,19 @@ const InspectorFrontendHost = {
     );
   },
 
-  // ── [REAL] preferences (persisted via electron-store) ───────────────────
-  // Frontend state (theme, experiments, panel sizing) survives restarts.
-  // Async IPC; callbacks fire on resolution (Chrome's async contract).
-  registerPreference(name, options) {
-    ipcRenderer.invoke(PREF_REGISTER, name, options === undefined ? null : options);
-  },
-  getPreferences(callback) {
-    ipcRenderer.invoke(PREF_GET_ALL).then((all) => {
-      if (callback) callback(all);
-    });
-  },
-  getPreference(name, callback) {
-    ipcRenderer.invoke(PREF_GET, name).then((value) => {
-      if (callback) callback(value);
-    });
-  },
-  setPreference(name, value) {
-    ipcRenderer.invoke(PREF_SET, name, value);
-  },
-  removePreference(name) {
-    ipcRenderer.invoke(PREF_REMOVE, name);
-  },
-  clearPreferences() {
-    ipcRenderer.invoke(PREF_CLEAR);
-  },
+  // ── preferences: NOT here ────────────────────────────────────────────────
+  // registerPreference / getPreference(s) / setPreference / removePreference /
+  // clearPreferences are installed in the MAIN world below, on the page's own
+  // `localStorage`, exactly as the stock frontend's InspectorFrontendHostStub does
+  // and as @react-native/debugger-shell therefore stores them. Same store, so
+  // settings do not change between this shell and the upstream one.
   getSyncInformation(callback) {
     // [REAL] honest: there is no Chrome Sync here
     if (callback)
       callback({ isSyncActive: false, arePreferencesSynced: false });
   },
   getHostConfig(callback) {
-    // [REAL] the frontend's feature gates for this embedder (src/main/host-config.js).
+    // [REAL] the frontend's feature gates for this embedder (src/electron/shell/host-config.js).
     // `{}` on failure is the frontend's own "nothing configured" answer.
     ipcRenderer
       .invoke(HOST_CONFIG)
@@ -278,7 +251,7 @@ const InspectorFrontendHost = {
   // through here — verified against the bundle we load: the connection factory
   // (core/sdk/sdk.js) selects WebSocketConnection whenever the `ws`/`wss` query
   // param is present. The host therefore reaches the RN backend on that socket:
-  // src/main/cdp-bridge.js owns it and answers host commands by message id
+  // src/electron/extensions/internal/cdp/cdp-bridge.js owns it and answers host commands by message id
   // (docs/features/INSPECTED-WINDOW.md, docs/features/DISPATCH-CHANNEL.md).
   sendMessageToBackend(message) {},
 
@@ -321,27 +294,42 @@ const InspectorFrontendHost = {
   },
 };
 
-// The panel bridge (src/frontend/panel-bridge.js) reports frontend state through these
-// one-purpose functions. They are not part of InspectorFrontendHost (a stock-frontend
-// surface); main accepts each only from this window's main frame.
-contextBridge.exposeInMainWorld("__SHELL_HOST__", {
-  reportTheme: (themeName) =>
-    ipcRenderer.invoke(THEME_REPORT, { themeName }).catch(() => {}),
-  // An extension panel's tab was selected / deselected: main turns it into
-  // Panel.onShown / onHidden for the devtools page that created the panel.
-  reportPanelVisible: (panelId, shown) =>
-    ipcRenderer
-      .invoke(EXT_PANEL_VISIBILITY, { panelId: String(panelId), shown: shown === true })
-      .catch(() => {}),
-});
-
 // context-bridge bridge: exposeInMainWorld proxies functions; the frontend
 // wants a plain window.InspectorFrontendHost object instead.
 contextBridge.exposeInMainWorld("InspectorFrontendHostElectron", InspectorFrontendHost);
+//
+// Preferences are added here, in the main world, rather than on the bridged object:
+// they are the stock InspectorFrontendHostStub's methods, verbatim in behavior
+// (front_end/core/host/InspectorFrontendHost.ts) — the page's own `localStorage`,
+// synchronous callbacks, `registerPreference` a no-op. Matching the stub is the
+// point: it is where @react-native/debugger-shell keeps the user's DevTools settings
+// (theme, experiments, panel layout), so this shell reads and writes the same store
+// instead of a second one. Note the store is per ORIGIN: a frontend served from
+// another host/port starts with its own settings, as it does upstream.
 contextBridge.executeInMainWorld({
   func: () => {
     window.InspectorFrontendHost = {
       ...window.InspectorFrontendHostElectron,
+      registerPreference(name, options) {},
+      getPreferences(callback) {
+        const prefs = {};
+        for (const name in window.localStorage) {
+          prefs[name] = window.localStorage[name];
+        }
+        callback(prefs);
+      },
+      getPreference(name, callback) {
+        callback(window.localStorage[name]);
+      },
+      setPreference(name, value) {
+        window.localStorage[name] = value;
+      },
+      removePreference(name) {
+        delete window.localStorage[name];
+      },
+      clearPreferences() {
+        window.localStorage.clear();
+      },
     };
   },
 });

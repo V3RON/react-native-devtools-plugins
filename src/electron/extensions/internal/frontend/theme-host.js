@@ -3,13 +3,13 @@
 //
 // The frontend decides the theme (the `ui-theme` setting, or the system's
 // `prefers-color-scheme` while it is "systemPreferred"); the bridge running in its
-// main world (src/frontend/panel-bridge.js) reports the RESULT, and this module is
+// main world (src/electron/extensions/internal/frontend/panel-bridge.js) reports the RESULT, and this module is
 // the one place that remembers it and fans a change out to every reachable
 // extension context. Chrome's vocabulary: "default" (light) | "dark".
 //
 // Pure: the fan-out and the frame check are injected (the check is
-// src/main/frontend-frame.js `isFrontendFrame`), so the rules are unit-tested under bare Node.
-const { THEME_NAMES } = require("../shared/theme");
+// src/electron/extensions/internal/frontend/frontend-frame.js `isFrontendFrame`), so the rules are unit-tested under bare Node.
+const { THEME_NAMES } = require("./theme");
 
 /**
  * @param {{broadcast: (delivery: {kind: string, payload: object}) => number}} deps

@@ -1,5 +1,5 @@
-// The host-side content-script registry (src/main/content-scripts.js + the scan in
-// src/main/extensions.js) — GitHub issue #5.
+// The host-side content-script registry (src/electron/extensions/internal/content/content-scripts.js + the scan in
+// src/electron/extensions/internal/registry/extensions.js) — GitHub issue #5.
 //
 // Three things the registry has to get right, each asserted here:
 //   - manifest parsing: every field this host can act on, Chrome's defaults, and a
@@ -20,15 +20,18 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 
-const config = require("../src/main/config");
+// The extension host's settings (what createExtensionHost configures), pointed at the
+// shipped extensions folder the shell would pass, so a test can swap the folder.
+const { settings: config } = require("../src/electron/extensions/internal/settings");
+config.extensionsDir = require("../src/electron/shell/config").extensionsDir;
 const {
   parseContentScripts,
   resolveDeclaredPath,
   resolveEntryPaths,
   readEntrySources,
   scanContentScriptExtensions,
-} = require("../src/main/content-scripts");
-const { scanContentScriptExtensions: scanInstalled } = require("../src/main/extensions");
+} = require("../src/electron/extensions/internal/content/content-scripts");
+const { scanContentScriptExtensions: scanInstalled } = require("../src/electron/extensions/internal/registry/extensions");
 
 const REAL_EXTENSIONS_DIR = config.extensionsDir;
 

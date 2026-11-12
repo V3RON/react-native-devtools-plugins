@@ -1,5 +1,5 @@
 // `chrome.downloads` — Chrome's API over the shell's one save path
-// (src/main/save-service.js; docs/features/SMALL-SHIMS.md, GitHub issue #4).
+// (src/electron/extensions/internal/services/save-service.js; docs/features/SMALL-SHIMS.md, GitHub issue #4).
 //
 // The shim's job is the Chrome-shaped surface plus the honesty rule; every byte
 // decision is the save service's, in main, where the filesystem actually is.
@@ -26,7 +26,7 @@ const { promiseOrCallback } = require("./async-style");
 
 /**
  * Chrome's DownloadQuery fields this shell's host can actually filter on
- * (src/main/save-service.js implements exactly this list). Anything else is
+ * (src/electron/extensions/internal/services/save-service.js implements exactly this list). Anything else is
  * ignored, and reported as ignored — see `search` below.
  */
 const SUPPORTED_QUERY = new Set([

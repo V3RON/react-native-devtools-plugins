@@ -22,7 +22,7 @@
 //     the tick (a coalesced/delayed tick must not be reported as on time).
 //
 // `setTimer`/`clearTimer` are injected: a test drives this on fake timers, and the
-// frame decides which realm's timers to use (src/preload/extension-frame.js).
+// frame decides which realm's timers to use (src/electron/extensions/internal/preload/extension-frame.js).
 // Nothing here knows about Electron or IPC — the layering rule in
 // docs/ARCHITECTURE.md.
 const { createEvent } = require("./event");
@@ -92,7 +92,7 @@ const scheduleFor = (alarmInfo, now) => {
  * @param {(ms: number, fn: () => void) => any} deps.setTimer
  * @param {(handle: any) => void} deps.clearTimer
  * @param {number|(() => number)} [deps.clockScale] host-provided multiplier that SHORTENS every
- *        delay (src/main/config.js explains why the host, not the frame, decides it).
+ *        delay (src/electron/shell/config.js explains why the host, not the frame, decides it).
  *        Validation still uses Chrome's real floors, so an extension is judged as
  *        Chrome would judge it; only the wait is shorter.
  */
@@ -237,7 +237,7 @@ const createAlarms = ({
     clearAll: (callback) => promiseOrCallback(() => clearAllAlarm(), callback),
 
     // ── NOT part of chrome.alarms: the shim's own hooks, `_`-prefixed so the
-    // permission gate (src/chrome-shim/permission-gate.js) keeps them out of the
+    // permission gate (src/electron/extensions/internal/shim/permission-gate.js) keeps them out of the
     // exposed namespace. The raw object is what a caller reaches.
     /** The context is going away: nothing may fire afterwards. */
     _cancelAll: clearAllAlarm,

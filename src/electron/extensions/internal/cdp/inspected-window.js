@@ -10,13 +10,12 @@
 // The returned value must be JSON-compliant; anything else comes back undefined.
 //
 // RN mapping: CDP `Runtime.evaluate` against the app's JS context. The command
-// rides the *frontend's* debugger session through src/main/cdp-bridge.js, so the
+// rides the *frontend's* debugger session through src/electron/extensions/internal/cdp/cdp-bridge.js, so the
 // app never learns that a second debugger exists.
 //
 // `mapEvaluation` is pure (CDP reply -> Chrome pair) and exported for tests;
 // `createEvalInPage` binds it to a command sender, and `evalInPage` is the
-// dependency injected into src/chrome-shim/devtools.js.
-const { sendCommand } = require("./cdp-bridge");
+// dependency injected into src/electron/extensions/internal/shim/devtools.js.
 
 // Chrome's `options.timeout` is not a Chrome option at all — see toEvaluateParams.
 // Our own reply deadline therefore sits just behind it so a slow but successful
@@ -139,9 +138,6 @@ const createEvalInPage =
     }
   };
 
-/** The dependency injected into src/chrome-shim/devtools.js (see above). */
-const evalInPage = createEvalInPage(sendCommand);
-
 /**
  * `reloadInPage` bound to a command sender. Chrome's `inspectedWindow.reload()`
  * maps onto CDP `Page.reload`, which RN's backend really implements
@@ -171,15 +167,11 @@ const createReloadInPage =
     }
   };
 
-const reloadInPage = createReloadInPage(sendCommand);
-
 module.exports = {
   mapEvaluation,
   toEvaluateParams,
   createEvalInPage,
   createReloadInPage,
-  evalInPage,
-  reloadInPage,
   FAILURE,
   TIMEOUT_SLACK_MS,
 };

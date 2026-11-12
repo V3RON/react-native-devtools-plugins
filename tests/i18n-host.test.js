@@ -1,5 +1,5 @@
-// Host side of chrome.i18n (src/main/i18n-host.js + the manifest reader in
-// src/main/extension-server.js): `_locales/` on disk -> bundle, localized manifest and
+// Host side of chrome.i18n (src/electron/extensions/internal/registry/i18n-host.js + the manifest reader in
+// src/electron/extensions/internal/scheme/extension-server.js): `_locales/` on disk -> bundle, localized manifest and
 // CSS. Real files in a temp extensions folder; the UI locale is injected the way
 // DEVTOOLS_UI_LOCALE injects it (config.uiLocale), so no Electron is needed.
 // Run: npm test
@@ -9,10 +9,13 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 
-const config = require("../src/main/config");
-const extensionServer = require("../src/main/extension-server");
-const i18nHost = require("../src/main/i18n-host");
-const i18n = require("../src/shared/i18n");
+// The extension host's settings (what createExtensionHost configures), pointed at the
+// shipped extensions folder the shell would pass, so a test can swap the folder.
+const { settings: config } = require("../src/electron/extensions/internal/settings");
+config.extensionsDir = require("../src/electron/shell/config").extensionsDir;
+const extensionServer = require("../src/electron/extensions/internal/scheme/extension-server");
+const i18nHost = require("../src/electron/extensions/internal/registry/i18n-host");
+const i18n = require("../src/electron/extensions/internal/registry/i18n");
 
 const quiet = () => {
   const warnings = [];
@@ -170,7 +173,7 @@ test("loadManifest localizes name/description for every host reader, in the conf
 
 test("scanExtensions lists the localized name (what the panel list shows)", () => {
   withExtension(FILES, () => {
-    const { scanExtensions } = require("../src/main/extensions");
+    const { scanExtensions } = require("../src/electron/extensions/internal/registry/extensions");
     config.uiLocale = "pt-BR";
     assert.deepStrictEqual(
       scanExtensions().map((entry) => entry.name),
@@ -212,7 +215,7 @@ test("CSS localization: only files that use the marker are rewritten", () => {
 test("the bundle path is reserved: no file can be served under it", () => {
   assert.strictEqual(extensionServer.resolveExtensionFile("ext", extensionServer.I18N_BUNDLE_PATH), null);
   assert.strictEqual(extensionServer.resolveExtensionFile("ext", `/${extensionServer.I18N_BUNDLE_PATH}`), null);
-  assert.strictEqual(extensionServer.I18N_BUNDLE_PATH, require("../src/shared/protocol").I18N_BUNDLE_PATH);
+  assert.strictEqual(extensionServer.I18N_BUNDLE_PATH, require("../src/electron/extensions/internal/scheme/protocol").I18N_BUNDLE_PATH);
 });
 
 test("systemLocale: the override wins, and outside Electron it degrades to en-US", () => {
@@ -241,11 +244,11 @@ test("the shipped sample extension is fully translated where it claims to be", (
 
 test("the frame makes exactly one synchronous read (the bundle XHR); no sendSync anywhere", () => {
   const preload = fs
-    .readFileSync(path.join(__dirname, "..", "src", "preload", "extension-frame.js"), "utf8")
+    .readFileSync(path.join(__dirname, "..", "src", "electron", "extensions", "internal", "preload", "extension-frame.js"), "utf8")
     .replace(/^\s*\/\/.*$/gm, "");
   assert.ok(!/sendSync/.test(preload), "no sendSync in the extension-frame preload");
   assert.strictEqual((preload.match(/new XMLHttpRequest\(/g) || []).length, 1, "exactly one XMLHttpRequest");
-  const ipc = fs.readFileSync(path.join(__dirname, "..", "src", "shared", "ipc.js"), "utf8");
+  const ipc = fs.readFileSync(path.join(__dirname, "..", "src", "electron", "extensions", "internal", "broker", "channels.js"), "utf8");
   assert.ok(!/sendSync/i.test(ipc.replace(/\/\/.*$/gm, "")), "no synchronous channel in the channel table");
 });
 

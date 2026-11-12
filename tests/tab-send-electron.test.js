@@ -1,7 +1,7 @@
 // `chrome.tabs.sendMessage`'s wiring inside a REAL Electron process (GitHub issue #5).
 //
 // The unit suites prove the rules; only a real process can prove the chain that carries
-// them — production preload → production shim → IPC → `src/main/tab-send.js` → the real
+// them — production preload → production shim → IPC → `src/electron/extensions/internal/services/tab-send.js` → the real
 // content bridge → the real gate — and in particular the two things a fake cannot:
 //
 //   1. A call that reaches nothing REJECTS with a reason, in the frame, instead of

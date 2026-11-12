@@ -3,8 +3,8 @@
 // Chrome's model: required permissions are granted at install, `request()` asks the
 // user for OPTIONAL ones, and `contains`/`getAll` report the result. This shell has
 // no prompt and no install-time grant step: capability is decided from the manifest
-// **on disk** by the host (src/main/ipc.js hands every frame its verdict, and
-// src/chrome-shim/permission-gate.js + src/main/delivery-scope.js enforce it). So
+// **on disk** by the host (src/electron/extensions/internal/broker/ipc.js hands every frame its verdict, and
+// src/electron/extensions/internal/shim/permission-gate.js + src/electron/extensions/internal/broker/delivery-scope.js enforce it). So
 // the only honest answer this namespace can give is a report of that verdict:
 //
 //   contains/getAll  — exactly the permissions the manifest declares. Not "everything
@@ -27,7 +27,7 @@
 // divergence is recorded in docs/LIMITATIONS.md.
 //
 // `host_permissions` are deliberately absent from every answer, matching
-// src/shared/permissions.js: they buy network reach, not API access, so reporting
+// src/electron/extensions/internal/broker/permissions.js: they buy network reach, not API access, so reporting
 // them as granted permissions would overstate what the extension can call.
 const { createEvent } = require("./event");
 const { promiseOrCallback } = require("./async-style");

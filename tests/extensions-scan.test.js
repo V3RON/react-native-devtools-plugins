@@ -1,4 +1,4 @@
-// Extension discovery (src/main/extensions.js): which folders become a devtools
+// Extension discovery (src/electron/extensions/internal/registry/extensions.js): which folders become a devtools
 // page and which become a background context (GitHub issue #3).
 //
 // `config` is required before the scanner is pointed at a temp folder because
@@ -14,8 +14,11 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 
-const config = require("../src/main/config");
-const { scanExtensions, scanBackgroundExtensions } = require("../src/main/extensions");
+// The extension host's settings (what createExtensionHost configures), pointed at the
+// shipped extensions folder the shell would pass, so a test can swap the folder.
+const { settings: config } = require("../src/electron/extensions/internal/settings");
+config.extensionsDir = require("../src/electron/shell/config").extensionsDir;
+const { scanExtensions, scanBackgroundExtensions } = require("../src/electron/extensions/internal/registry/extensions");
 
 const REPO = path.join(__dirname, "..");
 const REAL_EXTENSIONS_DIR = config.extensionsDir;

@@ -20,9 +20,9 @@
 
 One capture, two APIs: this namespace and [DEVTOOLS-NETWORK.md](DEVTOOLS-NETWORK.md)
 consume the *same* main-process model
-([src/main/network-model.js](../../src/main/network-model.js) →
-[network-service.js](../../src/main/network-service.js)), and
-[src/chrome-shim/network-bridge.js](../../src/chrome-shim/network-bridge.js) decides which
+([src/electron/extensions/internal/cdp/network-model.js](../../src/electron/extensions/internal/cdp/network-model.js) →
+[network-service.js](../../src/electron/extensions/internal/cdp/network-service.js)), and
+[src/electron/extensions/internal/shim/network-bridge.js](../../src/electron/extensions/internal/shim/network-bridge.js) decides which
 Chrome event each lifecycle step becomes. The synthetic frontend postMessages and the fake
 bodies are gone.
 
@@ -55,7 +55,7 @@ Chrome's own convention rather than this shell's invention.
 
 ### Filters
 
-Matched locally in [src/chrome-shim/web-request.js](../../src/chrome-shim/web-request.js),
+Matched locally in [src/electron/extensions/internal/shim/web-request.js](../../src/electron/extensions/internal/shim/web-request.js),
 on both syntaxes Chrome documents:
 
 - **match patterns** (`https://*.example.com/*`, `<all_urls>`) split into

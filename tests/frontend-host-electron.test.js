@@ -1,5 +1,5 @@
 // The frontend-only IPC channels in a REAL Electron process (tests/frontend-host-harness.js):
-// production preload + IPC handlers + dispatch channel + src/main/frontend-frame.js, with
+// production preload + IPC handlers + dispatch channel + src/electron/extensions/internal/frontend/frontend-frame.js, with
 // loopback pages standing in for the frontend and for "somewhere else".
 //
 // What only a real process can prove:
@@ -78,6 +78,13 @@ suite("the frontend-only channels accept the frontend's main frame and nothing e
   );
   assert.strictEqual(result.hostConfigA.aidaAvailability.enabled, false);
 
+  // 2b. preferences: the page's localStorage, as the stock stub (and so the upstream
+  //     shell) keeps them — no host-side store
+  assert.strictEqual(result.prefGet, "v1");
+  assert.strictEqual(result.prefInLocalStorage, "v1", "setPreference writes the page's localStorage");
+  assert.strictEqual(result.prefAll, "v1", "getPreferences includes it");
+  assert.strictEqual(result.prefRemoved, null, "removePreference deletes the key");
+
   // 3. frame identity, decided by frame
   assert.strictEqual(result.mainAccepted, true);
   assert.strictEqual(result.childFrameFound, true);
@@ -89,10 +96,13 @@ suite("the frontend-only channels accept the frontend's main frame and nothing e
   assert.ok(!opened.includes("https://example.com/from-other-origin"));
   assert.ok(!saved.includes("evil.txt"));
   assert.deepStrictEqual(result.hostConfigB, {}, "getHostConfig answers nothing to a stranger");
+  assert.strictEqual(result.prefOtherOrigin, null, "another origin has its own localStorage");
 
   // 5. a navigated-away frontend: the guard holds the URL, and the origin check holds
   //    when something gets past the guard
   assert.strictEqual(result.reloaded, true, "the navigation guard leaves a reload alone");
+  assert.strictEqual(result.prefAfterReload, "v1", "a preference survives a frontend reload");
+  assert.strictEqual(result.storageAfterClear, 0, "clearPreferences empties the store");
   assert.match(result.urlAfterNavigationAttempt, /\/frontend\.html$/, "will-navigate denied the move");
   assert.strictEqual(result.originAfterLoad, true);
   assert.strictEqual(result.movedMainAccepted, false);

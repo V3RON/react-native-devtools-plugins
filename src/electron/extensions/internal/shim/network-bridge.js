@@ -10,7 +10,7 @@
 // requests".
 //
 // Pure: no `window`, no `ipcRenderer`, no Electron, no transport (the layering
-// rule in docs/ARCHITECTURE.md). The caller (src/preload/extension-frame.js)
+// rule in docs/ARCHITECTURE.md). The caller (src/electron/extensions/internal/preload/extension-frame.js)
 // injects the async host calls and pushes deliveries in via `handleDelivery()`.
 //
 // Chrome semantics honoured here (docs/api/CHROME-EXTENSION-APIS.md §C): real
@@ -412,7 +412,7 @@ const createNetworkBridge = ({
   // ── host deliveries ────────────────────────────────────────────────────────
   /**
    * One lifecycle step of one request, as reported by the host
-   * (src/main/network-service.js). `kind` is one of
+   * (src/electron/extensions/internal/cdp/network-service.js). `kind` is one of
    * request | sendHeaders | response | completed | error | navigated | status.
    */
   const handleDelivery = (delivery) => {

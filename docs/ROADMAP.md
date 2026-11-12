@@ -67,7 +67,7 @@ work makes them meaningful, so they are closed rather than planned. See
 1. **Free (Electron primitives, hours each):** ~~preferences→`electron-store`,
    clipboard, zoom, context menus~~ ✅ done; ~~save→dialog, notifications,
    `shell.openExternal` (as `tabs.create`'s policy-gated open)~~ ✅ done via Tier 2
-   (`src/main/save-service.js`, `notification-host.js`, `tab-host.js`). Deliberately NOT
+   (`src/electron/extensions/internal/services/save-service.js`, `notification-host.js`, `tab-host.js`). Deliberately NOT
    done: `shell.showItemInFolder` and a downloads "reveal" — the frontend/extension names a
    path this host did not write, so revealing anything would mislead. Remaining:
    `dispatchHttpRequest`.
@@ -75,7 +75,7 @@ work makes them meaningful, so they are closed rather than planned. See
    (`InspectorFrontendAPI` via IPC)~~ ✅ live. ~~`sendMessageToBackend`→CDP socket~~
    ✅ **resolved differently and closed**: with `?ws=` in the frontend URL the frontend
    talks to the socket directly, so that hook is never called. The shell took the socket
-   instead → [cdp-bridge.js](../src/main/cdp-bridge.js)
+   instead → [cdp-bridge.js](../src/electron/extensions/internal/cdp/cdp-bridge.js)
    ([features/DISPATCH-CHANNEL.md](features/DISPATCH-CHANNEL.md)). ~~menus/theme events,
    save flow~~ real already (`showContextMenuAtPoint`, `colorThemeChanged`, the `savedURL`
    family). Remaining producers: workspace, device discovery.
@@ -123,8 +123,9 @@ work makes them meaningful, so they are closed rather than planned. See
 ```
 
 Independent of order, fix first: ~~**preferences persistence**~~ ✅ done
-(`frontend-preferences` via `electron-store`) and the **security substrate**
-(below — partially improved: async-IPC house rule in `src/shared/ipc.js`).
+(`frontend-preferences` via `electron-store`; since moved back to the frontend's own
+`localStorage`, the stock stub's store, to match `@react-native/debugger-shell`) and the **security substrate**
+(below — partially improved: async-IPC house rule in `src/electron/extensions/internal/broker/channels.js`).
 
 ## Engineering guardrails
 

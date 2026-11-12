@@ -14,7 +14,7 @@
 //
 // What `create` does NOT do by default is the deliberate decision in this shell:
 // `openTab` is absent unless the host's policy enables it (`DEVTOOLS_TABS_OPEN`,
-// default `none` — the reasoning is in src/main/config.js and repeated here because
+// default `none` — the reasoning is in src/electron/shell/config.js and repeated here because
 // this is where a reader looks). `shell.openExternal` is Chrome's closest mapping and
 // it is fully wired, but both shipped extensions call `create` from an AUTOMATED
 // path rather than a user gesture:
@@ -29,7 +29,7 @@
 //
 // `tabs.sendMessage` now has a real receiver (issue #5): the content script of THIS
 // extension running in the inspected target. The host delivers through the same message
-// mesh a panel uses (`src/main/content-bridge.js` → `src/main/message-router.js`), so the
+// mesh a panel uses (`src/electron/extensions/internal/content/content-bridge.js` → `src/electron/extensions/internal/contexts/message-router.js`), so the
 // invariant issue #12 established still holds — a tab message is never routed into this
 // extension's own `runtime.onMessage` listeners, because the receiver genuinely is the
 // app, and an extension cannot answer for it. When nothing is injected the call FAILS

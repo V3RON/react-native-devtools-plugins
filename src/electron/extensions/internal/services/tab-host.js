@@ -27,7 +27,7 @@
 // `openableWindowUrl` below, each before its capability is called, and both refuse with
 // one message (docs/SECURITY-PLATFORM.md's F6).
 const { openableUrl, refusalMessage } = require("./external-open");
-const { EXTENSION_SCHEME } = require("../shared/protocol");
+const { EXTENSION_SCHEME } = require("../scheme/protocol");
 
 // `new URL` reports a scheme lowercased and with its colon, which is what comparing
 // against it needs (`EXTENSION_SCHEME` is the bare name the protocol is registered under).
@@ -46,10 +46,10 @@ const NO_TARGET = { attached: false };
  * anything the developer's `file://` origin can fetch).
  *
  * The extension scheme is allowed additionally, and only in this branch: it is this
- * shell's own protocol (`src/main/extension-server.js`), and `create` exists largely for
+ * shell's own protocol (`src/electron/extensions/internal/scheme/extension-server.js`), and `create` exists largely for
  * an extension reaching a page over it — Altair's
  * `create({ url: "altair-app/index.html" })` resolves against the extension origin and
- * arrives here as `rozenite://<id>/…` (`src/chrome-shim/tabs.js`). Note what this does NOT
+ * arrives here as `rozenite://<id>/…` (`src/electron/extensions/internal/shim/tabs.js`). Note what this does NOT
  * claim: nothing here scopes `<id>` to the extension that called, so one extension can ask
  * for a `rozenite:` page of another's (the file server still confines every read to inside
  * the named folder). Caller-scoping the id is follow-up work (see #24's window guards,
@@ -91,7 +91,7 @@ const openableWindowUrl = (url) => {
   if (parsed.protocol !== EXTENSION_PROTOCOL) {
     return null;
   }
-  // `id == hostname` is the load-bearing contract (`src/shared/protocol.js`), so a URL with
+  // `id == hostname` is the load-bearing contract (`src/electron/extensions/internal/scheme/protocol.js`), so a URL with
   // no hostname, an embedded port, or credentials names no folder this protocol can serve:
   // `rozenite://a.b@evil/x` is the case that matters — the userinfo would otherwise carry a
   // host the filter never looked at.
@@ -165,7 +165,7 @@ const createTabHost = ({
    *
    * A URL the policy may not open is a THROWN refusal, which is how the `external`
    * branch already reports one (its `openExternal` is
-   * `src/main/external-open.js`'s opener, which rejects). `src/main/ipc.js` turns the
+   * `src/electron/extensions/internal/services/external-open.js`'s opener, which rejects). `src/electron/extensions/internal/broker/ipc.js` turns the
    * throw into `{ok: false, error}`, and the frame's shim says the reason and resolves
    * `openedVia: null` — so a refused create looks the same whichever policy is set, and
    * Chrome's `create` never has to model a failure it does not have.
@@ -227,22 +227,23 @@ const createTabHost = ({
   return { targetInfo, open, close, policy: () => policy };
 };
 
-// ── the Electron-backed singleton, created lazily by src/main/ipc.js ─────────
-let instance;
-
-const attachTabHost = (deps = {}) => {
-  const config = require("./config");
-  const { createTabHost: build } = require("./tab-host");
-  const bridge = require("./cdp-bridge");
-  instance = build({
-    bridgeStatus: bridge.status,
-    sendCommand: bridge.sendCommand,
-    policy: config.tabsOpen,
+// ── the Electron-backed host the extension host builds (ExtensionHost.js) ─────────
+/**
+ * @param {object} deps
+ * @param {{status: function, sendCommand: function}} deps.cdp the host's debugger session
+ * @param {{open: function}} deps.externalOpener http(s)-only launcher (./external-open)
+ * @param {string} [deps.policy] chrome.tabs.create policy, from the host settings
+ */
+const attachTabHost = ({ cdp, externalOpener, policy = "none", ...deps } = {}) =>
+  createTabHost({
+    bridgeStatus: cdp.status,
+    sendCommand: cdp.sendCommand,
+    policy,
     // http(s) only — the allowlist InspectorFrontendHost.openInNewTab uses
-    // (src/main/external-open.js): an extension-supplied `file:`/`smb:` URL must not
+    // (src/electron/extensions/internal/services/external-open.js): an extension-supplied `file:`/`smb:` URL must not
     // reach the OS launcher.
     openExternal: async (url) => {
-      const reply = await require("./external-open").getExternalOpener().open(url);
+      const reply = await externalOpener.open(url);
       if (!reply.ok) {
         throw new Error(reply.error);
       }
@@ -266,9 +267,5 @@ const attachTabHost = (deps = {}) => {
     },
     ...deps,
   });
-  return instance;
-};
 
-const getTabHost = () => instance || attachTabHost();
-
-module.exports = { createTabHost, attachTabHost, getTabHost };
+module.exports = { createTabHost, attachTabHost };

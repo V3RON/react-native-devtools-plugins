@@ -6,10 +6,10 @@
 //
 // It used to be described as the replacement for the ad-hoc `Events` postMessage
 // broadcast; that broadcast is now gone entirely — devtools.network and webRequest
-// are fed from the shell's own CDP network model (src/main/network-service.js),
+// are fed from the shell's own CDP network model (src/electron/extensions/internal/cdp/network-service.js),
 // not from the frontend, so there is no consumer left to migrate
 // (docs/features/DEVTOOLS-NETWORK.md, docs/features/WEBREQUEST.md).
-const { HOST_EVENT } = require("../shared/ipc");
+const { HOST_EVENT } = require("./channels");
 
 let frontendContents = null;
 

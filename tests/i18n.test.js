@@ -1,4 +1,4 @@
-// chrome.i18n message semantics (src/shared/i18n.js, src/chrome-shim/i18n.js).
+// chrome.i18n message semantics (src/electron/extensions/internal/registry/i18n.js, src/electron/extensions/internal/shim/i18n.js).
 //
 // Every expectation tagged "Chromium 141:" was measured by loading a fixture extension
 // into a real headless Chromium 141 (--load-extension) and calling chrome.i18n there;
@@ -6,8 +6,8 @@
 // follows from those measurements.
 const test = require("node:test");
 const assert = require("node:assert");
-const i18n = require("../src/shared/i18n");
-const { createI18n } = require("../src/chrome-shim/i18n");
+const i18n = require("../src/electron/extensions/internal/registry/i18n");
+const { createI18n } = require("../src/electron/extensions/internal/shim/i18n");
 
 const bundleOf = (catalogs, { ui = "en_US", def = "en", id = "ext", preferred = [] } = {}) =>
   i18n.buildBundle({
@@ -376,9 +376,9 @@ test("shim: no bundle (loader absent, throwing, or empty) degrades to Chrome's n
 });
 
 test("shim is mounted on the chrome namespace, ungated (no permission is needed for i18n)", () => {
-  const { createChromeNamespace } = require("../src/chrome-shim");
-  const { createExtensionStorage, createMemoryBackend } = require("../src/chrome-shim/storage");
-  const { createGrantGate } = require("../src/shared/permissions");
+  const { createChromeNamespace } = require("../src/electron/extensions/internal/shim");
+  const { createExtensionStorage, createMemoryBackend } = require("../src/electron/extensions/internal/shim/storage");
+  const { createGrantGate } = require("../src/electron/extensions/internal/broker/permissions");
   const gate = createGrantGate(() => ({}));
   gate.manifestLoaded();
   const chrome = createChromeNamespace({

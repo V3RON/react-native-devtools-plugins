@@ -26,7 +26,7 @@ value, an event, or a capability is not an option in either branch.
 **Where each one started.** The background context arrived before these APIs did, and an MV3
 worker that names `chrome.action.onClicked` or `chrome.notifications.create` at module scope
 dies at LOAD — an ESM worker's top-level statements run before anything can guard them. So
-`src/chrome-shim/browser-apis.js` shipped both as inert shells. `notifications` is real now.
+`src/electron/extensions/internal/shim/browser-apis.js` shipped both as inert shells. `notifications` is real now.
 `action` is the one namespace that is still nothing but a shell, for the reason in its own
 row below; the three that joined it later (`commands`, `contextMenus`, `sidePanel`) are at the
 bottom of this page.
@@ -47,7 +47,7 @@ Chrome and stays ungated here.
 
 ## `chrome.permissions`
 
-**✅ Real as a report, accept-and-grant as a promise** (`src/chrome-shim/permissions-api.js`).
+**✅ Real as a report, accept-and-grant as a promise** (`src/electron/extensions/internal/shim/permissions-api.js`).
 
 | Method | Status |
 | --- | --- |
@@ -55,12 +55,12 @@ Chrome and stays ungated here.
 | `request` | **accept-and-grant** — resolves `true` when everything requested is already declared (Chrome's own no-prompt fast path) and `false` otherwise, with one console line. See the divergence below. |
 | `remove` | resolves, changes nothing — Chrome cannot remove a required permission either, and fires `onRemoved` for neither. |
 | `onAdded` / `onRemoved` | registrable, **never fire** — nothing here changes a grant, so there is no transition to report. |
-| `host_permissions` | absent from every answer, like `src/shared/permissions.js`: they buy network reach, not API access. |
+| `host_permissions` | absent from every answer, like `src/electron/extensions/internal/broker/permissions.js`: they buy network reach, not API access. |
 
 **The divergence, stated plainly:** this shell cannot *grant* anything a manifest did
 not declare, because permission enforcement (issue #10) decides capability from the
-manifest **on disk** — `src/main/delivery-scope.js` in main and
-`src/chrome-shim/permission-gate.js` in the frame. `request` accepting a call is shape
+manifest **on disk** — `src/electron/extensions/internal/broker/delivery-scope.js` in main and
+`src/electron/extensions/internal/shim/permission-gate.js` in the frame. `request` accepting a call is shape
 fidelity, not new capability. Answering `true` for an undeclared permission would be
 worse than answering `false`: the extension would proceed and be refused at the first
 real call, with `lastError` naming a permission it was just told it held.
@@ -68,13 +68,13 @@ real call, with `lastError` naming a permission it was just told it held.
 ## `chrome.tabs` (subset)
 
 **🟨 One synthetic tab = the inspected RN target, plus what `create` really opened**
-(`src/chrome-shim/tabs.js` + `tab-model.js`, host side `src/main/tab-host.js`).
+(`src/electron/extensions/internal/shim/tabs.js` + `tab-model.js`, host side `src/electron/extensions/internal/services/tab-host.js`).
 
 **`chrome.windows` is not injected.** Its anchor — a browser window model — does not exist
 here, so real behavior is 🚷; the one window this shell has is the DevTools window itself, and
 no shipped extension names the namespace. What *is* still an open item, and small: injecting an
 inert shell so the [stubbing rule](../OVERVIEW.md) holds.
-(`src/shared/permissions.js` lists it under `UNGATED_APIS`, which is only the statement that
+(`src/electron/extensions/internal/broker/permissions.js` lists it under `UNGATED_APIS`, which is only the statement that
 it would need no permission if it were injected.) Until that shell lands, a worker that names
 `chrome.windows.getAll` at module scope takes a TypeError at load: the one place Tier 2 still
 breaks the stubbing rule ([../OVERVIEW.md](../OVERVIEW.md)).
@@ -93,7 +93,7 @@ breaks the stubbing rule ([../OVERVIEW.md](../OVERVIEW.md)).
 
 **`tabs.create`'s external open is a policy, and the default is off.** `shell.openExternal`
 is Chrome's closest mapping and it is wired end to end (`TABS_OPEN` →
-`src/main/tab-host.js`), injectable at every layer. It defaults to **`none`**
+`src/electron/extensions/internal/services/tab-host.js`), injectable at every layer. It defaults to **`none`**
 (`DEVTOOLS_TABS_OPEN=none|external|window`) because both shipped extensions call
 `create` from an *automated* path, not a user gesture: graphql's `runtime.onInstalled`
 opens a marketing URL and Altair opens one from `notifications.onClicked`. Launching the
@@ -101,7 +101,7 @@ user's real browser because a devtools session started — or because a notifica
 never clicked was created — is a side effect no extension asked this host for, and the
 user cannot take it back. Whichever policy is set, the Tab descriptor says what really
 happened, so nothing is claimed that did not occur. **What a policy may open does not depend
-on which policy is set:** `external` hands only `http(s)` to the OS (`src/main/external-open.js`,
+on which policy is set:** `external` hands only `http(s)` to the OS (`src/electron/extensions/internal/services/external-open.js`,
 the allowlist `InspectorFrontendHost.openInNewTab` shares), and `window` filters through the
 same function before it creates a window, so one URL cannot be openable one way and refused the
 other. `window` additionally accepts `rozenite://<extension-id>/…`, this shell's own protocol:
@@ -126,7 +126,7 @@ content script in it, and says so instead of pretending the message landed.
 ## `chrome.notifications`
 
 **🟨 Real system notifications, with three things it will not do**
-(`src/chrome-shim/browser-apis.js` + host side `src/main/notification-host.js`).
+(`src/electron/extensions/internal/shim/browser-apis.js` + host side `src/electron/extensions/internal/services/notification-host.js`).
 
 | Method / event | Status |
 | --- | --- |
@@ -142,7 +142,7 @@ content script in it, and says so instead of pretending the message landed.
 Gated on the declared `notifications` permission like Chrome's — Altair declares it,
 graphql and the sample extension do not, and an extension that does not gets
 `runtime.lastError` rather than a silent no-op. The permission is enforced **twice**: the
-frame's gate, and `src/main/ipc.js` from the host's own grants, so a frame that ignored
+frame's gate, and `src/electron/extensions/internal/broker/ipc.js` from the host's own grants, so a frame that ignored
 its `RUNTIME_REGISTER` reply cannot raise a notification either.
 
 **Three things this will not do, on purpose:**
@@ -154,7 +154,7 @@ its `RUNTIME_REGISTER` reply cannot raise a notification either.
    user never asked for. `onClicked` has exactly one producer: the backend's click
    callback.
 3. **A notification belongs to the context that created it.** Chrome delivers the click
-   there, and so does this shell — via `src/main/context-registry.js`, which holds the
+   there, and so does this shell — via `src/electron/extensions/internal/contexts/context-registry.js`, which holds the
    same `send` closure the message router uses and is keyed by the frame identity main
    derived. The message router (fan-out to every frame of the extension) is the wrong
    tool and is not used.
@@ -166,7 +166,7 @@ screen until the user or the OS dismisses it. That is recorded in
 
 ## `chrome.alarms`
 
-**✅ Real timers, one divergence** (`src/chrome-shim/alarms.js`, GitHub issue #4).
+**✅ Real timers, one divergence** (`src/electron/extensions/internal/shim/alarms.js`, GitHub issue #4).
 
 | Method | Status |
 | --- | --- |
@@ -191,7 +191,7 @@ restart.
 **The clock scale.** A headless test cannot wait 30 seconds for Chrome's own minimum alarm
 delay, and faking the shim's clock *inside* the extension context would prove nothing about
 the path this shell uses. So the host offers a multiplier —
-`DEVTOOLS_ALARM_CLOCK_SCALE` (`src/main/config.js`) — decided in **main** and handed to each
+`DEVTOOLS_ALARM_CLOCK_SCALE` (`src/electron/shell/config.js`) — decided in **main** and handed to each
 context in its `RUNTIME_REGISTER` reply, so a page-world script can neither see nor influence
 it. It shortens the wait only: validation still uses Chrome's real floors and `scheduledTime`
 still reports the real scheduled time, so a scaled run is not a loosened one. The unit tests
@@ -199,8 +199,8 @@ above inject their own timers and need neither.
 
 ## `chrome.downloads`
 
-**✅ Real saves over the shell's one save path** (`src/chrome-shim/downloads.js` +
-`src/main/save-service.js`, GitHub issue #4).
+**✅ Real saves over the shell's one save path** (`src/electron/extensions/internal/shim/downloads.js` +
+`src/electron/extensions/internal/services/save-service.js`, GitHub issue #4).
 
 | Method | Status |
 | --- | --- |
@@ -219,13 +219,13 @@ above inject their own timers and need neither.
 frontend's own save built a `Blob`, hung an `<a download>` off the DevTools document and
 clicked it — which works only if the renderer may navigate to a `blob:` URL, and tells
 nobody (not the user, not the shell, not the extension) whether a file was written or
-where. `src/main/save-service.js` is now the one implementation, and both
+where. `src/electron/extensions/internal/services/save-service.js` is now the one implementation, and both
 `chrome.downloads.download` and `InspectorFrontendHost.save` are calls into it
 ([../api/INSPECTOR-FRONTEND-HOST.md](../api/INSPECTOR-FRONTEND-HOST.md)). The frontend's
-`save`/`append`/`close` family sits one layer above it in `src/main/host-files.js`, which
+`save`/`append`/`close` family sits one layer above it in `src/electron/shell/host-files.js`, which
 keeps the per-url file memory and raises `savedURL` / `canceledSaveURL` / `appendedToURL`.
 
-**What makes a state honest** (the rules `src/main/save-service.js` exists to hold):
+**What makes a state honest** (the rules `src/electron/extensions/internal/services/save-service.js` exists to hold):
 
 1. **An id exists because this file allocated it and is tracking it.** A request with
    neither `url` nor content is refused before any id is minted, so nothing can later
@@ -241,7 +241,7 @@ keeps the per-url file memory and raises `savedURL` / `canceledSaveURL` / `appen
    save, which is not an extension.
 
 Gated on the declared `downloads` permission, twice over: the frame's gate, and
-`src/main/ipc.js` from the host's own grants (`erase`/`search` included, because in Chrome
+`src/electron/extensions/internal/broker/ipc.js` from the host's own grants (`erase`/`search` included, because in Chrome
 the same permission covers creating a download **and** reading the history of the ones that
 exist). A frame that ignored its `RUNTIME_REGISTER` reply cannot write a file.
 
@@ -249,12 +249,12 @@ exist). A frame that ignored its `RUNTIME_REGISTER` reply cannot write a file.
 the downloads directory, and the context the filename question is put to — so the rules
 above are unit-tested under bare Node with no Electron, no dialog, and no write outside a
 temp directory. The real backend lives in `attachSaveService()`; a test suite that called
-`getSaveService()` would raise a modal on the developer's screen and write into their
+the Electron-backed save service (`attachSaveService`) would raise a modal on the developer's screen and write into their
 Downloads folder, which `tests/save-service.test.js` asserts it never does.
 
 ## `chrome.commands` / `chrome.contextMenus` / `chrome.sidePanel`
 
-**🟨 Injected, with what is missing named** (`src/chrome-shim/browser-shells.js`, GitHub
+**🟨 Injected, with what is missing named** (`src/electron/extensions/internal/shim/browser-shells.js`, GitHub
 issue #4). All three now exist with the real method shape, so a worker that names them at
 module scope loads — the failure mode [../OVERVIEW.md](../OVERVIEW.md)'s stubbing rule exists
 to avoid. Each lacks a **producer**, which is a fact about this host rather than about the
@@ -275,7 +275,7 @@ gate's `_`-filter is not in play and `contextBridge` would otherwise hand them t
 ## Manifest `options_ui`
 
 **✅ Real: `runtime.openOptionsPage()` opens a window, or says why it cannot**
-(`src/main/options-host.js` + `src/chrome-shim/runtime.js`, GitHub issue #4).
+(`src/electron/extensions/internal/contexts/options-host.js` + `src/electron/extensions/internal/shim/runtime.js`, GitHub issue #4).
 
 | Case | Answer |
 | --- | --- |

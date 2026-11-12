@@ -7,10 +7,10 @@
 // calls an API whose permission it did not declare gets a failing call, not a
 // working one. Enforcement has two homes and both are asserted:
 //
-//   - the transport (src/main/ipc.js + src/main/delivery-scope.js): the host
+//   - the transport (src/electron/extensions/internal/broker/ipc.js + src/electron/extensions/internal/broker/delivery-scope.js): the host
 //     decides from the manifest on disk and simply does not send what was not
 //     granted, so a frame cannot talk itself into data;
-//   - the shim (src/chrome-shim/permission-gate.js): the promise/callback APIs
+//   - the shim (src/electron/extensions/internal/shim/permission-gate.js): the promise/callback APIs
 //     answer with `runtime.lastError` + a rejected promise, like Chrome's
 //     permission errors.
 //
@@ -36,7 +36,7 @@ const API_PERMISSIONS = {
 // a permission nobody declared".
 //
 // `permissions` is here because it is self-referential in Chrome too: an extension
-// may always ask what it holds (src/chrome-shim/permissions-api.js). So may
+// may always ask what it holds (src/electron/extensions/internal/shim/permissions-api.js). So may
 // `alarms`-adjacent shells that invent nothing: `sidePanel` needs no permission in
 // Chrome and this shell renders no panel drawer, so there is nothing to gate.
 const UNGATED_APIS = [

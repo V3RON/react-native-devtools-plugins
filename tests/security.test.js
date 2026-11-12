@@ -1,14 +1,14 @@
 // Hardening tests for the extension-frame layer (GitHub issue #6):
 //
 //   - per-extension CSP from the manifest, defaulting to Chrome's MV3 policy
-//     (src/shared/csp.js, served by src/main/extension-server.js);
+//     (src/electron/extensions/internal/scheme/csp.js, served by src/electron/extensions/internal/scheme/extension-server.js);
 //   - declared permissions mapping and the gate's unknown-manifest behavior
-//     (src/shared/permissions.js);
+//     (src/electron/extensions/internal/broker/permissions.js);
 //   - which network deliveries a frame may receive per grant
-//     (src/main/delivery-scope.js);
+//     (src/electron/extensions/internal/broker/delivery-scope.js);
 //   - the one webPreferences table the whole window runs on
-//     (src/main/frame-security.js);
-//   - that no IPC channel is synchronous any more (src/shared/ipc.js).
+//     (src/electron/extensions/internal/contexts/frame-security.js);
+//   - that no IPC channel is synchronous any more (src/electron/extensions/internal/broker/channels.js).
 //
 // What a frame can actually reach at runtime is asserted in a real Electron
 // process: tests/extension-frame-electron.test.js.
@@ -23,16 +23,16 @@ const {
   contentSecurityPolicyFor,
   defaultCspFor,
   unsafeReason,
-} = require("../src/shared/csp");
+} = require("../src/electron/extensions/internal/scheme/csp");
 const {
   createGrantGate,
   createPermissionGate,
   declaredPermissions,
   requiredPermission,
-} = require("../src/shared/permissions");
-const { deliveryAllowed } = require("../src/main/delivery-scope");
-const { frontendPreferences, extensionFramePreferences } = require("../src/main/frame-security");
-const channels = require("../src/shared/ipc");
+} = require("../src/electron/extensions/internal/broker/permissions");
+const { deliveryAllowed } = require("../src/electron/extensions/internal/broker/delivery-scope");
+const { frontendPreferences, extensionFramePreferences } = require("../src/electron/extensions/internal/contexts/frame-security");
+const channels = require("../src/electron/extensions/internal/broker/channels");
 
 const REPO = path.join(__dirname, "..");
 const readSource = (...parts) => fs.readFileSync(path.join(REPO, ...parts), "utf8");
@@ -153,7 +153,7 @@ test("bundled extension pages carry no inline scripts, which the default CSP ref
 });
 
 test("the file server attaches the CSP header to every response", () => {
-  const source = readCode("src", "main", "extension-server.js");
+  const source = readCode("src", "electron", "extensions", "internal", "scheme", "extension-server.js");
   assert.match(source, /"Content-Security-Policy"/, "responses carry the header");
   assert.match(source, /contentSecurityPolicyFor/, "derived from the manifest");
   assert.match(source, /policyForManifest/, "with the unsafe-policy fallback");
@@ -259,9 +259,13 @@ test("devtools.network data keeps flowing to a frame without the permission", ()
 
 // ── webPreferences ───────────────────────────────────────────────────────────
 test("every frame class runs with the narrowed baseline", () => {
-  const prefs = frontendPreferences({ preloadPath: "/tmp/preload.js" });
-  assert.deepStrictEqual(extensionFramePreferences({ preloadPath: "/tmp/preload.js" }), prefs);
-  assert.equal(prefs.preload, "/tmp/preload.js");
+  // The embedder's preferences (its preload, its partition) are kept; the frame policy
+  // is laid over them, so a base that tried to widen it is narrowed back.
+  const prefs = frontendPreferences({ preload: "/tmp/shell-preload.js", webSecurity: false, sandbox: true });
+  const { preload, ...policy } = prefs;
+  assert.equal(preload, "/tmp/shell-preload.js", "the embedder's own preload stays");
+  assert.deepStrictEqual(extensionFramePreferences(), policy, "a worker window gets the same policy");
+  assert.equal(extensionFramePreferences().preload, undefined, "the session supplies the extension preload");
   assert.equal(prefs.nodeIntegration, false, "no Node surface in any page world");
   assert.equal(prefs.contextIsolation, true);
   assert.equal(prefs.webSecurity, true, "same-origin checks on");
@@ -272,8 +276,8 @@ test("every frame class runs with the narrowed baseline", () => {
 });
 
 test("the window uses that table and does not re-widen it inline", () => {
-  const source = readCode("src", "main", "window.js");
-  assert.match(source, /frontendPreferences/, "preferences come from frame-security");
+  const source = readCode("src", "electron", "shell", "window.js");
+  assert.match(source, /extensionHost\.webPreferences\(/, "preferences come from the extension host (frame-security)");
   assert.doesNotMatch(
     source,
     /webSecurity:\s*false|allowRunningInsecureContent:\s*true|sandbox:\s*false/,
@@ -289,10 +293,10 @@ test("no IPC channel is synchronous, and the injected-script channel is gone", (
   assert.equal(names.includes("get-injected-script"), false);
 
   for (const rel of [
-    ["src", "preload", "index.js"],
-    ["src", "preload", "frontend-host.js"],
-    ["src", "preload", "extension-frame.js"],
-    ["src", "main", "ipc.js"],
+    ["src", "electron", "extensions", "internal", "preload", "index.js"],
+    ["src", "electron", "shell", "frontend-host.js"],
+    ["src", "electron", "extensions", "internal", "preload", "extension-frame.js"],
+    ["src", "electron", "extensions", "internal", "broker", "ipc.js"],
   ]) {
     const source = readCode(...rel);
     assert.doesNotMatch(source, /sendSync/, `${rel.join("/")}: no sendSync call`);
@@ -303,25 +307,25 @@ test("no IPC channel is synchronous, and the injected-script channel is gone", (
     );
   }
 
-  const shared = readSource("src", "shared", "ipc.js");
+  const shared = readSource("src", "electron", "extensions", "internal", "broker", "channels.js");
   assert.match(shared, /House rule \(unconditional\)/, "the rule says so in one place");
 });
 
 test("the arbitrary-code-evaluation channel no longer exists anywhere", () => {
   assert.equal(fs.existsSync(path.join(REPO, "src", "main", "injected-scripts.js")), false);
-  const preload = readCode("src", "preload", "extension-frame.js");
+  const preload = readCode("src", "electron", "extensions", "internal", "preload", "extension-frame.js");
   assert.doesNotMatch(preload, /new Function/, "the extension frame evaluates nothing it is handed");
   assert.doesNotMatch(preload, /executeInMainWorld\(\{[\s\S]{0,40}new Function/);
   // The one executeInMainWorld that remains is the fixed chrome.* merge.
   assert.equal(preload.match(/executeInMainWorld/g).length, 1, "one fixed merge, no payloads");
 
-  const host = readSource("src", "preload", "frontend-host.js");
+  const host = readSource("src", "electron", "shell", "frontend-host.js");
   assert.match(host, /setInjectedScriptForOrigin/, "the frontend's call site still exists");
   assert.match(host, /\[STUB\] injected-script channel/, "and is documented as inert");
 });
 
 test("extension pages are not handed a raw ipcRenderer", () => {
-  const preload = readCode("src", "preload", "extension-frame.js");
+  const preload = readCode("src", "electron", "extensions", "internal", "preload", "extension-frame.js");
   assert.doesNotMatch(
     preload,
     /exposeInMainWorld\(\s*["']ipcRenderer/,
@@ -346,7 +350,7 @@ test("chrome-shim stays free of window/ipcRenderer/Electron/transport references
 
   const offenders = [];
   let checked = 0;
-  for (const file of walk(path.join(REPO, "src", "chrome-shim"))) {
+  for (const file of walk(path.join(REPO, "src", "electron", "extensions", "internal", "shim"))) {
     if (!file.endsWith(".js") || file.endsWith(".map")) {
       continue;
     }

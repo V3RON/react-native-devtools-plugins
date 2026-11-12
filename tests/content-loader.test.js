@@ -1,4 +1,4 @@
-// The app-side half of the content bridge (src/main/content-bridge.js), verified by
+// The app-side half of the content bridge (src/electron/extensions/internal/content/content-bridge.js), verified by
 // EXECUTING the generated loader in a `node:vm` context that stands in for the app: a
 // real JS context, a `Runtime.addBinding`-shaped global function, and a capture of what
 // the loader sends.
@@ -21,7 +21,7 @@ const {
   DISPATCH_GLOBAL,
   loaderSource,
   injectionExpression,
-} = require("../src/main/content-bridge");
+} = require("../src/electron/extensions/internal/content/content-bridge");
 
 /**
  * A stand-in "app": a JS context with the two things the loader needs — the global
@@ -106,7 +106,7 @@ test("the generated loader is app-side code, and no shell module evaluates it", 
       .filter((line) => !/^\s*(\/\/|\*|\*\/)/.test(line))
       .join("\n");
   const sources = ["content-bridge.js", "content-scripts.js", "content-gate.js"]
-    .map((name) => codeOf(fs.readFileSync(require.resolve(`../src/main/${name}`), "utf8")))
+    .map((name) => codeOf(fs.readFileSync(require.resolve(`../src/electron/extensions/internal/content/${name}`), "utf8")))
     .join("\n");
   assert.doesNotMatch(sources, /new Function|\beval\(/, "no shell-side evaluator in this layer");
 });
@@ -369,7 +369,7 @@ test("the host's \"no receiver\" arrives as lastError + a rejected promise, not 
   // The app-visible half of the lost-send defect: the live run's fixture reported
   // `{"response":undefined,"lastError":null}` for a message nobody received, because the
   // host answered with the value it reserves for "a listener answered nothing". Once the
-  // host says it honestly (src/main/content-bridge.js), THIS is what the script sees.
+  // host says it honestly (src/electron/extensions/internal/content/content-bridge.js), THIS is what the script sees.
   const app = makeApp();
   app.install(
     "ext-a",
@@ -425,7 +425,7 @@ test("the host's \"no receiver\" arrives as lastError + a rejected promise, not 
 // This used to be the pinned divergence: the loader dropped the named target, so a message
 // aimed at ANOTHER extension was fanned out to the SENDER's peers and answered as if the
 // addressee had replied. Its own comment said the fix belonged in the envelope protocol,
-// host-side — this is that fix. The id now travels as `to`, and src/main/content-bridge.js's
+// host-side — this is that fix. The id now travels as `to`, and src/electron/extensions/internal/content/content-bridge.js's
 // "case send" refuses a foreign id rather than delivering it locally (see the protocol suite).
 test("a named target extension travels on the envelope instead of vanishing", () => {
   const app = makeApp();
@@ -602,7 +602,7 @@ test("a Port the app opens survives connect, post and disconnect", () => {
   app.evaluate(`globalThis.port.disconnect();`);
   const close = envelopes(app)[envelopes(app).length - 1];
   assert.deepStrictEqual([close.t, close.s], ["port-close", connect.s]);
-  // Same rule as the shell's own frame-side client (src/chrome-shim/messaging.js): a
+  // Same rule as the shell's own frame-side client (src/electron/extensions/internal/shim/messaging.js): a
   // local disconnect() closes this leg and tells the HOST; the local onDisconnect is the
   // host's `port-disconnect` to deliver, which is what the mesh does for every other peer.
   assert.strictEqual(app.json("globalThis.disconnects"), 0);

@@ -3,7 +3,7 @@
 //
 // Two halves, because the bug this file exists for had two halves.
 //
-// 1. THE MATRIX. `src/main/delivery-scope.js` decides per message, not per
+// 1. THE MATRIX. `src/electron/extensions/internal/broker/delivery-scope.js` decides per message, not per
 //    subscription, because one CDP capture feeds two Chrome APIs: `completed` and
 //    `error` belong to `chrome.devtools.network` (no permission needed in Chrome)
 //    AND to `chrome.webRequest`, while `request` / `sendHeaders` / `response` /
@@ -11,7 +11,7 @@
 //    "no data without the permission" — it is "no webRequest lifecycle without
 //    the permission". Asserted per grant set x per payload kind, against the real
 //    module, with the kind list itself pinned against what the host can actually
-//    push (src/main/network-service.js), so a kind added there cannot go
+//    push (src/electron/extensions/internal/cdp/network-service.js), so a kind added there cannot go
 //    unclassified here.
 //
 // 2. THE LIVE PUSH. Issue #20: `ipc.js` called `deliveryAllowed` without importing
@@ -29,7 +29,7 @@
 //
 // The DENY half of the live path is measured from BOTH sides, because each side
 // alone would be a claim: from the FRAME, a permission-less frame's `chrome.webRequest`
-// listeners are withdrawn by the shim's own gate (src/chrome-shim/permission-gate.js),
+// listeners are withdrawn by the shim's own gate (src/electron/extensions/internal/shim/permission-gate.js),
 // so it cannot observe a delivery even if main sent one; and from MAIN, the run
 // records every host->frame push the delivery-scope filter LET THROUGH, so a pre-
 // completion kind that the entitled frame was sent and this frame was not is the
@@ -47,8 +47,8 @@ const path = require("node:path");
 const {
   WEB_REQUEST_ONLY,
   deliveryAllowed,
-} = require("../src/main/delivery-scope");
-const { DELIVERED } = require("../src/main/network-service");
+} = require("../src/electron/extensions/internal/broker/delivery-scope");
+const { DELIVERED } = require("../src/electron/extensions/internal/cdp/network-service");
 
 const { electronBinary, runHarness, stageExtension, consoleLines } = require("./electron-runner");
 
@@ -60,8 +60,8 @@ const { electronBinary, runHarness, stageExtension, consoleLines } = require("./
 const RECORD_KINDS = [...DELIVERED]; // request | sendHeaders | response | completed | error
 const OTHER_KINDS = ["navigated", "status"];
 // `redirect` is webRequest-only too; network-service carries it inside the
-// `request` delivery's `extra` (src/main/network-service.js:104), and
-// src/chrome-shim/network-bridge.js turns a redirectResponse into
+// `request` delivery's `extra` (src/electron/extensions/internal/cdp/network-service.js:104), and
+// src/electron/extensions/internal/shim/network-bridge.js turns a redirectResponse into
 // onBeforeRedirect — the reason it is on the set even though it is not a top-level
 // kind of its own.
 const ALL_KINDS = [...RECORD_KINDS, ...OTHER_KINDS, "redirect"];

@@ -17,7 +17,7 @@
 // Trust boundary: frame identity comes from the calling frame, never from payload
 // (same pattern as the runtime-messaging handlers in ipc.js).
 const { createNetworkModel } = require("./network-model");
-const { toResourceType } = require("../chrome-shim/web-request");
+const { toResourceType } = require("../shim/web-request");
 
 // Lifecycle steps worth a message per request. `data` is deliberately not
 // delivered: neither chrome.devtools.network nor chrome.webRequest has an event

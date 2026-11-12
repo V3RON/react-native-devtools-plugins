@@ -3,7 +3,7 @@
 // (docs/features/DEVTOOLS-NETWORK.md, docs/features/WEBREQUEST.md).
 //
 // Why it lives in main: the CDP session belongs to the bridge
-// (src/main/cdp-bridge.js) and every extension frame needs the same answers, so
+// (src/electron/extensions/internal/cdp/cdp-bridge.js) and every extension frame needs the same answers, so
 // the model accumulates once here and is consumed by `chrome.devtools.network`
 // and `chrome.webRequest` over one async IPC channel. The frontend's `Events`
 // postMessage broadcast and the hardcoded fake body are gone: nothing in this

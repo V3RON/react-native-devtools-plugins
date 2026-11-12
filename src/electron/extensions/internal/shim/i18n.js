@@ -3,7 +3,7 @@
 // `getMessage` and `getUILanguage` are SYNCHRONOUS in Chrome and extensions call them at
 // the top of their first script, so the data has to be here before page scripts run.
 // The frame preload therefore supplies `loadBundle` as a synchronous read of its own
-// extension's message bundle (src/preload/extension-frame.js; src/main/i18n-host.js
+// extension's message bundle (src/electron/extensions/internal/preload/extension-frame.js; src/electron/extensions/internal/registry/i18n-host.js
 // builds it and says why it is not an IPC call). It is invoked lazily on the first call
 // and cached, so an extension that never touches i18n costs nothing.
 //
@@ -13,7 +13,7 @@
 //     this shell does not have, so it answers `{isReliable: false, languages: []}` —
 //     a shape Chrome itself returns for text it cannot classify — instead of guessing.
 const { promiseOrCallback } = require("./async-style");
-const i18n = require("../shared/i18n");
+const i18n = require("../registry/i18n");
 
 /**
  * @param {object} deps

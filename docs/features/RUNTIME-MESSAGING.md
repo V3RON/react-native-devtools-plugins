@@ -33,14 +33,14 @@ the real host inside the app):
   `getPackages`, inert `openOptionsPage`/`requestUpdate`/`reload`/`getBackgroundPage`
   (`getBackgroundPage` is `undefined` here **and** in Chrome for an MV3 extension — a
   service worker has no page object to return).
-- **Router**: `src/main/message-router.js` (relay logic) + `src/main/ipc.js`
+- **Router**: `src/electron/extensions/internal/contexts/message-router.js` (relay logic) + `src/electron/extensions/internal/broker/ipc.js`
   (frame registry). Extension frames register on load; frame identity is main-derived
   (`event.senderFrame` + `event.frameId`) with a principal check — a frame cannot claim
   another frame's key or extension id. Frames leaving mid-flight settle their legs.
 - **Peers and the sender model**: every router peer is a registered *frame*, whatever
   window it lives in. Panels and devtools pages are iframes in the frontend's frame tree;
   an extension's **background context is a peer like any other**, sitting in its own hidden
-  `BrowserWindow` (`src/main/background-host.js`) and registering through the same
+  `BrowserWindow` (`src/electron/extensions/internal/contexts/background-host.js`) and registering through the same
   `RUNTIME_REGISTER`. So a panel ⇄ worker round-trip crosses two `WebContents` and needs no
   special case in the router — which is why the peer's `sender.url` is the honest way to tell
   a worker's answer from a sibling iframe's. `sender` is `{id, url}`, built by main from the
@@ -50,12 +50,12 @@ the real host inside the app):
 - **Ports**: `connect()` returns a Port synchronously; ordered `postMessage` both
   ways; `disconnect()`; `onDisconnect` on peer death (lastError snapshot).
 - **Lifecycle**: `onInstalled` (`install` / `update`) and `onStartup` now have a producer —
-  `src/main/install-state.js` remembers `{version, installedAt}` per extension id and
+  `src/electron/extensions/internal/registry/install-state.js` remembers `{version, installedAt}` per extension id and
   `background-host.js` delivers the verdict to the worker frame as a `kind: "lifecycle"`
   payload on this same `RUNTIME_DELIVER` channel, through the frame's own registered `send`.
   No new channel, no privileged route to the worker. Details and the rejected hosting route:
   [BACKGROUND-WORKER.md](BACKGROUND-WORKER.md).
-- **Cross-cutting rules honored**: Chrome-style `Event` objects (`src/chrome-shim/event.js`:
+- **Cross-cutting rules honored**: Chrome-style `Event` objects (`src/electron/extensions/internal/shim/event.js`:
   dedupe, identity removal, `hasListener`/`hasListeners`) now used by runtime,
   storage and storage.onChanged (the latter delivered across contexts by the host); scoped `lastError` via live getter re-established
   across the contextBridge; dual promise/callback style throughout.
@@ -77,7 +77,7 @@ Known deviations (deliberate, PoC):
 - `onDisconnect`'s `lastError` is a snapshot set before the event, not a live property.
 - **Host pushes can arrive before the page's listeners exist.** The host sends a frame its
   first delivery the moment it registers, which happens during preload evaluation — strictly
-  before the page's own scripts run. `src/preload/extension-frame.js` therefore queues
+  before the page's own scripts run. `src/electron/extensions/internal/preload/extension-frame.js` therefore queues
   `RUNTIME_DELIVER` until `DOMContentLoaded` and flushes in order. Chrome has the same rule
   (no runtime event reaches a worker before its initial script has finished evaluating,
   because the listener does not exist yet); here it is a queue with a backstop timer rather
@@ -138,4 +138,4 @@ than only by hand (`tests/extension-frame-electron.test.js`).
 call delivered **nothing and threw nothing**, so every `sendMessage`/Port delivery to that
 frame was silently dropped. The earlier "proven between two panel frames" claim held only
 for frames sharing a process. Deliveries now go through `WebFrameMain.send` on the object the
-principal check already verified (`src/main/ipc.js`), asserted in `tests/messaging-frames.test.js`.
+principal check already verified (`src/electron/extensions/internal/broker/ipc.js`), asserted in `tests/messaging-frames.test.js`.

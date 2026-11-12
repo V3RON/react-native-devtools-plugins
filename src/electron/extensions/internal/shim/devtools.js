@@ -13,7 +13,7 @@
 // bridge; the rest are inert shapes per the stubbing rule of thumb
 // (docs/OVERVIEW.md) — extensions feature-detect by calling.
 const { createEvent } = require("./event");
-const { panelIdFor } = require("../shared/protocol");
+const { panelIdFor } = require("../scheme/protocol");
 
 // Stable synthetic inspectedWindow.tabId (Chrome's is a small positive int).
 const tabIdFor = (extensionId) => {
@@ -62,7 +62,7 @@ const createDevtools = ({
   // chrome.devtools.inspectedWindow.eval: injected host dependency
   // (expression, options) => Promise<{value, exceptionInfo}>. Wired by the
   // extension-frame preload over the DEVTOOLS_EVAL IPC channel to
-  // src/main/inspected-window.js; absent = honest isError, like Chrome's
+  // src/electron/extensions/internal/cdp/inspected-window.js; absent = honest isError, like Chrome's
   // "cannot access" answer rather than a silently empty success.
   evalInPage,
   // chrome.devtools.inspectedWindow.reload: injected host dependency
@@ -73,14 +73,14 @@ const createDevtools = ({
 }) => {
   // Every Panel this context created, so a host panel event can find them. Matched on
   // the exact pagePath the frame passed to panels.create: the host echoes that string
-  // back (src/main/panel-host.js keeps the creator's own spelling), so no path
+  // back (src/electron/extensions/internal/frontend/panel-host.js keeps the creator's own spelling), so no path
   // normalization has to agree across the two sides.
   const createdPanels = [];
 
   // Chrome fires onShown with the panel page's window. A Window cannot cross the
   // contextBridge from this isolated world, so the events fire argument-less here and
   // the preload's main-world half resolves the window and appends it
-  // (src/preload/extension-frame.js, docs/features/DEVTOOLS-PANELS.md).
+  // (src/electron/extensions/internal/preload/extension-frame.js, docs/features/DEVTOOLS-PANELS.md).
   // `setWidth` is not a Chrome ExtensionPanel method (Chrome has createStatusBarButton
   // and onSearch); it stays an inert shape for extensions that probe for it.
   const createPanel = (title, pagePath) => {

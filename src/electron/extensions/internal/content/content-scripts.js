@@ -15,11 +15,11 @@
 //      `extensions/` before deciding whether to run it would be backwards).
 //
 // This is the registry half only. Deciding WHETHER a script may run inside the
-// user's app is src/main/content-gate.js (default CLOSED), and actually running it
-// is src/main/content-bridge.js.
+// user's app is src/electron/extensions/internal/content/content-gate.js (default CLOSED), and actually running it
+// is src/electron/extensions/internal/content/content-bridge.js.
 const fs = require("fs");
-const config = require("./config");
-const { resolveExtensionFile, loadManifest } = require("./extension-server");
+const { settings: config } = require("../settings");
+const { resolveExtensionFile, loadManifest } = require("../scheme/extension-server");
 
 /**
  * The installed extension folders — the same list `extensions.js` walks. Read at
@@ -142,7 +142,7 @@ const parseContentScripts = (manifest) => {
 /**
  * Resolve one declared inner path to a path on disk, or to a refusal.
  *
- * `resolveExtensionFile` is the server's own guard (src/main/extension-server.js):
+ * `resolveExtensionFile` is the server's own guard (src/electron/extensions/internal/scheme/extension-server.js):
  * the same rule that decides what `rozenite://<id>/<path>` may serve. Going through
  * it rather than `path.join`ing here is the point — content scripts then cannot
  * reach a file the extension could not already fetch from its own origin, and a

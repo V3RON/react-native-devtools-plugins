@@ -1,13 +1,13 @@
 # `chrome.*` gap analysis
 
-Extension-API surface in real Chrome vs. this shim (`src/chrome-shim` + injected
+Extension-API surface in real Chrome vs. this shim (`src/electron/extensions/internal/shim` + injected
 scripts). Status legend: [../README.md](../README.md) + [README.md](README.md).
 Per-namespace plans live in [../features/README.md](../features/README.md).
 
 ## A. DevTools-only namespaces (must be complete — nothing works otherwise)
 
 - **`devtools.panels`** — `create` 🟨 shell-driven (`chrome.devtools.*` is implemented in
-  `src/chrome-shim/devtools.js`, not by a frontend-injected script); `themeName` /
+  `src/electron/extensions/internal/shim/devtools.js`, not by a frontend-injected script); `themeName` /
   `setThemeChangeHandler` ✅ in devtools/panel frames (the frontend's real theme, `"default"` | `"dark"`,
   correct from the first script; background contexts learn it async, see the Theme section
   of the panels doc); `Panel.onShown(window)`/`onHidden` ✅ real (host-routed to the creating
@@ -56,10 +56,10 @@ every namespace added from here on:
 1. **Promise + callback dual style everywhere** ✅ done in `storage`, `runtime`, the network
    APIs and every Tier-2 namespace added since (`tabs`, `permissions`, `notifications`,
    `alarms`, `downloads`, `commands`, `contextMenus`, `sidePanel`), all through the one
-   helper in `src/chrome-shim/async-style.js`.
+   helper in `src/electron/extensions/internal/shim/async-style.js`.
 2. **`chrome.runtime.lastError` semantics** ✅ set (and only set) inside error callbacks;
    extensions branch on it.
-3. **Real Event objects** ✅ `src/chrome-shim/event.js`: `addListener` dedupe,
+3. **Real Event objects** ✅ `src/electron/extensions/internal/shim/event.js`: `addListener` dedupe,
    `removeListener` identity semantics, `hasListener`, `hasListeners` — shared by storage,
    runtime and both network namespaces.
 4. **Port messaging with structured cloning** (`runtime.connect`) — Redux DevTools and

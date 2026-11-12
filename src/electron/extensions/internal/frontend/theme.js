@@ -6,7 +6,7 @@
 // The panel bridge knows the theme before it creates any extension iframe, and
 // a script in an extension page's <head> may read `themeName` before any async
 // IPC could answer. So the bridge appends `?__rozenite_theme=<name>` to the frame
-// URL (src/frontend/panel-bridge.js duplicates the literal: it is evaluated as a
+// URL (src/electron/extensions/internal/frontend/panel-bridge.js duplicates the literal: it is evaluated as a
 // plain script, not required), and the extension-frame preload — which runs before
 // page scripts — takes the hint off the URL synchronously with `takeThemeHint`.
 const THEME_NAMES = new Set(["default", "dark"]);

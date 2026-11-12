@@ -5,9 +5,8 @@
 // that differs from the manifest on disk is an UPDATE, and anything else means
 // "nothing new happened, this is a normal launch" (→ `onStartup`).
 //
-// The state is main-process state in `electron-store`, like the frontend's
-// preferences (src/main/preferences.js), and it lives under `userData` — which
-// is what makes the behavior testable: a fresh `--user-data-dir` yields
+// The state is main-process state in `electron-store`, and it lives under
+// `userData` — which is what makes the behavior testable: a fresh `--user-data-dir` yields
 // `install` again, because the file it is remembered in does not exist yet.
 //
 // Deliberately NOT derived from the extension folder's mtime or a content hash:
@@ -85,18 +84,11 @@ const createInstallState = (store) => {
   };
 };
 
-// One store per main process, created lazily: electron-store resolves its path
-// from app.getPath("userData"), which is only meaningful once the app is ready
-// and after any --user-data-dir override is applied.
-let instance;
-const openInstallState = () => {
-  if (!instance) {
-    instance = createInstallState(
-      new Store({ name: "extension-installs", projectVersion: String(CURRENT_VERSION) })
-    );
-  }
-  return instance;
-};
+// The electron-store backed state, opened by the extension host after `ready`:
+// electron-store resolves its path from app.getPath("userData"), which is only
+// meaningful once the app is ready and after any --user-data-dir override is applied.
+const openInstallState = () =>
+  createInstallState(new Store({ name: "extension-installs", projectVersion: String(CURRENT_VERSION) }));
 
 module.exports = {
   CURRENT_VERSION,

@@ -3,7 +3,7 @@
 **Extension model**
 
 - No extension lifecycle UI: no install/uninstall/reload or permissions prompt. Manifest
-  parsing + enumeration are the shell's job now (`src/main/extensions.js` scans
+  parsing + enumeration are the shell's job now (`src/electron/extensions/internal/registry/extensions.js` scans
   `extensions/` for devtools pages **and** backgrounds and hosts both — see
   [features/DEVTOOLS-PANELS.md](features/DEVTOOLS-PANELS.md) and
   [features/BACKGROUND-WORKER.md](features/BACKGROUND-WORKER.md)), so the frontend needs no
@@ -11,7 +11,7 @@
   frontend installs an extension; there is no watcher or UI.
 - **Background service workers run now** — as an always-on hidden `BrowserWindow` per
   extension, against the same `chrome.*` shim, with `runtime.onInstalled`/`onStartup` firing
-  and the worker as an ordinary messaging peer (`src/main/background-host.js`,
+  and the worker as an ordinary messaging peer (`src/electron/extensions/internal/contexts/background-host.js`,
   [features/BACKGROUND-WORKER.md](features/BACKGROUND-WORKER.md)). Proven headless in a real
   Electron process, including against the shipped `graphql` and `altair` folders. What this
   is **not**: it is not Chrome's MV3 lifecycle — nothing evicts the worker when idle and
@@ -69,7 +69,7 @@
   `XMLHttpRequest` to the frame's own `rozenite://` origin — the one synchronous read a
   frame makes, deliberately not IPC ([features/STORAGE-AND-I18N.md](features/STORAGE-AND-I18N.md)).
 - `chrome.tabs` answers with **one synthetic tab standing for the inspected RN
-  target** (`src/chrome-shim/tabs.js`, [features/SMALL-SHIMS.md](features/SMALL-SHIMS.md)).
+  target** (`src/electron/extensions/internal/shim/tabs.js`, [features/SMALL-SHIMS.md](features/SMALL-SHIMS.md)).
   `query`/`get`/`update` all return that same tab under the id
   `devtools.inspectedWindow.tabId` reports; its `url`/`title` come from `Target.getTargetInfo`
   while a CDP session is attached, and fall back to Chrome's own `about:blank` + `""` when it
@@ -102,7 +102,7 @@
   extensions call `create` from an automated handler (graphql's `onInstalled` opens a
   marketing URL) and launching the user's real browser because a devtools session started is
   a side effect nobody asked for. Even under `external`, only `http:`/`https:` URLs reach
-  `shell.openExternal` (`src/main/external-open.js`, shared with
+  `shell.openExternal` (`src/electron/extensions/internal/services/external-open.js`, shared with
   `InspectorFrontendHost.openInNewTab`): a `file:`/`smb:`/custom-scheme URL is refused, since
   the OS would launch whatever application is registered for it. `window` filters through the
   same check before it creates a window, plus this shell's own `rozenite://<id>/` pages — so
@@ -182,7 +182,7 @@
   production preload — page-world `require` / `process` / `Buffer` / `ipcRenderer` are
   `undefined`, messaging and Ports still round-trip, and `chrome.*` keeps its shape
   (`tests/extension-frame-electron.test.js`). Preferences live in one place,
-  `src/main/frame-security.js`, with the measurements behind each choice.
+  `src/electron/extensions/internal/contexts/frame-security.js`, with the measurements behind each choice.
 - Still open, deliberately documented rather than fixed:
   - **`sandbox: false`.** A sandboxed preload can only `require` Electron's built-in
     subset, not this repo's preload modules — enabling it means shipping one bundled,
@@ -197,7 +197,7 @@
     that would let the two frame classes have different policies. An extension's background
     context already HAS its own `WebContents` (a hidden window) and is given the same policy
     anyway: a worker must not reach more than a panel can
-    (`src/main/frame-security.js` records why that is a decision).
+    (`src/electron/extensions/internal/contexts/frame-security.js` records why that is a decision).
 - **Hidden worker windows are no better sandboxed than panels.** `sandbox: false` applies to
   them too, so "one hidden window per extension" buys lifecycle separation (a frontend reload
   does not kill the worker) and a separate renderer process — it does **not** buy a sandbox, a
@@ -218,9 +218,9 @@
   here limit what an extension page can *ask* for, not what a compromised renderer can do.
 - **Permissions now gate capability.** An extension calling an API whose permission it did
   not declare gets a failing call (`runtime.lastError` + rejected promise) and, for
-  `webRequest`, no deliveries at all — enforced twice, in main (`src/main/delivery-scope.js`
+  `webRequest`, no deliveries at all — enforced twice, in main (`src/electron/extensions/internal/broker/delivery-scope.js`
   decides from the manifest **on disk**, so a frame cannot talk itself into data) and in the
-  shim (`src/chrome-shim/permission-gate.js`). Both halves are measured, in one live run of
+  shim (`src/electron/extensions/internal/shim/permission-gate.js`). Both halves are measured, in one live run of
   the production shell with a CDP session (`tests/delivery-scope.test.js`), and each is
   measured by the observation that can actually see it: an entitled panel frame receives
   every `chrome.webRequest` step and `devtools.network`'s finished event; for a frame with
@@ -291,7 +291,7 @@
   ([features/SMALL-SHIMS.md](features/SMALL-SHIMS.md)).
 - **A content script's app→host payloads are also relayed to the DevTools frontend.** The host
   does not open a second debugger connection — it multiplexes onto the frontend's CDP session by
-  message id (`src/main/cdp-bridge.js`) — and the backend dispatches `Runtime.bindingCalled` to
+  message id (`src/electron/extensions/internal/cdp/cdp-bridge.js`) — and the backend dispatches `Runtime.bindingCalled` to
   every session on that connection, so every envelope an injected script sends is pushed to the
   frontend too, base64 blobs included. It is inert there: the frontend's React-DevTools bindings
   each check the binding NAME before touching a payload (`__FUSEBOX_REACT_DEVTOOLS_DISPATCHER__`,

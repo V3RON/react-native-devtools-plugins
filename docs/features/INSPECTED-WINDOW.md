@@ -4,7 +4,7 @@
 | --- | --- |
 | **Status** | 🟨 partial — `eval` and `reload` are real (CDP `Runtime.evaluate` / `Page.reload` over the shell's own bridge); `getSelectedNode` is 🚷 (no Elements panel, no DOM), `getResources` / `getResourceContent` are implementable and not built |
 | **Tier** | 1 |
-| **Blocked by** | — (needs the CDP bridge, now in the shell: [src/main/cdp-bridge.js](../../src/main/cdp-bridge.js)) |
+| **Blocked by** | — (needs the CDP bridge, now in the shell: [src/electron/extensions/internal/cdp/cdp-bridge.js](../../src/electron/extensions/internal/cdp/cdp-bridge.js)) |
 
 ## Chrome surface
 
@@ -64,7 +64,7 @@ being swallowed.
 | `getResources` / `getResourceContent` | `Debugger.getScriptParsed` + script source | not implemented (Tier 2, **implementable** — RN DevTools has a Sources panel) |
 | `getSelectedNode` | 🚷 no anchor — the selected **DOM** node from the Elements panel; RN has no Elements panel and no `DOM` domain | none; answers `null` forever |
 
-### Result mapping (implemented in `src/main/inspected-window.js`)
+### Result mapping (implemented in `src/electron/extensions/internal/cdp/inspected-window.js`)
 
 | CDP answer | Chrome pair |
 | --- | --- |
@@ -84,7 +84,7 @@ Nothing is fabricated: when the backend cannot answer, `eval` says so in
    the route turned out to be different: the frontend owns its socket directly
    (`?ws=` selects `WebSocketConnection`), so `sendMessageToBackend` was never
    reachable. The host owns the socket instead
-   ([cdp-bridge.js](../../src/main/cdp-bridge.js)); see
+   ([cdp-bridge.js](../../src/electron/extensions/internal/cdp/cdp-bridge.js)); see
    [DISPATCH-CHANNEL.md](DISPATCH-CHANNEL.md).
 2. ~~Map exceptionInfo into Chrome's `{value, exceptionInfo}` callback shape~~ ✅.
 3. ~~`tabId` constant~~ ✅. ~~`reload`~~ ✅ (`Page.reload`). Resources

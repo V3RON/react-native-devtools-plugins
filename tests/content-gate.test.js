@@ -1,4 +1,4 @@
-// The injection gate for content scripts (src/main/content-gate.js) — GitHub issue #5.
+// The injection gate for content scripts (src/electron/extensions/internal/content/content-gate.js) — GitHub issue #5.
 //
 // The property that matters most here is the boring one: with no configuration, the
 // gate injects NOTHING, for every extension, for every entry, and says why. Every
@@ -16,8 +16,8 @@ const {
   isAllowlisted,
   decideInjection,
   decideEntries,
-} = require("../src/main/content-gate");
-const config = require("../src/main/config");
+} = require("../src/electron/extensions/internal/content/content-gate");
+const config = require("../src/electron/shell/config");
 
 const entry = (over = {}) => ({
   index: 0,

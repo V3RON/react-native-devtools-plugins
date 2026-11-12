@@ -13,12 +13,12 @@
 //   - every write is applied once, here, and its change event goes to EVERY registered
 //     context of THAT extension — the writer included, so each context sees the same
 //     events in the same order — and to no other extension's context;
-//   - identity is the registered frame (`attach` is called by src/main/ipc.js with an
+//   - identity is the registered frame (`attach` is called by src/electron/extensions/internal/broker/ipc.js with an
 //     extension id read from the frame's own URL). A call names a `frameKey` the router
 //     already verified; nothing in a payload says whose storage it is.
 //
 // Persistence is write-behind. A write updates the Map and broadcasts at once; the file is
-// rewritten on a short per-(extension, area) debounce and on `flush()` (src/main/ipc.js calls
+// rewritten on a short per-(extension, area) debounce and on `flush()` (src/electron/extensions/internal/broker/ipc.js calls
 // it on quit). Rewriting a whole 10 MB area synchronously on every write cost ~70 ms of main's
 // event loop per tiny `set`, which a busy extension would turn into a stalled shell. The price
 // is the failure model: a disk error can no longer reject the write that caused it (the write
@@ -32,7 +32,7 @@
 // arriving in any particular order relative to each other.
 //
 // Pure: Electron enters only through `send` closures and `openPersistence`.
-const core = require("../shared/storage-core");
+const core = require("./storage-core");
 
 const SESSION_ACCESS_LEVELS = ["TRUSTED_CONTEXTS", "TRUSTED_AND_UNTRUSTED_CONTEXTS"];
 const OPS = new Set(["get", "set", "remove", "clear", "getBytesInUse", "getKeys", "setAccessLevel"]);
@@ -337,7 +337,7 @@ const createStorageService = ({
   };
 };
 
-// ── the electron-store persistence src/main/ipc.js installs ─────────────────
+// ── the electron-store persistence src/electron/extensions/internal/broker/ipc.js installs ─────────────────
 // Same file names the per-frame stores used (`extension-<id>-<area>.json`), so what an
 // extension saved before the move is still there. The WHOLE object is written
 // (`store.store = …`) rather than `store.set(items)`: electron-store treats a dot in

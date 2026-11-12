@@ -14,7 +14,7 @@
 // see `open()` below.
 //
 // The window is a normal window over `rozenite://<id>/<page>`, created with the SAME
-// webPreferences every other extension frame gets (src/main/frame-security.js), so an
+// webPreferences every other extension frame gets (src/electron/extensions/internal/contexts/frame-security.js), so an
 // options page is not a more privileged context than a panel or a worker. The path goes
 // through the file server's own containment rules like any other extension URL.
 const NO_PAGE = (extensionId) => ({
@@ -117,22 +117,19 @@ const createOptionsHost = ({
   };
 };
 
-// ── the Electron-backed singleton src/main/ipc.js installs ───────────────────
-let instance;
-
-const attachOptionsHost = (deps = {}) => {
+// ── the Electron-backed host the extension host builds (ExtensionHost.js) ─────────
+/** @param {object} deps `webPreferences` carries the host's session; the rest override. */
+const attachOptionsHost = ({ webPreferences, ...deps } = {}) => {
   const { BrowserWindow } = require("electron");
-  const config = require("./config");
   const { extensionFramePreferences } = require("./frame-security");
-  const { buildExtensionURL } = require("../shared/protocol");
-  const { createOptionsHost: build } = require("./options-host");
+  const { buildExtensionURL } = require("../scheme/protocol");
 
-  instance = build({
-    readManifest: deps.readManifest || require("./extension-server").loadManifest,
+  return createOptionsHost({
+    readManifest: deps.readManifest || require("../scheme/extension-server").loadManifest,
     buildUrl: (extensionId, innerPath) => {
       // Containment is the file server's call, same as every other extension URL:
       // a manifest that names `../../etc/passwd` gets no URL, not a window on a 404.
-      const { resolveExtensionFile } = require("./extension-server");
+      const { resolveExtensionFile } = require("../scheme/extension-server");
       if (!resolveExtensionFile(extensionId, innerPath)) {
         return null;
       }
@@ -143,8 +140,8 @@ const attachOptionsHost = (deps = {}) => {
         width: 800,
         height: 600,
         // The same policy a panel or a worker runs under — an options page is an
-        // extension page, not a privileged one (src/main/frame-security.js).
-        webPreferences: extensionFramePreferences({ preloadPath: config.preloadPath }),
+        // extension page, not a privileged one (src/electron/extensions/internal/contexts/frame-security.js).
+        webPreferences: webPreferences || extensionFramePreferences(),
       });
       win.loadURL(url).catch(() => {});
       return win.id;
@@ -159,9 +156,6 @@ const attachOptionsHost = (deps = {}) => {
     },
     ...deps,
   });
-  return instance;
 };
 
-const getOptionsHost = () => instance || attachOptionsHost();
-
-module.exports = { NO_PAGE, createOptionsHost, optionsPageOf, attachOptionsHost, getOptionsHost };
+module.exports = { NO_PAGE, createOptionsHost, optionsPageOf, attachOptionsHost };

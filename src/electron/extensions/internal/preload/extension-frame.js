@@ -10,7 +10,7 @@
 //     extensions/sample-extension/panel.html).
 //   - no injected-script fetch + `new Function`. The stock frontend no longer
 //     ships a per-origin script, because chrome.devtools.* is implemented
-//     shell-side in src/chrome-shim/devtools.js
+//     shell-side in src/electron/extensions/internal/shim/devtools.js
 //     (docs/features/DEVTOOLS-PANELS.md), so the whole channel — including its
 //     two sendSync exceptions — is gone. `InspectorFrontendHost
 //     .setInjectedScriptForOrigin` is a documented no-op.
@@ -24,10 +24,10 @@ const {
   createChromeNamespace,
   createExtensionStorage,
   createNetworkBridge,
-} = require("../chrome-shim");
-const { createGrantGate } = require("../shared/permissions");
-const { takeThemeHint } = require("../shared/theme");
-const { I18N_BUNDLE_PATH } = require("../shared/protocol");
+} = require("../shim");
+const { createGrantGate } = require("../broker/permissions");
+const { takeThemeHint } = require("../frontend/theme");
+const { I18N_BUNDLE_PATH } = require("../scheme/protocol");
 const {
   RUNTIME_GET_MANIFEST,
   RUNTIME_REGISTER,
@@ -61,7 +61,7 @@ const {
   DOWNLOAD_ERASE,
   DOWNLOAD_SEARCH,
   DOWNLOAD_SUGGEST_REPLY,
-} = require("../shared/ipc");
+} = require("../broker/channels");
 
 const extensionId = window.location.hostname; // id == hostname: load-bearing
 
@@ -82,10 +82,10 @@ const getManifest = () => manifestCache;
 
 // chrome.i18n: the one place this preload reads something synchronously, and why it is
 // not IPC. `getMessage` is synchronous and extensions call it before an async answer can
-// have landed, while every channel in src/shared/ipc.js is async by house rule. The
+// have landed, while every channel in src/electron/extensions/internal/broker/channels.js is async by house rule. The
 // extension's message bundle is therefore read with a synchronous XMLHttpRequest to this
 // frame's OWN origin — the extension protocol, which already carries the path guard and
-// is where the host builds the bundle (src/main/i18n-host.js). Nothing here picks an
+// is where the host builds the bundle (src/electron/extensions/internal/registry/i18n-host.js). Nothing here picks an
 // extension or a locale: the id is the request's hostname, the locale is the host's.
 // Called lazily by the shim on the first i18n call, once.
 const loadI18nBundle = () => {
@@ -112,11 +112,11 @@ let grants;
 const permissions = createGrantGate(() => grants);
 
 // chrome.alarms' clock multiplier, decided by the host and handed back at
-// registration (src/main/config.js). 1 = real time; the harness shortens it so a
+// registration (src/electron/shell/config.js). 1 = real time; the harness shortens it so a
 // headless run can observe a real timer fire inside a worker.
 let alarmClockScale = 1;
 
-// chrome.storage: the state lives in the HOST (src/main/storage-service.js), one store per
+// chrome.storage: the state lives in the HOST (src/electron/extensions/internal/services/storage-service.js), one store per
 // extension shared by all of its contexts, so this frame only forwards calls and turns the
 // host's STORAGE_DELIVER pushes into onChanged events. Like every other host-backed call it
 // waits for RUNTIME_REGISTER (below): the host derives whose storage this is from the
@@ -131,7 +131,7 @@ const storage = createExtensionStorage({
 });
 
 // chrome.devtools.network + chrome.webRequest, both fed by the host's CDP network
-// model (src/main/network-service.js). Reads are async IPC; request lifecycle
+// model (src/electron/extensions/internal/cdp/network-service.js). Reads are async IPC; request lifecycle
 // steps arrive as NETWORK_DELIVER pushes. Nothing is answered from a cache here
 // and no body is invented: when the backend cannot report traffic, the host says
 // so and the shim reports "no network data" (docs/features/DEVTOOLS-NETWORK.md).
@@ -214,7 +214,7 @@ const transport = {
 };
 
 // chrome.tabs' view of the inspected target, and the two things main can do that a
-// frame cannot (src/main/tab-host.js). Both are gated AGAIN in main from the host's
+// frame cannot (src/electron/extensions/internal/services/tab-host.js). Both are gated AGAIN in main from the host's
 // own grants, so a frame that ignored its RUNTIME_REGISTER reply gets neither the
 // target's url nor a launched window (docs/features/EXTENSION-MANAGEMENT.md).
 const chrome = createChromeNamespace({
@@ -284,7 +284,7 @@ const chrome = createChromeNamespace({
       (level) => (typeof level === "string" ? level : "unspecifed")
     ),
   getAlarmClockScale: () => alarmClockScale,
-  // chrome.downloads -> the shell's one save path (src/main/save-service.js). The id
+  // chrome.downloads -> the shell's one save path (src/electron/extensions/internal/services/save-service.js). The id
   // this resolves is main's, so an extension can only ever refer to a save main is
   // really tracking; a refusal comes back as main's error and rejects the call.
   saveDownload: (request) =>
@@ -311,7 +311,7 @@ const chrome = createChromeNamespace({
   },
   // chrome.runtime.openOptionsPage -> a window for the manifest's options_ui.page.
   // Main reads the manifest from disk, so an extension with no options_ui gets the
-  // refusal (see src/main/options-host.js) rather than a resolved promise.
+  // refusal (see src/electron/extensions/internal/contexts/options-host.js) rather than a resolved promise.
   openOptionsPage: () =>
     asRegisteredCaller(() => ipcRenderer.invoke(OPTIONS_OPEN)).then(
       (reply) => reply || { ok: false, error: "openOptionsPage: no answer from the host." }
@@ -322,12 +322,12 @@ const chrome = createChromeNamespace({
   // chrome.runtime.getManifest.
   permissions,
   // chrome.devtools.panels.create -> host -> real frontend tab
-  // (docs/features/DEVTOOLS-PANELS.md, src/main/panel-host.js).
+  // (docs/features/DEVTOOLS-PANELS.md, src/electron/extensions/internal/frontend/panel-host.js).
   onPanelCreated: ({ title, pagePath }) => {
     ipcRenderer.invoke(EXT_PANEL_CREATE, { title, pagePath }).catch(() => {});
   },
   // chrome.devtools.inspectedWindow.eval -> host -> CDP Runtime.evaluate
-  // (docs/features/INSPECTED-WINDOW.md, src/main/inspected-window.js).
+  // (docs/features/INSPECTED-WINDOW.md, src/electron/extensions/internal/cdp/inspected-window.js).
   // The host never throws across IPC: a missing CDP session comes back as
   // ok:false with a message, which becomes Chrome's exceptionInfo.isError.
   evalInPage: (expression, options) =>
@@ -443,7 +443,7 @@ window.addEventListener("pagehide", () => {
 // Network deliveries (devtools.network events + webRequest listeners). The host
 // wraps them as {kind, payload}; the shim consumes the payload shape. A frame
 // whose extension does not declare `webRequest` is never sent the lifecycle
-// steps that only webRequest consumes (src/main/delivery-scope.js).
+// steps that only webRequest consumes (src/electron/extensions/internal/broker/delivery-scope.js).
 ipcRenderer.on(NETWORK_DELIVER, (_event, delivery) =>
   networkBridge.handleDelivery(delivery && delivery.payload ? delivery.payload : delivery)
 );
@@ -489,7 +489,7 @@ contextBridge.executeInMainWorld({
     // NAMED after its panel id: `window.open("", name)` resolves an existing named frame
     // without navigating it and returns its WindowProxy, which is fully scriptable from
     // here once the panel has loaded, because both pages are `rozenite://<id>`. The
-    // shell denies every window.open (src/main/window-open-policy.js), so a name that matches no
+    // shell denies every window.open (src/electron/shell/window-open-policy.js), so a name that matches no
     // frame gives null instead of a popup. The listeners of one panel are serialized, so
     // onHidden can never overtake an onShown that is still waiting for the panel to load.
     const panels = merged.devtools.panels;

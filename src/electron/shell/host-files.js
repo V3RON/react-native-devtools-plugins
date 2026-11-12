@@ -15,7 +15,7 @@
 // asking again (unless `forceSaveAs`), and `append` writes only to a path a save of
 // that url produced — a url the host never saved to is ignored, so the frontend cannot
 // name an arbitrary file to grow. The dialog and the write are the shell's one save
-// path (src/main/save-service.js); events go out on the dispatch channel.
+// path (src/electron/extensions/internal/services/save-service.js); events go out on the dispatch channel.
 //
 // Known sharp edge: a re-save to a remembered path overwrites that file in place, so if
 // the write then fails the save service removes the (already truncated) file — the
@@ -31,9 +31,9 @@ const nameOf = (url) =>
 
 /**
  * @param {object} deps
- * @param {{start: function, get: function}} deps.saveService src/main/save-service.js
+ * @param {{start: function, get: function}} deps.saveService src/electron/extensions/internal/services/save-service.js
  * @param {(path: string, data: string) => Promise<void>} deps.appendFile
- * @param {(name: string, args: any[]) => boolean} deps.dispatch src/main/dispatch.js
+ * @param {(name: string, args: any[]) => boolean} deps.dispatch src/electron/shell/dispatch.js
  * @param {(message: string) => void} [deps.log]
  */
 const createHostFiles = ({ saveService, appendFile, dispatch, log = () => {} }) => {
@@ -128,10 +128,17 @@ const createHostFiles = ({ saveService, appendFile, dispatch, log = () => {} }) 
 
 let instance;
 
+/**
+ * The shell's InspectorFrontendHost files, on first need. The dialog and the write are
+ * the extension host's save engine (`attachSaveService`), built here as the shell's own
+ * instance: this is the development shell, not ported upstream, and one of the two
+ * allowlisted reaches into extensions/internal (tests/architecture-boundary.test.js).
+ */
 const getHostFiles = () => {
   if (!instance) {
+    const { attachSaveService } = require("../extensions/internal/services/save-service");
     instance = createHostFiles({
-      saveService: require("./save-service").getSaveService(),
+      saveService: attachSaveService({ testSaveDialog: require("./config").testSaveDialog }),
       appendFile: (target, data) => require("fs/promises").appendFile(target, data, "utf8"),
       dispatch: require("./dispatch").dispatchToFrontend,
       log: (message) => console.warn(`[host-files] ${message}`),

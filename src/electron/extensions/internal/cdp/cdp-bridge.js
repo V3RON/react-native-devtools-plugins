@@ -3,7 +3,7 @@
 // (docs/features/INSPECTED-WINDOW.md, docs/features/DISPATCH-CHANNEL.md).
 //
 // Why this exists: the frontend opens its CDP connection itself — with `?ws=`
-// in its URL (src/main/config.js) the frontend build picks
+// in its URL (src/electron/shell/config.js) the frontend build picks
 // core/sdk/WebSocketConnection, so `InspectorFrontendHost.sendMessageToBackend`
 // is never called and the host cannot reach the backend *through* the frontend.
 // The bridge therefore sits on the wire: the frontend connects to this server,
@@ -739,7 +739,7 @@ const createCdpBridge = (options = {}) => {
         opened.push(await listenOn(host));
       } catch (error) {
         if (opened.length === 0) {
-          // Nothing is listening: the port is taken, which src/main/index.js
+          // Nothing is listening: the port is taken, which src/electron/shell/main.js
           // reports as "stop the external relay".
           stopped = true;
           throw error;
@@ -827,22 +827,8 @@ const createCdpBridge = (options = {}) => {
   };
 };
 
-// ── process singleton (built from config; nothing binds until start()) ─────
-const config = require("./config");
-
-const bridge = createCdpBridge({
-  // Includes `allowedOrigins`: the frontend's own origin, which is the only
-  // browser document that dials this socket, plus DEVTOOLS_CDP_ALLOWED_ORIGINS
-  // (src/main/config.js).
-  ...config.cdpBridge,
-  log: (level, message) => {
-    const line = `[cdp-bridge] ${message}`;
-    if (level === "error") console.error(line);
-    else if (level === "warn") console.warn(line);
-    else console.log(line);
-  },
-});
-
+// The extension host builds one bridge per window attachment (ExtensionHost.js); nothing
+// here is created at import time and nothing binds until start().
 module.exports = {
   createCdpBridge,
   HOST_ID_BASE,
@@ -850,13 +836,4 @@ module.exports = {
   DEFAULTS,
   isLoopbackAddress,
   upgradeAllowed,
-  bridge,
-  start: bridge.start,
-  stop: bridge.stop,
-  sendCommand: bridge.sendCommand,
-  onEvent: bridge.onEvent,
-  isAttached: bridge.isAttached,
-  listenPort: bridge.listenPort,
-  status: bridge.status,
-  listeningAddresses: bridge.listeningAddresses,
 };

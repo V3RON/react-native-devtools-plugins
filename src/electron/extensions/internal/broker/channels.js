@@ -1,12 +1,14 @@
-// Single source of truth for IPC channel names shared between the main
-// process and the preloads.
+// Single source of truth for the extension host's IPC channel names, shared between
+// the main process (./ipc.js) and the extension preload (../preload/). The embedding
+// shell's own channels (InspectorFrontendHost, window ops) are not here:
+// src/electron/shell/channels.js.
 //
 // House rule (unconditional): every channel is async
 // (`ipcMain.handle` + `ipcRenderer.invoke`). There are no `sendSync` channels
 // left — the last two (`STORE_/GET_INJECTED_SCRIPT`, which let the frontend
 // hand an arbitrary script to extension frames) were deleted together with the
 // `new Function` that evaluated them: `chrome.devtools.*` is implemented
-// shell-side (src/chrome-shim/devtools.js), so the fork's injected-script
+// shell-side (src/electron/extensions/internal/shim/devtools.js), so the fork's injected-script
 // channel has no consumer (docs/features/DEVTOOLS-PANELS.md).
 //
 // The one synchronous read a frame makes is NOT an IPC channel: chrome.i18n's message
@@ -14,38 +16,6 @@
 // (docs/features/STORAGE-AND-I18N.md), because getMessage is synchronous in Chrome.
 
 module.exports = {
-  // ── dispatch channel (docs/features/DISPATCH-CHANNEL.md) ────────────────
-  /** main -> main-frame preload -> window.InspectorFrontendAPI[name](...args) */
-  HOST_EVENT: "host-event",
-  /** ({x, y, items}) -> native context menu; selection dispatched back. */
-  SHOW_CONTEXT_MENU: "show-context-menu",
-
-  // ── frontend preferences (docs/api/INSPECTOR-FRONTEND-HOST.md) ──────────
-  PREF_REGISTER: "pref-register",
-  PREF_GET: "pref-get",
-  PREF_GET_ALL: "pref-get-all",
-  PREF_SET: "pref-set",
-  PREF_REMOVE: "pref-remove",
-  PREF_CLEAR: "pref-clear",
-
-  // ── window ops ───────────────────────────────────────────────────────────
-  WINDOW_BRING_TO_FRONT: "window-bring-to-front",
-  WINDOW_CLOSE: "window-close",
-  /** ({url, content, forceSaveAs, isBase64}) -> `InspectorFrontendHost.save` over
-   *  the shell's one save path (src/main/save-service.js). The frontend used to
-   *  click a synthetic `<a download>` at a `blob:` URL, which told nobody whether
-   *  anything was written; now it is the same service `chrome.downloads` uses. */
-  HOST_SAVE: "host-save",
-  /** ({url, content}) -> `InspectorFrontendHost.append` to the file a prior save of
-   *  `url` chose; replies via `appendedToURL` on the dispatch channel. */
-  HOST_APPEND: "host-append",
-  /** ({url}) -> `InspectorFrontendHost.close`: forget the handle a save of `url` made. */
-  HOST_CLOSE_FILE: "host-close-file",
-  /** ({url}) -> `InspectorFrontendHost.openInNewTab` through the scheme allowlist. */
-  HOST_OPEN_EXTERNAL: "host-open-external",
-  /** () -> the host config object `InspectorFrontendHost.getHostConfig` returns. */
-  HOST_CONFIG: "host-config",
-
   // ── chrome.runtime (docs/features/RUNTIME-MESSAGING.md) ──────────────────
   /** () -> manifest of the calling frame's extension (id from frame URL). */
   RUNTIME_GET_MANIFEST: "runtime-get-manifest",
@@ -67,7 +37,7 @@ module.exports = {
 
   // ── chrome.storage (docs/features/STORAGE-AND-I18N.md) ───────────────────────
   /** ({area, op, arg}) -> one StorageArea call, executed against the HOST's store for
-   *  the calling frame's extension (src/main/storage-service.js). Resolves
+   *  the calling frame's extension (src/electron/extensions/internal/services/storage-service.js). Resolves
    *  {ok, value, seq} or {ok: false, error}; never throws across IPC. */
   STORAGE_CALL: "storage-call",
   /** main -> frame push: {kind: "storage-changed", payload: {seq, area, changes}} — one
@@ -90,7 +60,7 @@ module.exports = {
   /** ({themeName}) from the FRONTEND's main frame -> the theme the frontend is
    *  showing ("default" | "dark"); main fans changes out to extension contexts as
    *  RUNTIME_DELIVER {kind: "theme"}. Accepted only from the frontend window's own
-   *  main frame (src/main/frontend-frame.js isFrontendFrame), never from an extension. */
+   *  main frame (src/electron/extensions/internal/frontend/frontend-frame.js isFrontendFrame), never from an extension. */
   THEME_REPORT: "theme-report",
 
   // ── inspected window (docs/features/INSPECTED-WINDOW.md) ──────────────────

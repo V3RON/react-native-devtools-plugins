@@ -17,7 +17,7 @@
 //
 // So this filter is not "no data without the permission" and does not claim to
 // be: it is "no webRequest lifecycle without the permission". The complementary
-// half lives in src/chrome-shim/permission-gate.js, which refuses to register a
+// half lives in src/electron/extensions/internal/shim/permission-gate.js, which refuses to register a
 // denied extension's listeners at all. Together they mean a frame without
 // `webRequest` cannot receive an onBeforeRequest/onSendHeaders/onResponseStarted
 // detail object by any route — the matrix per grant set x payload kind is asserted
@@ -26,7 +26,7 @@
 // network-service's broadcast catch swallowed the ReferenceError on every delivery),
 // and the shim half is end-to-end in tests/extension-frame-electron.test.js.
 //
-// Pure: `grants` is the host's own per-frame verdict from src/main/ipc.js, and
+// Pure: `grants` is the host's own per-frame verdict from src/electron/extensions/internal/broker/ipc.js, and
 // nothing here knows about Electron.
 
 // Deliveries whose payload is a webRequest `details` object.

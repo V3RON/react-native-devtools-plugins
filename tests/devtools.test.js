@@ -1,4 +1,4 @@
-// chrome.devtools shim tests (src/chrome-shim/devtools.js):
+// chrome.devtools shim tests (src/electron/extensions/internal/shim/devtools.js):
 // panels.create semantics (callback vs promise style, host notification),
 // inspectedWindow.eval (both argument overloads, promise vs callback, mapping of
 // the host's CDP answer onto Chrome's [value, exceptionInfo] pair), and the
@@ -7,8 +7,8 @@
 const test = require("node:test");
 const assert = require("node:assert");
 
-const { createDevtools, tabIdFor } = require("../src/chrome-shim/devtools");
-const { createEvalInPage } = require("../src/main/inspected-window");
+const { createDevtools, tabIdFor } = require("../src/electron/extensions/internal/shim/devtools");
+const { createEvalInPage } = require("../src/electron/extensions/internal/cdp/inspected-window");
 const makeDevtools = ({ evalInPage, reloadInPage, logger } = {}) => {
   const created = [];
   const { namespace } = createDevtools({
@@ -293,7 +293,7 @@ test("inspectedWindow.tabId is a stable positive int per extension", () => {
 });
 
 test("chrome.tabs keeps its shape: events, TAB_ID_NONE, and a sendMessage that cannot lie", async () => {
-  const { createTabs } = require("../src/chrome-shim/tabs");
+  const { createTabs } = require("../src/electron/extensions/internal/shim/tabs");
   const tabs = createTabs();
   tabs.onUpdated.addListener(() => {});
   assert.strictEqual(tabs.TAB_ID_NONE, -1);

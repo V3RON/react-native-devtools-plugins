@@ -1,4 +1,4 @@
-// The Tier-2 accept-and-grant shells (src/chrome-shim/browser-shells.js) — GitHub issue #4.
+// The Tier-2 accept-and-grant shells (src/electron/extensions/internal/shim/browser-shells.js) — GitHub issue #4.
 //
 // What is under test is the boundary of an honest no-op:
 //   - nothing here may throw SYNCHRONOUSLY, because an ESM worker's module-scope statements
@@ -24,10 +24,10 @@ const {
   createCommands,
   createContextMenus,
   createSidePanel,
-} = require("../src/chrome-shim/browser-shells");
-const { createChromeNamespace } = require("../src/chrome-shim");
-const { createExtensionStorage, createMemoryBackend } = require("../src/chrome-shim/storage");
-const { requiredPermission } = require("../src/shared/permissions");
+} = require("../src/electron/extensions/internal/shim/browser-shells");
+const { createChromeNamespace } = require("../src/electron/extensions/internal/shim");
+const { createExtensionStorage, createMemoryBackend } = require("../src/electron/extensions/internal/shim/storage");
+const { requiredPermission } = require("../src/electron/extensions/internal/broker/permissions");
 
 const tick = () => new Promise((resolve) => setTimeout(resolve, 5));
 const setup = (factories = {}) => {
@@ -364,7 +364,7 @@ test("a rejected sidePanel call sets lastError for the callback caller only", as
 // ── what the page may see ───────────────────────────────────────────────────
 test("the shells' diagnostics are non-enumerable, so contextBridge cannot hand them over", () => {
   // These three namespaces are UNGATED, so the gate's `_`-filter
-  // (src/chrome-shim/permission-gate.js) is not in play: whatever is enumerable on them
+  // (src/electron/extensions/internal/shim/permission-gate.js) is not in play: whatever is enumerable on them
   // reaches the page world through the preload's exposeInMainWorld clone.
   const s = setup({ manifest: () => ({ commands: { go: {} } }) });
   for (const [namespace, name] of [

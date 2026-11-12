@@ -1,7 +1,7 @@
 // The semantics of one chrome.storage StorageArea, over a plain Map
 // (docs/features/STORAGE-AND-I18N.md). Pure: no Electron, no IPC, no persistence —
-// the host's storage service (src/main/storage-service.js) owns the Maps and the
-// frame-side shim (src/chrome-shim/storage.js) only forwards, so there is exactly one
+// the host's storage service (src/electron/extensions/internal/services/storage-service.js) owns the Maps and the
+// frame-side shim (src/electron/extensions/internal/shim/storage.js) only forwards, so there is exactly one
 // implementation of what get/set/remove/clear mean.
 //
 // Chrome rules this copies:

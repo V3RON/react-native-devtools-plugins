@@ -4,10 +4,10 @@
 // the devtools pages to the frontend (panel-host.js -> panel-bridge).
 const fs = require("fs");
 const path = require("path");
-const config = require("./config");
-const extensionServer = require("./extension-server");
-const contentScripts = require("./content-scripts");
-const { buildExtensionURL } = require("../shared/protocol");
+const { settings: config } = require("../settings");
+const extensionServer = require("../scheme/extension-server");
+const contentScripts = require("../content/content-scripts");
+const { buildExtensionURL } = require("../scheme/protocol");
 
 /** Every installed extension folder name, in filesystem order. */
 const extensionFolders = () => {
@@ -108,8 +108,8 @@ const scanBackgroundExtensions = () => {
  *
  * A third scan for the same reason the other two are separate: a content script is
  * a fourth execution context (inside the inspected app, not in this shell), with its
- * own host (`src/main/content-bridge.js`) and its own, much stricter, permission
- * story (`src/main/content-gate.js`). This scan reads MANIFESTS ONLY — no script
+ * own host (`src/electron/extensions/internal/content/content-bridge.js`) and its own, much stricter, permission
+ * story (`src/electron/extensions/internal/content/content-gate.js`). This scan reads MANIFESTS ONLY — no script
  * source is opened here, because reading third-party source is the first step
  * toward running it in the user's app.
  *

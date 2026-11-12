@@ -25,7 +25,7 @@
 // until there is a toolbar surface or an explicit "no toolbar here" decision
 // (docs/LIMITATIONS.md).
 //
-// `notifications` is permission-gated like Chrome's (src/shared/permissions.js): an
+// `notifications` is permission-gated like Chrome's (src/electron/extensions/internal/broker/permissions.js): an
 // extension that does not declare it fails the call. `action` needs no permission in
 // Chrome and stays ungated here.
 const { createEvent } = require("./event");

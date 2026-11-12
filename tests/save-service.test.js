@@ -1,4 +1,4 @@
-// The shell's one save-to-disk path (src/main/save-service.js), under bare Node.
+// The shell's one save-to-disk path (src/electron/extensions/internal/services/save-service.js), under bare Node.
 //
 // Everything that makes a download report honest lives in this file, so it is all
 // injected: the save dialog, the fetch, the filesystem, the clock, the registry
@@ -27,7 +27,7 @@ const {
   deltaFor,
   nameFromUrl,
   safeName,
-} = require("../src/main/save-service");
+} = require("../src/electron/extensions/internal/services/save-service");
 
 // ── the injected world ───────────────────────────────────────────────────────
 /** A filesystem that records instead of writing, plus a real temp dir for one test. */
@@ -461,7 +461,7 @@ test("this suite never builds the Electron-backed save service", () => {
   // with no overrides reaches for Electron's `dialog` and the user's real
   // `~/Downloads`, and a test that called it could raise a save dialog on the
   // developer's machine and write into their Downloads folder.
-  const source = fs.readFileSync(path.join(__dirname, "..", "src", "main", "save-service.js"), "utf8");
+  const source = fs.readFileSync(path.join(__dirname, "..", "src", "electron", "extensions", "internal", "services", "save-service.js"), "utf8");
   const attach = source.slice(source.indexOf("const attachSaveService"));
   assert.match(attach, /require\("electron"\)/, "the real backend exists and is Electron-backed");
   assert.match(attach, /os\.homedir\(\), "Downloads"/, "and points at the user's Downloads folder");

@@ -8,9 +8,9 @@
 // path text (see `resolveInsideExtension`). The host-side reads that continue from
 // that guard's ROOT by building their own names under it — the message bundle and the
 // localized manifest/CSS — are contained by the same rule applied inside
-// src/main/i18n-host.js, because a derived path never reaches the guard below.
+// src/electron/extensions/internal/registry/i18n-host.js, because a derived path never reaches the guard below.
 // Every response also
-// carries that extension's Content-Security-Policy (src/shared/csp.js), so an
+// carries that extension's Content-Security-Policy (src/electron/extensions/internal/scheme/csp.js), so an
 // extension page gets Chrome's `script-src 'self'` unless its own manifest
 // declares a policy.
 //
@@ -24,27 +24,27 @@ const fs = require("fs");
 const path = require("path");
 const { pathToFileURL } = require("url");
 const { protocol, net } = require("electron");
-const config = require("./config");
+const { settings: config } = require("../settings");
 const {
   EXTENSION_SCHEME,
   I18N_BUNDLE_PATH,
   parseExtensionURL,
-} = require("../shared/protocol");
-const { contentSecurityPolicyFor, unsafeReason } = require("../shared/csp");
-const i18nHost = require("./i18n-host");
+} = require("./protocol");
+const { contentSecurityPolicyFor, unsafeReason } = require("./csp");
+const i18nHost = require("../registry/i18n-host");
 
 // Acceptable extension-id folder names (id == folder name == URL hostname).
 const EXTENSION_ID_RE = /^[A-Za-z0-9._-]+$/;
 const RESERVED_IDS = new Set([".", ".."]);
 
 // Reserved inner path: the synthesized background bootstrap document
-// (src/main/background-host.js asks for it). Reserved in BOTH directions — no
+// (src/electron/extensions/internal/contexts/background-host.js asks for it). Reserved in BOTH directions — no
 // file inside an extension folder can be served under this path, and a real
 // folder named this cannot take the path either — see RESERVED_INNER_PATHS.
 const BACKGROUND_BOOTSTRAP_PATH = "__rozenite_background__";
 // Reserved the same way: the chrome.i18n message bundle of this extension, JSON, read
 // synchronously by the frame's preload before any page script runs
-// (src/main/i18n-host.js says why it travels over this protocol).
+// (src/electron/extensions/internal/registry/i18n-host.js says why it travels over this protocol).
 const RESERVED_INNER_PATHS = new Set([BACKGROUND_BOOTSTRAP_PATH, I18N_BUNDLE_PATH]);
 
 /**
@@ -55,7 +55,7 @@ const RESERVED_INNER_PATHS = new Set([BACKGROUND_BOOTSTRAP_PATH, I18N_BUNDLE_PAT
  * with `/…/extensions/a/`), and the path must not be a reserved one.
  *
  * It is the only guard for paths a request names, but NOT the only place the rule
- * below is enforced: `containmentFor` in src/main/i18n-host.js applies the same
+ * below is enforced: `containmentFor` in src/electron/extensions/internal/registry/i18n-host.js applies the same
  * realpath rule to the paths THAT file derives for itself, which never come here.
  *
  * Containment is then checked on RESOLVED paths, not on path text (finding F1,
@@ -70,7 +70,7 @@ const RESERVED_INNER_PATHS = new Set([BACKGROUND_BOOTSTRAP_PATH, I18N_BUNDLE_PAT
  * Which is also where the two containment layers agree, stated once so nobody
  * re-derives it: A SYMLINKED FOLDER IS NEVER AN EXTENSION ROOT. The discovery
  * scan reaches folders through `readdir({ withFileTypes: true })` +
- * `isDirectory()` (src/main/extensions.js), which never reports a link, and the
+ * `isDirectory()` (src/electron/extensions/internal/registry/extensions.js), which never reports a link, and the
  * server refuses a linked root for the same reason — otherwise the two would
  * disagree about what an extension is, and the disagreement would be the
  * permissive one. A link that stays INSIDE its extension folder keeps working:
@@ -125,6 +125,9 @@ const resolveInsideExtension = (extensionId, innerPath) => {
   if (!EXTENSION_ID_RE.test(extensionId) || RESERVED_IDS.has(extensionId)) {
     return null;
   }
+  if (!config.extensionsDir) {
+    return null; // no extensions folder configured: nothing is installed
+  }
   const root = path.resolve(config.extensionsDir, extensionId);
   const target = path.resolve(root, innerPath);
   if (target !== root && !target.startsWith(root + path.sep)) {
@@ -153,7 +156,7 @@ const resolveInsideExtension = (extensionId, innerPath) => {
   // different things: ENOENT on the root means this extension has no folder (the
   // scanner would not have offered it, so it is a refusal, not a missing file), while
   // ENOENT on the target means the extension is installed and the name it asked for is
-  // simply not there — the honest "missing" src/main/content-scripts.js reports.
+  // simply not there — the honest "missing" src/electron/extensions/internal/content/content-scripts.js reports.
   // One shared `try` keyed the answer on whichever threw first, so a root that
   // vanished mid-call returned the text-contained target UNVALIDATED: the fail-open
   // attached to the wrong operand.
@@ -171,7 +174,7 @@ const resolveInsideExtension = (extensionId, innerPath) => {
     // a component of it is a plain file (a dangling link is ENOENT, and a link to a
     // file with segments left is ENOTDIR, so an escape cannot hide in either). That
     // is the caller's "does not exist" case, and it has to keep reporting the
-    // contained name: src/main/content-scripts.js tells a developer a manifest path
+    // contained name: src/electron/extensions/internal/content/content-scripts.js tells a developer a manifest path
     // that names no file is MISSING, and a blanket refusal would turn that honest
     // message into a false accusation of escaping the folder.
     // Any other failure (EACCES, ELOOP, …) is a path this server cannot say anything
@@ -240,7 +243,7 @@ const registerExtensionSchemePrivileges = () => {
 //
 // `__MSG_name__` is replaced here, from the extension's `_locales`, but ONLY in the
 // fields Chrome localizes (name, short_name, description, action.default_title,
-// commands.*.description, omnibox.keyword — src/shared/i18n.js). Everything else stays
+// commands.*.description, omnibox.keyword — src/electron/extensions/internal/registry/i18n.js). Everything else stays
 // literal on purpose: a marker in host_permissions, the CSP or a script path must not
 // make what an extension may DO depend on the UI language
 // (docs/features/STORAGE-AND-I18N.md).
@@ -298,7 +301,7 @@ const bootstrapDocument = ({ script, type }) =>
 <html>
   <head>
     <meta charset="utf-8" />
-    <!-- Synthesized by the host (src/main/extension-server.js) for the extension's
+    <!-- Synthesized by the host (src/electron/extensions/internal/scheme/extension-server.js) for the extension's
          background context. No inline script: this document is served under the
          extension's own CSP, where 'self' permits src= and refuses inline. -->
     <title>Background context</title>
@@ -322,7 +325,12 @@ const queryOf = (rawURL) => {
 // bootstrap document. Guard semantics are unchanged and still asserted —
 // traversal blocked, no sibling-extension reads, reserved paths unreachable from
 // disk, unknown id 404 — and every response still carries that extension's CSP.
-const registerExtensionProtocol = ({ log = console } = {}) => {
+/**
+ * @param {object} [options]
+ * @param {object} [options.protocol] the session's `protocol` (the host's partition);
+ *        Electron's default-session `protocol` when omitted
+ */
+const registerExtensionProtocol = ({ log = console, protocol: target = protocol } = {}) => {
   const policies = new Map(); // extensionId -> {value, source}
   const policyFor = (extensionId) => {
     if (!policies.has(extensionId)) {
@@ -438,7 +446,7 @@ const registerExtensionProtocol = ({ log = console } = {}) => {
     }
   };
 
-  protocol.handle(EXTENSION_SCHEME, async (request) => {
+  target.handle(EXTENSION_SCHEME, async (request) => {
     const parsed = parseExtensionURL(String(request.url).split("?")[0].split("#")[0]);
     if (!parsed) {
       return notFound(null, `not a ${EXTENSION_SCHEME} URL`);

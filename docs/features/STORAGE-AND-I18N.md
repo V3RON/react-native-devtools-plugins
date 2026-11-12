@@ -16,15 +16,15 @@ this shell, since the state moved out of the frames and into main:
  panel frame ──┐                        ┌── STORAGE_DELIVER ──► panel frame      (onChanged)
  worker frame ─┼─ STORAGE_CALL ─► main ─┼── STORAGE_DELIVER ──► worker frame     (onChanged)
  options page ─┘   (area, op, arg)      └── STORAGE_DELIVER ──► options page     (onChanged)
-                   src/main/storage-service.js        only frames of the SAME extension
+                   src/electron/extensions/internal/services/storage-service.js        only frames of the SAME extension
 ```
 
 | Piece | Where | Role |
 | --- | --- | --- |
-| Semantics | `src/shared/storage-core.js` | one implementation of get/set/remove/clear/getBytesInUse/getKeys over a `Map`: JSON copies, absent keys omitted, `{oldValue,newValue}` only for keys that really changed, all-or-nothing quota |
-| Store + fan-out | `src/main/storage-service.js` | one Map per (extension, area); `local`/`sync` persist, `session` is memory only; applies each write once and broadcasts it |
-| Wiring | `src/main/ipc.js` (`STORAGE_CALL`, `STORAGE_DELIVER`) | identity from the registered frame (extension id read from its URL), `storage` permission re-checked from the host's own grants |
-| API shape | `src/chrome-shim/storage.js` | promise + callback, `lastError`, per-area and global `onChanged`; a thin client of the above |
+| Semantics | `src/electron/extensions/internal/services/storage-core.js` | one implementation of get/set/remove/clear/getBytesInUse/getKeys over a `Map`: JSON copies, absent keys omitted, `{oldValue,newValue}` only for keys that really changed, all-or-nothing quota |
+| Store + fan-out | `src/electron/extensions/internal/services/storage-service.js` | one Map per (extension, area); `local`/`sync` persist, `session` is memory only; applies each write once and broadcasts it |
+| Wiring | `src/electron/extensions/internal/broker/ipc.js` (`STORAGE_CALL`, `STORAGE_DELIVER`) | identity from the registered frame (extension id read from its URL), `storage` permission re-checked from the host's own grants |
+| API shape | `src/electron/extensions/internal/shim/storage.js` | promise + callback, `lastError`, per-area and global `onChanged`; a thin client of the above |
 
 Behaviors that match Chrome (all covered by `tests/storage-core.test.js`,
 `tests/storage-host.test.js`, and — across real frames and a real worker —
@@ -123,8 +123,8 @@ worker, the devtools page and the options page, and a second extension seeing no
 
 `chrome.i18n.getMessage` reads the extension's own `_locales/<locale>/messages.json` with
 Chrome's semantics, **synchronously**, from the first statement of the first script. Pure
-semantics live in `src/shared/i18n.js`, the host half in `src/main/i18n-host.js`, the frame
-half in `src/chrome-shim/i18n.js`.
+semantics live in `src/electron/extensions/internal/registry/i18n.js`, the host half in `src/electron/extensions/internal/registry/i18n-host.js`, the frame
+half in `src/electron/extensions/internal/shim/i18n.js`.
 
 | API | Status | Notes |
 | --- | --- | --- |
@@ -134,7 +134,7 @@ half in `src/chrome-shim/i18n.js`.
 | `detectLanguage(text, [cb])` | ❌ honest stub | resolves `{isReliable: false, languages: []}`, a shape Chrome itself returns for text it cannot classify. Chrome ships the CLD3 model; this shell does not, and inventing an answer from a word list would be worse than saying "undetermined" |
 | `@@extension_id`, `@@ui_locale`, `@@bidi_dir`, `@@bidi_reversed_dir`, `@@bidi_start_edge`, `@@bidi_end_edge` | ✅ | names case-insensitive; `@@ui_locale` is `pt_BR`-style (not the BCP 47 `pt-BR`); RTL languages: ar, ckb, dv, fa, he, iw, ku, ps, sd, ug, ur, yi |
 | `__MSG_name__` in `manifest.json` | ✅ | **only** the fields Chrome localizes: `name`, `short_name`, `description`, `action.default_title` (and MV2 `browser_action`/`page_action`, from Chromium's source, not a run), `commands.*.description`, `omnibox.keyword`. Everything else stays literal — verified in Chromium 141: `permissions`, `host_permissions`, the CSP (Chrome then rejects the marker), `web_accessible_resources`, `background`, `options_ui`, `devtools_page`, `homepage_url`, `author`, `version_name`. That is also a security property: a marker in `host_permissions` must not become `<all_urls>` for one UI language. The panel list's name, `chrome.runtime.getManifest()`, CSP and permission reads all see the localized manifest; `current_locale` is added like Chrome does |
-| `__MSG_name__` / `__MSG_@@bidi_dir__` in served `.css` files | ✅ | substituted when the file is served (`src/main/extension-server.js`), as Chrome does; like Chrome, the **first unknown name stops the substitution**, leaving it and every later marker in that file literal |
+| `__MSG_name__` / `__MSG_@@bidi_dir__` in served `.css` files | ✅ | substituted when the file is served (`src/electron/extensions/internal/scheme/extension-server.js`), as Chrome does; like Chrome, the **first unknown name stops the substitution**, leaving it and every later marker in that file literal |
 | `__MSG_…__` in HTML/JS | n/a | Chrome does not substitute there either |
 
 ### Message semantics (each rule measured against real Chromium)
@@ -164,7 +164,7 @@ same cases through this implementation and demands identical output.
 
 The constraint: `getMessage` is synchronous and extensions call it at the top of their first
 script ("many otherwise-simple extensions break on `getMessage` at startup"), while every IPC
-channel here is async by house rule (`src/shared/ipc.js` — no `sendSync`), and an async answer
+channel here is async by house rule (`src/electron/extensions/internal/broker/channels.js` — no `sendSync`), and an async answer
 lands after the first call. Options weighed:
 
 | Option | Verdict |
@@ -176,7 +176,7 @@ lands after the first call. Options weighed:
 
 The chosen path adds no IPC channel and no new trust: the extension protocol is already the
 one sanctioned way for a frame to read its own files. The id is the request's own hostname,
-the bundle is built in main (`src/main/i18n-host.js`) with the host's UI locale, and the
+the bundle is built in main (`src/electron/extensions/internal/registry/i18n-host.js`) with the host's UI locale, and the
 reserved inner path is unreachable as a file (asserted). Note that the bundle's own reads are
 contained a second time, inside `i18n-host.js` rather than by the protocol server's guard: the
 server decides containment for the path a *request* names, while this file derives its own

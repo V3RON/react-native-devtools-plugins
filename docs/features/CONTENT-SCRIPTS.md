@@ -4,8 +4,8 @@
 | --- | --- |
 | **Status** | 🟨 implemented behind an explicit opt-in (`DEVTOOLS_CONTENT_SCRIPTS`, default OFF) and **observed on a real device** — see [Live run](#live-run-the-definition-of-done-observed-on-a-device). The two fidelity gaps that run found are fixed and re-observed on the same device ([After the run](#after-the-run-the-two-gaps-fixed-and-re-observed)) |
 | **Tier** | 2 — but strategically the most important Tier-2 item |
-| **Blocked by** | [RUNTIME-MESSAGING.md](RUNTIME-MESSAGING.md) (real now); the CDP transport is real too ([src/main/cdp-bridge.js](../../src/main/cdp-bridge.js)) |
-| **Code** | [src/main/content-scripts.js](../../src/main/content-scripts.js) (registry), [src/main/content-gate.js](../../src/main/content-gate.js) (opt-in), [src/main/content-bridge.js](../../src/main/content-bridge.js) (runner + app-side loader) |
+| **Blocked by** | [RUNTIME-MESSAGING.md](RUNTIME-MESSAGING.md) (real now); the CDP transport is real too ([src/electron/extensions/internal/cdp/cdp-bridge.js](../../src/electron/extensions/internal/cdp/cdp-bridge.js)) |
+| **Code** | [src/electron/extensions/internal/content/content-scripts.js](../../src/electron/extensions/internal/content/content-scripts.js) (registry), [src/electron/extensions/internal/content/content-gate.js](../../src/electron/extensions/internal/content/content-gate.js) (opt-in), [src/electron/extensions/internal/content/content-bridge.js](../../src/electron/extensions/internal/content/content-bridge.js) (runner + app-side loader) |
 
 ## Why this matters
 

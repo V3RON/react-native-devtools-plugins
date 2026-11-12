@@ -1,6 +1,6 @@
 // The three Electron primitives behind InspectorFrontendHost, under bare Node:
-// openInNewTab (src/main/external-open.js), save/append/close (src/main/host-files.js
-// over the real save service) and getHostConfig (src/main/host-config.js).
+// openInNewTab (src/electron/extensions/internal/services/external-open.js), save/append/close (src/electron/shell/host-files.js
+// over the real save service) and getHostConfig (src/electron/shell/host-config.js).
 // docs/api/INSPECTOR-FRONTEND-HOST.md.
 const test = require("node:test");
 const assert = require("node:assert");
@@ -8,10 +8,10 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 
-const { openableUrl, createExternalOpener } = require("../src/main/external-open");
-const { createHostFiles } = require("../src/main/host-files");
-const { createSaveService } = require("../src/main/save-service");
-const { buildHostConfig, DEFAULT_HOST_CONFIG } = require("../src/main/host-config");
+const { openableUrl, createExternalOpener } = require("../src/electron/extensions/internal/services/external-open");
+const { createHostFiles } = require("../src/electron/shell/host-files");
+const { createSaveService } = require("../src/electron/extensions/internal/services/save-service");
+const { buildHostConfig, DEFAULT_HOST_CONFIG } = require("../src/electron/shell/host-config");
 
 // ── openInNewTab ─────────────────────────────────────────────────────────────
 test("openableUrl allows http(s) only and normalizes", () => {

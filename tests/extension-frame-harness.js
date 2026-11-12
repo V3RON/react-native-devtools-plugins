@@ -7,10 +7,10 @@
 //     [--page=host.html] [--timeout=<ms>] [--wait-for=<console substring>]
 //
 // It is the smallest possible production-like shell: the PRODUCTION scheme
-// privileges, file server and IPC handlers (src/main/extension-server.js,
-// src/main/ipc.js), the PRODUCTION webPreferences
-// (src/main/frame-security.js) and the PRODUCTION preload
-// (src/preload/index.js -> extension-frame.js), with a loopback http:// page
+// privileges, file server and IPC handlers (src/electron/extensions/internal/scheme/extension-server.js,
+// src/electron/extensions/internal/broker/ipc.js), the PRODUCTION webPreferences
+// (src/electron/extensions/internal/contexts/frame-security.js) and the PRODUCTION preload
+// (src/electron/extensions/internal/preload/index.js -> extension-frame.js), with a loopback http:// page
 // standing in for the DevTools frontend. The real frontend is Metro at
 // 127.0.0.1:8081 and is not needed to assert any of this.
 //
@@ -42,13 +42,13 @@ const TIMEOUT_MS = Number(arg("timeout") || 25000);
 // wait for a log line instead.
 const waitFor = arg("wait-for");
 const SETTLE_MS = Number(arg("settle") || 900);
-// Start the production background host too (src/main/background-host.js). Off by
+// Start the production background host too (src/electron/extensions/internal/contexts/background-host.js). Off by
 // default so every pre-existing run of this harness is unchanged.
-// Name the loopback page as THE frontend window (src/main/panel-host.js), so its
+// Name the loopback page as THE frontend window (src/electron/extensions/internal/frontend/panel-host.js), so its
 // main frame may send THEME_REPORT. Off by default: nothing else here has a frontend.
 const registerDelayMs = Number(arg("register-delay-ms") || "0");
 const frontendIsHost = ["on", "true", "1"].includes(arg("frontend-host"));
-// Run the PRODUCTION panel bridge (src/frontend/panel-bridge.js) in the loopback page, via
+// Run the PRODUCTION panel bridge (src/electron/extensions/internal/frontend/panel-bridge.js) in the loopback page, via
 // panelHost.attach — the page then plays the part of a frontend whose legacy.js is a fake
 // (tests/panel-events-electron.test.js). Implies --frontend-host.
 const panelBridge = ["on", "true", "1"].includes(arg("panel-bridge"));
@@ -65,7 +65,7 @@ const reportedExtensionId = arg("extension-id") || "probe.local";
 //                      raises a real notification on the user's machine is not a suite.
 // `fake` is the default so every pre-existing run of this harness stays unchanged.
 const notifierMode = (arg("notifier") || "fake").toLowerCase();
-// Compress the background context's alarm clock (src/main/config.js). 1 = real time.
+// Compress the background context's alarm clock (src/electron/shell/config.js). 1 = real time.
 const alarmClockScale = Number(arg("alarm-clock-scale") || "1");
 // Where a save lands, and whether the save dialog and the download's fetch are real.
 // A run that names a directory gets a save service whose dialog is auto-answered and
@@ -103,7 +103,7 @@ const observeFrameSends = ["on", "true", "1"].includes(arg("observe-frame-sends"
 // load and the file server resolves against it. Production code unchanged,
 // pointed at the caller's extensions dir.
 process.env.DEVTOOLS_EXTENSIONS_DIR = extensionsDir;
-// With a fake app to talk to, the bridge runs for real (src/main/index.js does the
+// With a fake app to talk to, the bridge runs for real (src/electron/shell/main.js does the
 // same); loopback only, so a headless run cannot open a port on the LAN and does
 // not ask macOS's firewall about it.
 process.env.DEVTOOLS_CDP_BRIDGE = fakeRNApp ? "on" : "off";
@@ -118,25 +118,25 @@ if (userDataDir) {
   app.setPath("userData", userDataDir);
 }
 
-const production = require("../src/main/extension-server");
-const { frontendPreferences, extensionFramePreferences } = require("../src/main/frame-security");
-const config = require("../src/main/config");
-const { createBackgroundHost } = require("../src/main/background-host");
-const { createInstallState } = require("../src/main/install-state");
-const notificationHost = require("../src/main/notification-host");
-const saveService = require("../src/main/save-service");
-const optionsHost = require("../src/main/options-host");
-const { NETWORK_DELIVER } = require("../src/shared/ipc");
+const { registerExtensionSchemes } = require("../src/electron/extensions");
+// The internal factory rather than the public one: it also takes the test hooks this
+// harness installs (docs/SPEC-DEBUGGER-SHELL-EXTENSIONS.md §5.9 — test-only collaborators,
+// never read from the environment). Everything else is what the shell builds.
+const { createExtensionHost } = require("../src/electron/extensions/internal/ExtensionHost");
+const { extensionFramePreferences } = require("../src/electron/extensions/internal/contexts/frame-security");
+const config = require("../src/electron/shell/config");
+const { createInstallState } = require("../src/electron/extensions/internal/registry/install-state");
+const { NETWORK_DELIVER } = require("../src/electron/extensions/internal/broker/channels");
 
-// Production privileges, once, before ready.
-production.registerExtensionSchemePrivileges();
+// Production privileges, once, before ready — the public API's own call.
+registerExtensionSchemes();
 
 /**
  * The fake inspected app, the resolved CDP ports, and the modules that consume
  * them — required here rather than at the top of this file, and this is ordering
  * with a reason, not tidiness.
  *
- * `src/main/config` reads DEVTOOLS_METRO_PORT / DEVTOOLS_CDP_PORT once, at its own
+ * `src/electron/shell/config` reads DEVTOOLS_METRO_PORT / DEVTOOLS_CDP_PORT once, at its own
  * module load, and normalises 0 to its defaults (8081 / 9223). A fake app that is
  * asked for an ephemeral port cannot have a number until its `listen` callback has
  * run, which is after that load — so the environment cannot carry it. The harness
@@ -144,7 +144,7 @@ production.registerExtensionSchemePrivileges();
  * is built from (`config.cdpBridge`), which is exactly what the environment variable
  * would have done had the ordering allowed it.
  *
- * Requiring `src/main/ipc` is what loads `src/main/cdp-bridge` and constructs that
+ * Requiring `src/electron/extensions/internal/broker/ipc` is what loads `src/electron/extensions/internal/cdp/cdp-bridge` and constructs that
  * singleton, so nothing that can reach the bridge may be required before this
  * returns. Getting that wrong is loud, not silent: the bridge would dial Metro's
  * default port, never attach to the fake app, and any suite that depends on a
@@ -170,11 +170,7 @@ const loadCdpConsumers = async () => {
     // environment (see above). 0 is what ws binds an unused port with.
     config.cdpBridge.listenPort = 0;
   }
-  return {
-    fakeApp,
-    cdpBridge: require("../src/main/cdp-bridge"),
-    registerIpcHandlers: require("../src/main/ipc").registerIpcHandlers,
-  };
+  return { fakeApp };
 };
 
 const MARKER = "__ROZENITE_PROBE__";
@@ -186,28 +182,12 @@ const write = (payload) => {
 app
   .whenReady()
   .then(async () => {
-    // First, because requiring src/main/ipc is what builds the CDP bridge singleton
-    // from config (see loadCdpConsumers). Store.initRenderer is what
-    // src/main/index.js does for electron-store's renderer adapter.
-    const { fakeApp, cdpBridge, registerIpcHandlers } = await loadCdpConsumers();
+    // First: the fake app's port has to be in `config.cdpBridge` before the extension
+    // host builds its bridge from it (see loadCdpConsumers).
+    const { fakeApp } = await loadCdpConsumers();
 
-    // The production IPC substrate, unchanged: a frame's first act is
-    // RUNTIME_GET_MANIFEST / RUNTIME_REGISTER, so without these handlers there is
-    // no extension frame to observe.
-    Store.initRenderer();
-    registerIpcHandlers();
-    if (registerDelayMs > 0) {
-      // Test-only: hold every RUNTIME_REGISTER reply back, so a page script that runs in
-      // that window provably cannot have learned anything from it (tests/theme-electron.test.js).
-      const { ipcMain } = require("electron");
-      const { RUNTIME_REGISTER } = require("../src/shared/ipc");
-      const original = ipcMain._invokeHandlers.get(RUNTIME_REGISTER);
-      ipcMain.removeHandler(RUNTIME_REGISTER);
-      ipcMain.handle(RUNTIME_REGISTER, async (event, ...rest) => {
-        await new Promise((resolve) => setTimeout(resolve, registerDelayMs));
-        return original(event, ...rest);
-      });
-    }
+    // The collaborators this run replaces, handed to the extension host below.
+    const hooks = {};
 
     // chrome.notifications: a RECORDING notifier, so this suite never raises a real
     // system notification (the rule the whole harness runs under). It behaves like
@@ -246,7 +226,7 @@ app
         return null;
       };
       fakeNotifier.hide = (id) => live.delete(id);
-      notificationHost.attachNotificationHost({
+      hooks.notifications = ({
         notifier: fakeNotifier,
         permissionLevel: () => "granted",
       });
@@ -264,7 +244,7 @@ app
     // does that.
     if (downloadsDir) {
       const bodyFor = (url) => `fake body for ${url}`;
-      saveService.attachSaveService({
+      hooks.save = ({
         showSaveDialog: async ({ defaultPath }) => {
           note({ kind: "save-dialog", defaultPath });
           // `--dialog=cancel` exercises the "user said no" path through the same code.
@@ -307,7 +287,7 @@ app
     // Either way the manifest decision, the URL from the file server's containment
     // rules, and the open-window tracking are the production host's own.
     const openedOptions = [];
-    optionsHost.attachOptionsHost({
+    hooks.options = ({
       openWindow: (url) => {
         const record = { url, extensionId: (() => {
           try {
@@ -322,7 +302,7 @@ app
             show: false,
             width: 700,
             height: 500,
-            webPreferences: extensionFramePreferences({ preloadPath: config.preloadPath }),
+            webPreferences: extensionFramePreferences(),
           });
           record.win = win;
           win.webContents.on("console-message", (...args) => {
@@ -353,23 +333,12 @@ app
       },
     });
 
-    const policyFor = production.registerExtensionProtocol();
-
-    // The bridge sits in front of the fake app the same way src/main/index.js puts
-    // it there: after the IPC handlers and the protocol. With this pair running, a
-    // frame's network data arrives over a real debugger socket from an app that
-    // keeps reporting traffic — which is what makes "the live push reached the
-    // frame" observable at all (tests/delivery-scope.test.js).
-    if (fakeApp) {
-      await cdpBridge.start();
-    }
-
-    // The production background host, in the process that will actually hold it
-    // (src/main/index.js does the same, after the protocol and the IPC handlers).
-    // The install state is the real one, in userData — which is how a second run
-    // with the same --user-data-dir sees an already-installed extension.
-    const host = withBackgroundHost
-      ? createBackgroundHost({
+    // The production background host, started by the extension host when the window is
+    // attached (after the protocol and the IPC handlers exist). The install state is the
+    // real one, in userData — which is how a second run with the same --user-data-dir
+    // sees an already-installed extension.
+    hooks.background = withBackgroundHost
+      ? ({
           installState: createInstallState(new Store({ name: "extension-installs" })),
           onWorkerConsole: (record) => note({ kind: "worker-console", ...record }),
           log: {
@@ -378,10 +347,30 @@ app
             error: (message) => note({ kind: "background-log", level: "error", message }),
           },
         })
-      : null;
+      : false;
+
+    // The extension host, built as the shell builds it (src/electron/shell/main.js):
+    // scheme handler and preload on the session, every service, the IPC broker. A
+    // frame's first act is RUNTIME_GET_MANIFEST / RUNTIME_REGISTER, so without these
+    // handlers there is no extension frame to observe.
+    const extensionHost = createExtensionHost(config.extensionHostConfig(), {}, hooks);
+    const internals = () => extensionHost._internals();
+    const policyFor = internals().policyFor;
+    if (registerDelayMs > 0) {
+      // Test-only: hold every RUNTIME_REGISTER reply back, so a page script that runs in
+      // that window provably cannot have learned anything from it (tests/theme-electron.test.js).
+      const { ipcMain } = require("electron");
+      const { RUNTIME_REGISTER } = require("../src/electron/extensions/internal/broker/channels");
+      const original = ipcMain._invokeHandlers.get(RUNTIME_REGISTER);
+      ipcMain.removeHandler(RUNTIME_REGISTER);
+      ipcMain.handle(RUNTIME_REGISTER, async (event, ...rest) => {
+        await new Promise((resolve) => setTimeout(resolve, registerDelayMs));
+        return original(event, ...rest);
+      });
+    }
 
     // Loopback "frontend": an http:// page hosting the extension frames, which is
-    // what src/frontend/panel-bridge.js does for real panels.
+    // what src/electron/extensions/internal/frontend/panel-bridge.js does for real panels.
     const server = http.createServer((request, response) => {
       const inner = request.url.split("?")[0].replace(/^\/+/, "") || "host.html";
       const root = path.resolve(hostDir);
@@ -410,7 +399,7 @@ app
       show: false,
       width: 900,
       height: 700,
-      webPreferences: frontendPreferences({ preloadPath: config.preloadPath }),
+      webPreferences: extensionHost.webPreferences({}),
     });
 
     // `--observe-frame-sends=on`: record every host->frame network push at the one
@@ -462,16 +451,23 @@ app
       };
     }
 
-    if (panelBridge || frontendIsHost) {
-      // The shared rule also checks the main frame is still on the frontend ORIGIN
-      // (src/main/frontend-frame.js), so the configured frontend URL is this loopback page's.
-      config.frontendURL = `http://127.0.0.1:${port}/`;
-      require("../src/main/frontend-frame").setFrontendContents(win.webContents);
-    }
+    // Attach the window the way the shell does. Only a run that names the loopback page
+    // as the frontend attaches it under its own URL: the frontend rule also checks the
+    // main frame is on the frontend ORIGIN (src/electron/extensions/internal/frontend/frontend-frame.js),
+    // so any other run attaches under an origin no page has, and nothing is the frontend.
+    extensionHost.attachWindow(
+      win,
+      panelBridge || frontendIsHost ? `http://127.0.0.1:${port}/` : "about:blank"
+    );
+    // The bridge sits in front of the fake app: with it running, a frame's network data
+    // arrives over a real debugger socket from an app that keeps reporting traffic —
+    // which is what makes "the live push reached the frame" observable at all
+    // (tests/delivery-scope.test.js). Its port is reported below, so wait for the bind.
+    await internals().cdpStarted;
+    const host = internals().backgroundHost;
     if (panelBridge) {
-      const { windowOpenHandler } = require("../src/main/window-open-policy");
+      const { windowOpenHandler } = require("../src/electron/shell/window-open-policy");
       win.webContents.setWindowOpenHandler(windowOpenHandler);
-      require("../src/main/panel-host").attach(win.webContents);
       app.on("browser-window-created", (_event, created) => {
         if (created !== win) {
           note({ kind: "window-created" });
@@ -540,7 +536,7 @@ app
       port,
       page: arg("page") || "host.html",
       preferences: {
-        ...frontendPreferences({ preloadPath: config.preloadPath }),
+        ...extensionHost.webPreferences({}),
         preload: "<production preload>",
       },
       // What the production file server decides to serve for this extension id —
@@ -567,7 +563,7 @@ app
       // `cdpListenPort` is null for a run that never started the bridge.
       fakeRNApp: Boolean(fakeApp),
       fakeAppPort: fakeApp ? fakeApp.port : null,
-      cdpListenPort: fakeApp ? cdpBridge.listenPort() : null,
+      cdpListenPort: fakeApp ? internals().cdp.listenPort() : null,
       frameSendsObserved: observeFrameSends,
       electronVersion: process.versions.electron,
       chromeVersion: process.versions.chrome,
@@ -580,12 +576,6 @@ app
       new Promise((resolve) => setTimeout(resolve, 8000)),
     ]);
 
-    // The background host starts AFTER the protocol and IPC handlers exist, which
-    // is the same ordering src/main/index.js uses, and — deliberately — not
-    // because the frontend window loaded: it does not depend on it.
-    if (host) {
-      host.attach();
-    }
 
     const readBack = () => {
       try {
@@ -633,7 +623,7 @@ app
     note({
       kind: "options-windows",
       windows: openedOptions.map(({ url, extensionId, loaded }) => ({ url, extensionId, loaded })),
-      tracked: optionsHost.getOptionsHost().list(),
+      tracked: internals().optionsHost.list(),
     });
     server.close();
     // Close the things this harness opened BEFORE taking the process down. A bare
@@ -647,7 +637,7 @@ app
         if (fakeApp) {
           await fakeApp.close();
         }
-        await cdpBridge.stop();
+        await extensionHost.dispose();
       })(),
       new Promise((resolve) => setTimeout(resolve, 3000)),
     ]);

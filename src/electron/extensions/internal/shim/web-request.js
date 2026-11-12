@@ -2,9 +2,9 @@
 // ResourceType vocabulary, and Chrome's URL-filter matching.
 //
 // Pure: no `window`, no `ipcRenderer`, no transport (docs/ARCHITECTURE.md
-// layering rule). `src/main/network-model.js` produces the CDP-derived record,
+// layering rule). `src/electron/extensions/internal/cdp/network-model.js` produces the CDP-derived record,
 // this module turns that record into the details object a listener receives,
-// and `src/chrome-shim/network-bridge.js` decides which listeners see it.
+// and `src/electron/extensions/internal/shim/network-bridge.js` decides which listeners see it.
 //
 // Chrome's webRequest gives a listener nine possible events; RN's backend can
 // honestly produce seven of them, because jsinspector-modern's NetworkHandler
@@ -127,7 +127,7 @@ const toRequestBody = (postData) =>
     : undefined;
 
 /**
- * A record from src/main/network-model.js -> chrome.webRequest's `details`.
+ * A record from src/electron/extensions/internal/cdp/network-model.js -> chrome.webRequest's `details`.
  * Field names follow Chrome's docs; anything the CDP event does not carry is
  * left out rather than guessed at. `timeStamp` comes from the request's own wall
  * clock. `tabId` is Chrome's own constant for "no tab" — a DevTools panel frame

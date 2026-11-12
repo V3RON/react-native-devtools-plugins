@@ -23,11 +23,11 @@
 //   thirdPartyCookieControls — all off, same reason.
 //   devToolsVeLogging: enabled:false — Chrome's visual-element telemetry; nothing
 //       collects it, so do not spend the cycles building it.
-//   isOffTheRecord: false — not an incognito window; settings persist
-//       (src/main/preferences.js).
+//   isOffTheRecord: false — not an incognito window; settings persist in the
+//       frontend's localStorage (src/electron/shell/frontend-host.js).
 //
 // A deployment can change any of it with DEVTOOLS_HOST_CONFIG (a JSON object, merged
-// one level deep over these defaults; src/main/config.js).
+// one level deep over these defaults; src/electron/shell/config.js).
 const DEFAULT_HOST_CONFIG = Object.freeze({
   aidaAvailability: {
     enabled: false,

@@ -11,7 +11,7 @@
 const EXTENSION_SCHEME = "rozenite";
 
 // Reserved inner path the host answers with the extension's chrome.i18n message bundle
-// (src/main/extension-server.js). Shared because the frame preload requests it and the
+// (src/electron/extensions/internal/scheme/extension-server.js). Shared because the frame preload requests it and the
 // server must reserve it in both directions.
 const I18N_BUNDLE_PATH = "__rozenite_i18n__";
 

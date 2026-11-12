@@ -6,13 +6,13 @@
 // The allowlist is http(s) only (and without embedded credentials): the two schemes a
 // "new tab" can honestly mean. It is
 // shared by `InspectorFrontendHost.openInNewTab` and both `chrome.tabs.create` policies
-// (src/main/tab-host.js): the `external` branch applies it directly, the `window` branch
+// (src/electron/extensions/internal/services/tab-host.js): the `external` branch applies it directly, the `window` branch
 // applies it plus its own extension scheme (see `openableWindowUrl` there for why the
 // scheme cannot join the list below — the OS launcher has no handler for it).
 //
 // The opener is injected so the rules are unit-testable under bare Node; the Electron
 // wiring at the bottom is the only part that touches `shell`, and a test seam
-// (DEVTOOLS_TEST_OPEN_LOG, src/main/config.js) records the call instead of launching
+// (DEVTOOLS_TEST_OPEN_LOG, src/electron/shell/config.js) records the call instead of launching
 // a browser.
 const ALLOWED_PROTOCOLS = ["http:", "https:"];
 
@@ -59,7 +59,7 @@ const openableUrl = (url) => {
 
 /**
  * The refusal a caller sees when `openableUrl` rejects a URL. Shared because the
- * `external` policy and the `window` policy (src/main/tab-host.js) must say the same
+ * `external` policy and the `window` policy (src/electron/extensions/internal/services/tab-host.js) must say the same
  * thing about the same URL — one refusal message, not two that can drift apart.
  *
  * It names http(s) because that is the allowlist both branches share; the `window`
@@ -92,29 +92,27 @@ const createExternalOpener = ({ openExternal }) => ({
   },
 });
 
-// ── the Electron-backed singleton ────────────────────────────────────────────
-let instance;
-
-const getExternalOpener = () => {
-  if (!instance) {
-    instance = createExternalOpener({
-      openExternal: async (url) => {
-        const { testOpenLog } = require("./config");
-        if (testOpenLog) {
-          require("fs").appendFileSync(testOpenLog, `${url}\n`);
-          return;
-        }
-        await require("electron").shell.openExternal(url);
-      },
-    });
-  }
-  return instance;
-};
+// ── the Electron-backed opener ───────────────────────────────────────────────
+/**
+ * The opener backed by `shell.openExternal`. `testOpenLog` is the test seam the
+ * embedding shell decides on (src/electron/shell/config.js): when set, the URL that
+ * WOULD have been launched is appended to that file instead.
+ */
+const electronExternalOpener = ({ testOpenLog = null } = {}) =>
+  createExternalOpener({
+    openExternal: async (url) => {
+      if (testOpenLog) {
+        require("fs").appendFileSync(testOpenLog, `${url}\n`);
+        return;
+      }
+      await require("electron").shell.openExternal(url);
+    },
+  });
 
 module.exports = {
   ALLOWED_PROTOCOLS,
   openableUrl,
   refusalMessage,
   createExternalOpener,
-  getExternalOpener,
+  electronExternalOpener,
 };

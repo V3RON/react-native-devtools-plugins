@@ -13,7 +13,7 @@
 //                    (see ./messaging); when absent, runtime messaging
 //                    degrades to the previous no-op state.
 //   loadI18nBundle — optional SYNCHRONOUS () => bundle: the extension's chrome.i18n
-//                    message bundle (src/main/i18n-host.js). Synchronous on purpose —
+//                    message bundle (src/electron/extensions/internal/registry/i18n-host.js). Synchronous on purpose —
 //                    getMessage is, and extensions call it before anything async can
 //                    have settled (see ./i18n). Absent = no catalog: messages are "".
 //   onPanelCreated — optional (docs/features/DEVTOOLS-PANELS.md): host hook
@@ -23,7 +23,7 @@
 //                    absent = honest isError.
 //   reloadInPage   — optional (same doc): host implementation behind
 //                    inspectedWindow.reload (CDP Page.reload).
-//   permissions    — optional gate from src/shared/permissions (see
+//   permissions    — optional gate from src/electron/extensions/internal/broker/permissions (see
 //                    ./permission-gate): when present, an API whose permission the
 //                    manifest does not declare fails instead of working. Absent =
 //                    ungated, which is what every unit test that predates
@@ -37,7 +37,7 @@
 //                    Absent = nothing opens, and the returned tab says so with
 //                    `openedVia: null` rather than pretending to be a browser tab.
 //   getAlarmClockScale — optional () => number: the host's clock multiplier for
-//                    chrome.alarms (src/main/config.js explains why main decides it
+//                    chrome.alarms (src/electron/shell/config.js explains why main decides it
 //                    and the frame is handed it). 1 = real time.
 //   showNotification / hideNotification / getNotificationPermissionLevel —
 //                    optional host capability behind chrome.notifications (issue #4).
@@ -56,8 +56,8 @@ const { createAlarms } = require("./alarms");
 const { createI18n } = require("./i18n");
 const { createDownloads } = require("./downloads");
 const { createCommands, createContextMenus, createSidePanel } = require("./browser-shells");
-const { declaredPermissions } = require("../shared/permissions");
-const { buildExtensionURL } = require("../shared/protocol");
+const { declaredPermissions } = require("../broker/permissions");
+const { buildExtensionURL } = require("../scheme/protocol");
 const {
   gateCallbackNamespace,
   gateWebRequest,
@@ -104,7 +104,7 @@ const createChromeNamespace = ({
    * `if (chrome.runtime.lastError)` then reads a failure as a successful `undefined`.
    *
    * Only the shims that raise their OWN failures need this (`tabs`). The shells in
-   * src/chrome-shim/browser-shells.js build the pair themselves around the cell, which is
+   * src/electron/extensions/internal/shim/browser-shells.js build the pair themselves around the cell, which is
    * why the two shapes coexist here.
    */
   const lastErrorScope = {
@@ -138,7 +138,7 @@ const createChromeNamespace = ({
   // What this extension actually holds, from the HOST's verdict when there is one
   // (RUNTIME_REGISTER read the manifest from disk) and from the manifest otherwise.
   // May be a promise while that verdict is in flight — `chrome.permissions` waits
-  // rather than guessing (src/chrome-shim/permissions-api.js).
+  // rather than guessing (src/electron/extensions/internal/shim/permissions-api.js).
   const declaredPermissionsList = () =>
     permissions && typeof permissions.declaredList === "function"
       ? permissions.declaredList()
@@ -163,7 +163,7 @@ const createChromeNamespace = ({
   // replace-on-recreate behavior, and its `scheduledTime` semantics.
   const alarms = createAlarms({ clockScale: getAlarmClockScale });
 
-  // [REAL] `chrome.downloads` over the shell's one save path (src/main/save-service.js).
+  // [REAL] `chrome.downloads` over the shell's one save path (src/electron/extensions/internal/services/save-service.js).
   // The id, the state transitions, and the byte count all come from main, which is
   // where the write actually happens; this shim only shapes the answer and routes the
   // pushes. Built before the namespace because host deliveries are routed into it.
@@ -293,13 +293,13 @@ const createChromeNamespace = ({
     },
 
     // [REAL] chrome.i18n over the extension's own `_locales`, resolved with Chrome's
-    // semantics (src/shared/i18n.js). `detectLanguage` is the one honest stub.
+    // semantics (src/electron/extensions/internal/registry/i18n.js). `detectLanguage` is the one honest stub.
     // Ungated, like Chrome's (no permission exists for it).
     i18n: createI18n({ extensionId, loadBundle: loadI18nBundle, logger }),
 
     // [ACCEPT-AND-GRANT, truthful] `chrome.permissions` reports what this extension
     // really holds and grants nothing new: capability is decided from the manifest
-    // on disk (src/main/ipc.js), so a request() that answered "true" for an
+    // on disk (src/electron/extensions/internal/broker/ipc.js), so a request() that answered "true" for an
     // undeclared permission would only move the failure to the first real call.
     // Ungated, like Chrome's — an extension may always ask what it holds.
     // docs/features/SMALL-SHIMS.md + docs/LIMITATIONS.md record the divergence.
@@ -315,7 +315,7 @@ const createChromeNamespace = ({
     // all (Altair's does). No button, no badge, no popup, and `onClicked` never fires:
     // Chrome hands that listener a Tab, and the one tab this shell has is the inspected
     // RN target, which has no toolbar button to click. Ungated, like Chrome's
-    // (src/shared/permissions.js lists `action` as needing nothing).
+    // (src/electron/extensions/internal/broker/permissions.js lists `action` as needing nothing).
     action: createAction(),
 
     // [REAL] `chrome.notifications` → Electron `Notification`, on the declared
@@ -345,7 +345,7 @@ const createChromeNamespace = ({
     }),
 
     // [REAL] `chrome.downloads` — Chrome's API over the shell's one save path
-    // (src/main/save-service.js), gated on the declared `downloads` permission like
+    // (src/electron/extensions/internal/services/save-service.js), gated on the declared `downloads` permission like
     // Chrome's. `download()` resolves the id main allocated (no id for a save that
     // did not happen), `onChanged` carries the transitions main observed, and
     // `onDeterminingFilename` keeps Chrome's contract that nothing is decided until
@@ -367,7 +367,7 @@ const createChromeNamespace = ({
     // which producer is missing. No event here fires, because firing one would run the
     // handler the extension wrote for a real click or keypress. `commands.getAll` is the one
     // method that can be genuinely real: it reads the manifest, which is a fact.
-    // Ungated, like Chrome's (src/shared/permissions.js lists all three under UNGATED_APIS).
+    // Ungated, like Chrome's (src/electron/extensions/internal/broker/permissions.js lists all three under UNGATED_APIS).
     // docs/features/SMALL-SHIMS.md + docs/LIMITATIONS.md record each divergence.
     commands: createCommands({
       getManifest,

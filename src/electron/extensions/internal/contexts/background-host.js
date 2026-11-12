@@ -10,7 +10,7 @@
 // same permission gate and the same messaging registration as any panel.
 //
 // Route NOT taken (and why): hosting the worker as another hidden iframe inside
-// the frontend, the pattern src/frontend/panel-bridge.js uses for devtools
+// the frontend, the pattern src/electron/extensions/internal/frontend/panel-bridge.js uses for devtools
 // pages. A background worker is not part of DevTools' UI lifecycle — closing
 // DevTools in Chrome does not kill it — so that route would kill every worker on
 // every frontend reload/restart, and the extension's state would go with it.
@@ -23,23 +23,20 @@
 // Nothing here evaluates page logic: the worker's own script is what runs,
 // served from its own extension origin under that extension's CSP.
 const { BrowserWindow } = require("electron");
-const config = require("./config");
-const { scanBackgroundExtensions } = require("./extensions");
-const { BACKGROUND_BOOTSTRAP_PATH, loadManifest } = require("./extension-server");
+const { scanBackgroundExtensions } = require("../registry/extensions");
+const { BACKGROUND_BOOTSTRAP_PATH, loadManifest } = require("../scheme/extension-server");
 const { extensionFramePreferences } = require("./frame-security");
-const { installReasonFor } = require("./install-state");
+const { installReasonFor } = require("../registry/install-state");
 /**
- * The default observer source. Required lazily, inside attach(): `./ipc` pulls in
- * `./preferences`, which opens an electron-store at import time — that is fine in
- * the running shell but would make this module impossible to unit-test under bare
- * Node (docs/ARCHITECTURE.md keeps the host layer testable for exactly this).
+ * The observer source when none is injected: nothing is observed. The host passes the
+ * broker's `subscribeRouterFrames` (ExtensionHost.js); a unit test passes its own.
  */
-const defaultObserveFrame = () => require("./ipc").subscribeRouterFrames;
+const noObserver = () => () => () => {};
 
 /**
  * The URL a worker window loads. `script` rides the query string but is resolved
  * through the file server's containment rules, never trusted from here: a crafted
- * path is refused with a 404 rather than served (src/main/extension-server.js).
+ * path is refused with a 404 rather than served (src/electron/extensions/internal/scheme/extension-server.js).
  */
 const backgroundURL = ({ extensionId, script, type }) =>
   `rozenite://${extensionId}/${BACKGROUND_BOOTSTRAP_PATH}?script=${encodeURIComponent(
@@ -105,22 +102,25 @@ const consoleRecord = (args) => {
  * @param {object} deps
  * @param {() => object[]} [deps.scan] background-extension discovery
  * @param {(options: object) => object} [deps.createWindow] BrowserWindow factory
- * @param {object} [deps.installState] src/main/install-state instance
+ * @param {object} [deps.installState] src/electron/extensions/internal/registry/install-state instance
  * @param {(frame: object) => (delivery) => void} [deps.observeFrame] called for each
  *        router frame the host sees; returns the listener for that frame
  * @param {(extensionId: string) => object} [deps.readManifest] the host's own read
  *        of the manifest on disk (version is what install/update compares)
  * @param {(record: {extensionId: string, level: number, message: string}) => void} [deps.onWorkerConsole]
  *        raw worker console records, bypassing the log prefixing
+ * @param {object} [deps.webPreferences] the worker window's webPreferences: the frame
+ *        policy plus the host's session (the session supplies the preload)
  * @param {object} [deps.log]
  */
 const createBackgroundHost = ({
   scan = scanBackgroundExtensions,
   createWindow = null,
   installState,
-  observeFrame = defaultObserveFrame(),
+  observeFrame = noObserver(),
   readManifest = loadManifest,
   onWorkerConsole = null,
+  webPreferences = extensionFramePreferences(),
   log = console,
 } = {}) => {
   const windows = new Map(); // extensionId -> {win, url, script, reported}
@@ -139,7 +139,7 @@ const createBackgroundHost = ({
     // The same table every other extension frame runs on (that split exists
     // for exactly this): production preload, context isolation, no Node
     // surface, webSecurity on.
-    webPreferences: extensionFramePreferences({ preloadPath: config.preloadPath }),
+    webPreferences,
     title: `Background: ${entry.name}`,
   });
 
@@ -260,7 +260,7 @@ const createBackgroundHost = ({
    * Is this BrowserWindow one of the shell's background worker windows? The
    * question exists because `window-all-closed` counts them: a hidden worker is
    * not a window the user can close, so it must not be what keeps the app alive
-   * (src/main/window.js → appApplicationWindows).
+   * (src/electron/shell/window.js → appApplicationWindows).
    */
   const isWorkerWindow = (windowId) =>
     [...windows.values()].some(({ win }) => win.id === windowId);
@@ -298,15 +298,13 @@ const createBackgroundHost = ({
   };
 };
 
-// The one process-wide host the shell owns (src/main/index.js wires it after the
-// extension protocol exists; the test harness wires its own).
-let instance;
+// Built and started by the extension host (ExtensionHost.js) once the protocol and the
+// IPC handlers exist; it belongs to the window attachment and closes with it.
 const attachBackgroundHost = (deps = {}) => {
   const host = createBackgroundHost({
-    installState: deps.installState || require("./install-state").openInstallState(),
+    installState: deps.installState || require("../registry/install-state").openInstallState(),
     ...deps,
   });
-  instance = host;
   host.attach();
   if (host.list().length > 0) {
     console.log(
@@ -320,12 +318,9 @@ const attachBackgroundHost = (deps = {}) => {
   return host;
 };
 
-const getBackgroundHost = () => instance;
-
 module.exports = {
   attachBackgroundHost,
   createBackgroundHost,
-  getBackgroundHost,
   isBackgroundFrame,
   lifecycleFor,
   backgroundURL,

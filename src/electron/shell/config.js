@@ -2,11 +2,11 @@
 // Every value is overridable via environment variables.
 const path = require("path");
 
-const repoRoot = path.join(__dirname, "..", "..");
+const repoRoot = path.join(__dirname, "..", "..", "..");
 
 // `?ws=` in the frontend URL is load-bearing: it makes the frontend build open a
 // core/sdk/WebSocketConnection to that host:port instead of using
-// InspectorFrontendHost.sendMessageToBackend. The CDP bridge (src/main/cdp-bridge.js)
+// InspectorFrontendHost.sendMessageToBackend. The CDP bridge (src/electron/extensions/internal/cdp/cdp-bridge.js)
 // listens there and owns the RN debugger session.
 const DEFAULT_FRONTEND_URL =
   "http://127.0.0.1:8081/rozenite/rn_fusebox.html?ws=localhost:9223";
@@ -24,7 +24,7 @@ const positiveNumber = (name, fallback) => {
 };
 
 // Resolved once: the CDP socket's Origin allowlist below has to name the same
-// origin the frontend window actually loads (src/main/frontend-frame.js applies
+// origin the frontend window actually loads (src/electron/extensions/internal/frontend/frontend-frame.js applies
 // the same rule to the IPC channels).
 const frontendURL = process.env.DEVTOOLS_FRONTEND_URL || DEFAULT_FRONTEND_URL;
 
@@ -60,7 +60,7 @@ const originOfFrontendURL = originOf(frontendURL);
 // opens a marketing URL, and Altair opens one from `notifications.onClicked`.
 // Launching the user's real browser because a devtools session started is a side
 // effect no extension asked this host for, and it is not reversible by them. The
-// capability is fully wired (src/main/tab-host.js) and injectable, so this is a
+// capability is fully wired (src/electron/extensions/internal/services/tab-host.js) and injectable, so this is a
 // policy switch rather than a missing feature.
 const TABS_OPEN_POLICIES = ["none", "external", "window"];
 const tabsOpenPolicy = () => {
@@ -69,7 +69,7 @@ const tabsOpenPolicy = () => {
 };
 
 // How fast an extension's `chrome.alarms` timers run, as a multiplier on the real
-// delay (src/chrome-shim/alarms.js). 1 = real time, which is what a user gets.
+// delay (src/electron/extensions/internal/shim/alarms.js). 1 = real time, which is what a user gets.
 //
 // It exists because a headless test cannot wait 30 s for Chrome's own minimum alarm
 // delay, and faking the shim's clock inside the extension context would test nothing
@@ -82,7 +82,7 @@ const alarmClockScale = () => {
 };
 
 // Which extensions may inject a content script INTO THE INSPECTED APP, and by
-// default: none of them (src/main/content-gate.js is the full reasoning).
+// default: none of them (src/electron/extensions/internal/content/content-gate.js is the full reasoning).
 //
 // The value is a comma/space-separated list of extension ids (the `extensions/<id>`
 // folder name) and/or the literal `<all_rn_targets>`:
@@ -145,7 +145,7 @@ const testSaveDialog = testSeam("DEVTOOLS_TEST_SAVE_DIALOG", (value) =>
   value === "cancel" ? value : path.resolve(value)
 );
 
-// JSON object merged over the frontend's host config (src/main/host-config.js), so a
+// JSON object merged over the frontend's host config (src/electron/shell/host-config.js), so a
 // deployment can turn a feature the shell disables back on (and a test can prove the
 // config reaches the UI). Anything that is not a JSON object is ignored.
 const hostConfigOverride = () => {
@@ -157,7 +157,25 @@ const hostConfigOverride = () => {
   }
 };
 
+/**
+ * What this shell hands the extension host (src/electron/extensions/index.js), read at
+ * call time from the values below so a harness that adjusted them is honoured. The host
+ * itself reads no environment (docs/SPEC-DEBUGGER-SHELL-EXTENSIONS.md §5.9).
+ */
+const extensionHostConfig = (values = module.exports) => ({
+  extensionsDir: values.extensionsDir,
+  uiLocale: values.uiLocale,
+  tabsOpen: values.tabsOpen,
+  contentScripts: values.contentScripts,
+  showPanel: values.showPanel,
+  alarmClockScale: values.alarmClockScale,
+  testOpenLog: values.testOpenLog,
+  testSaveDialog: values.testSaveDialog,
+  cdp: values.cdpBridge,
+});
+
 module.exports = {
+  extensionHostConfig,
   repoRoot,
 
   testOpenLog,
@@ -172,11 +190,13 @@ module.exports = {
   extensionsDir:
     process.env.DEVTOOLS_EXTENSIONS_DIR || path.join(repoRoot, "extensions"),
 
-  preloadPath: path.join(repoRoot, "src/preload/index.js"),
+  // The shell's own preload: the InspectorFrontendHost replacement (./preload.js). The
+  // extension preload is registered on the session by the extension host.
+  preloadPath: path.join(__dirname, "preload.js"),
 
   // Override for the UI locale chrome.i18n reports (`pt-BR`, `de`...). Unset = what
   // Electron resolved for the app (`--lang=`, then the OS language) — see
-  // src/main/i18n-host.js. A knob for tests and for previewing a translation.
+  // src/electron/extensions/internal/registry/i18n-host.js. A knob for tests and for previewing a translation.
   uiLocale: (process.env.DEVTOOLS_UI_LOCALE || "").trim(),
 
   // chrome.tabs.create policy: "none" | "external" | "window" (see
@@ -184,15 +204,15 @@ module.exports = {
   tabsOpen: tabsOpenPolicy(),
 
   // Which extensions may inject content scripts into the inspected app
-  // (src/main/content-gate.js). `null` means nothing is allowed — the default.
+  // (src/electron/extensions/internal/content/content-gate.js). `null` means nothing is allowed — the default.
   contentScripts: contentScriptAllowlist(),
 
   // DEVTOOLS_SHOW_PANEL=<extensionId>[/<pagePath>]: select that extension's panel tab the
   // first time it registers (the host-internal consumer of the `showPanel` dispatch
-  // event, src/main/panel-host.js). Unset = the frontend's own default tab.
+  // event, src/electron/extensions/internal/frontend/panel-host.js). Unset = the frontend's own default tab.
   showPanel: (process.env.DEVTOOLS_SHOW_PANEL || "").trim() || null,
 
-  // chrome.alarms' clock multiplier (src/chrome-shim/alarms.js), resolved to a NUMBER
+  // chrome.alarms' clock multiplier (src/electron/extensions/internal/shim/alarms.js), resolved to a NUMBER
   // on purpose: this value travels to each extension context inside its
   // RUNTIME_REGISTER reply, which crosses IPC through the structured-clone serializer.
   // A function-valued property is dropped by that serializer rather than transferred,
@@ -202,7 +222,7 @@ module.exports = {
   // unless the scale really arrives.
   alarmClockScale: alarmClockScale(),
 
-  // In-process CDP bridge (src/main/cdp-bridge.js). Metro host/port and the
+  // In-process CDP bridge (src/electron/extensions/internal/cdp/cdp-bridge.js). Metro host/port and the
   // target filters mirror the flags src/tools/rn-cdp.js takes.
   cdpBridge: {
     enabled: !bridgeDisabled,
@@ -216,7 +236,7 @@ module.exports = {
     // frontend's own origin — it is the only browser document that dials the
     // socket — and DEVTOOLS_CDP_ALLOWED_ORIGINS is the documented escape hatch
     // for serving the frontend from another host. Unset by default, so nothing
-    // beyond the frontend gets in (src/main/cdp-bridge.js `verifyClient`).
+    // beyond the frontend gets in (src/electron/extensions/internal/cdp/cdp-bridge.js `verifyClient`).
     // Entries are taken as typed; the bridge normalizes each to an origin and logs
     // what it ended up allowing, because this module is required by processes that
     // read their stdout back as data.

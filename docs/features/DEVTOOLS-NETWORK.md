@@ -4,7 +4,7 @@
 | --- | --- |
 | **Status** | 🟨 real CDP-backed model (`Network.*`), unverified on a device — `onNavigated` diverges, HAR gaps stay unknowns |
 | **Tier** | 1 |
-| **Blocked by** | RN network inspection (the CDP transport exists: [src/main/cdp-bridge.js](../../src/main/cdp-bridge.js)) |
+| **Blocked by** | RN network inspection (the CDP transport exists: [src/electron/extensions/internal/cdp/cdp-bridge.js](../../src/electron/extensions/internal/cdp/cdp-bridge.js)) |
 
 The remaining open work here is one thing: **the device run** from this checkout
 ([../ROADMAP.md](../ROADMAP.md#what-we-can-actually-implement-the-pruned-list), item 1). What
@@ -34,17 +34,17 @@ RN app ⇄ cdp-bridge ──onEvent("*")──► network-model.js ──► net
                                                                                             └─ chrome.webRequest
 ```
 
-- [src/main/network-model.js](../../src/main/network-model.js) accumulates one record per
+- [src/electron/extensions/internal/cdp/network-model.js](../../src/electron/extensions/internal/cdp/network-model.js) accumulates one record per
   CDP `requestId` from `requestWillBeSent`, `requestWillBeSentExtraInfo`,
   `responseReceived`, `dataReceived`, `loadingFinished`, `loadingFailed` — plus the
   HAR 1.2 mapping (`buildHar`, `toHarEntry`) and the lazy `Network.getResponseBody`
   lookup that honours the backend's `base64Encoded` flag.
-- [src/main/network-service.js](../../src/main/network-service.js) fans one message per
+- [src/electron/extensions/internal/cdp/network-service.js](../../src/electron/extensions/internal/cdp/network-service.js) fans one message per
   lifecycle step out to the frames that asked for network data, and serves
   `getHar` / `getStatus` / `getBody` over async IPC
   (`NETWORK_SUBSCRIBE` / `NETWORK_GET_HAR` / `NETWORK_GET_STATUS` / `NETWORK_GET_BODY` /
-  `NETWORK_DELIVER` in [src/shared/ipc.js](../../src/shared/ipc.js)).
-- [src/chrome-shim/network-bridge.js](../../src/chrome-shim/network-bridge.js) builds the
+  `NETWORK_DELIVER` in [src/electron/extensions/internal/broker/channels.js](../../src/electron/extensions/internal/broker/channels.js)).
+- [src/electron/extensions/internal/shim/network-bridge.js](../../src/electron/extensions/internal/shim/network-bridge.js) builds the
   Chrome objects: `Request` with lazy `getContent`/`getRequestContent`, `getHAR` (promise
   **and** callback), real Event objects, and webRequest's filters. The shim decides which
   Chrome event each lifecycle step becomes; it never invents a value.

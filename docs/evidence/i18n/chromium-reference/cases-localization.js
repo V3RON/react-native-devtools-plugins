@@ -1,5 +1,5 @@
 // Which manifest fields and CSS markers Chromium localizes, and how it scans __MSG_ names.
-// Recorded in results.txt; src/shared/i18n.js mirrors it.
+// Recorded in results.txt; src/electron/extensions/internal/registry/i18n.js mirrors it.
 const en = { hp: { message: "<all_urls>" }, a: { message: "A" }, b: { message: "B" }, a__b: { message: "AB2" }, hello: { message: "Hi" }, nm: { message: "Name EN" }, d: { message: "Desc" }, csp: { message: "script-src 'self' 'unsafe-eval'; object-src 'self'" }, kw: { message: "kwd" } };
 const base = { locales: { en }, calls: [] };
 module.exports = {

@@ -2,7 +2,7 @@
 // Dev-only tool: run the RN CDP relay as a *separate* process.
 //
 // The shell now runs the same relay in its own main process
-// (src/main/cdp-bridge.js), so this is no longer required for a live app: start
+// (src/electron/extensions/internal/cdp/cdp-bridge.js), so this is no longer required for a live app: start
 // the shell and it attaches to Metro by itself. Keep using it when you want the
 // relay outside the shell — with `DEVTOOLS_CDP_BRIDGE=off npm start` the shell
 // leaves the socket alone and this tool answers on the frontend's `ws` port:
@@ -23,8 +23,8 @@
 // Requires the RN app running against its Metro dev server, with a debugger
 // connection established (dev build; Dev Menu -> "Connect to debugger" if the
 // app doesn't show up in /json/list).
-const { createCdpBridge } = require("../main/cdp-bridge");
-const config = require("../main/config");
+const { createCdpBridge } = require("../electron/extensions/internal/cdp/cdp-bridge");
+const config = require("../electron/shell/config");
 
 const arg = (name, fallback) => {
   const i = process.argv.indexOf(`--${name}`);
@@ -37,7 +37,7 @@ const bridge = createCdpBridge({
   listenPort: Number(arg("listen-port", 9223)),
   // A CLI has to be able to say where it listens: `--listen-host` for the person
   // typing, DEVTOOLS_CDP_HOST for anyone who already had the shell's env set (the
-  // same value src/main/config.js resolves). Unset both and the bridge's loopback
+  // same value src/electron/shell/config.js resolves). Unset both and the bridge's loopback
   // default applies — this tool does not widen the F3 rule on its own.
   listenHost: arg("listen-host", config.cdpBridge.listenHost),
   // The frontend really does dial this process, so it has to be let in: the same

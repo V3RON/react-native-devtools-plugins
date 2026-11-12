@@ -10,7 +10,7 @@
 //   store-b.local   panel.html (writer of its own values) + bg.js (worker)
 //
 // Every context prints `STORE:<who>:<what>`; the host page embeds the panels as iframes
-// (what src/frontend/panel-bridge.js does for real panels).
+// (what src/electron/extensions/internal/frontend/panel-bridge.js does for real panels).
 const test = require("node:test");
 const assert = require("node:assert");
 const fs = require("node:fs");

@@ -79,13 +79,4 @@ const createRequestQueue = ({ deliver }) => {
   };
 };
 
-let instance;
-const getRequestQueue = () => {
-  if (!instance) {
-    const { getContextRegistry } = require("./context-registry");
-    instance = createRequestQueue({ deliver: (frameKey, delivery) => getContextRegistry().deliver(frameKey, delivery) });
-  }
-  return instance;
-};
-
-module.exports = { createRequestQueue, getRequestQueue };
+module.exports = { createRequestQueue };

@@ -1,8 +1,8 @@
 // End-to-end network model: a fake RN app that speaks CDP over a real WebSocket,
-// the real CDP bridge (src/main/cdp-bridge.js), the real main-process service
-// (src/main/network-service.js) and the real frame-side shim
-// (src/chrome-shim/network-bridge.js) wired together the way
-// src/main/ipc.js + src/preload/extension-frame.js wire them in the app.
+// the real CDP bridge (src/electron/extensions/internal/cdp/cdp-bridge.js), the real main-process service
+// (src/electron/extensions/internal/cdp/network-service.js) and the real frame-side shim
+// (src/electron/extensions/internal/shim/network-bridge.js) wired together the way
+// src/electron/extensions/internal/broker/ipc.js + src/electron/extensions/internal/preload/extension-frame.js wire them in the app.
 //
 // This is the layer unit tests cannot prove: the notifications travel a real
 // socket, the `Network.enable` an extension's first listener triggers is a real
@@ -14,11 +14,11 @@ const assert = require("node:assert");
 const http = require("http");
 const WebSocket = require("ws");
 
-const { createCdpBridge, HOST_ID_BASE } = require("../src/main/cdp-bridge");
-const { createNetworkService } = require("../src/main/network-service");
-const { createNetworkBridge } = require("../src/chrome-shim/network-bridge");
-const { createChromeNamespace } = require("../src/chrome-shim");
-const { createMemoryBackend, createExtensionStorage } = require("../src/chrome-shim/storage");
+const { createCdpBridge, HOST_ID_BASE } = require("../src/electron/extensions/internal/cdp/cdp-bridge");
+const { createNetworkService } = require("../src/electron/extensions/internal/cdp/network-service");
+const { createNetworkBridge } = require("../src/electron/extensions/internal/shim/network-bridge");
+const { createChromeNamespace } = require("../src/electron/extensions/internal/shim");
+const { createMemoryBackend, createExtensionStorage } = require("../src/electron/extensions/internal/shim/storage");
 const { cdpRequestLifecycle } = require("./fake-rn-app");
 
 // ── fake RN app: /json/list plus one /inspector/debug socket ─────────────────
@@ -158,7 +158,7 @@ const settle = (ms = 20) => new Promise((resolve) => setTimeout(resolve, ms));
  * The whole stack with one extension frame attached: fake app ⇄ real bridge ⇄
  * real service ⇄ real shim. `hostToFrame` is the push channel
  * (webContents.send in the app) and the four `invoke*` functions are the
- * ipcMain.handle calls of src/main/ipc.js.
+ * ipcMain.handle calls of src/electron/extensions/internal/broker/ipc.js.
  */
 async function makeWorld(t, { app = () => {} } = {}) {
   const fakeApp = createFakeApp();

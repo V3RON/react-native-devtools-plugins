@@ -1,14 +1,14 @@
-// `chrome.permissions` (src/chrome-shim/permissions-api.js) — the accept-and-grant
+// `chrome.permissions` (src/electron/extensions/internal/shim/permissions-api.js) — the accept-and-grant
 // shim that is not allowed to lie: it reports the HOST's verdict about what the
 // manifest declares, and `request` grants nothing new (docs/features/SMALL-SHIMS.md).
 // Run: npm test
 const test = require("node:test");
 const assert = require("node:assert");
 
-const { createPermissionsApi } = require("../src/chrome-shim/permissions-api");
-const { createChromeNamespace } = require("../src/chrome-shim");
-const { createMemoryBackend, createExtensionStorage } = require("../src/chrome-shim/storage");
-const { createGrantGate, requiredPermission } = require("../src/shared/permissions");
+const { createPermissionsApi } = require("../src/electron/extensions/internal/shim/permissions-api");
+const { createChromeNamespace } = require("../src/electron/extensions/internal/shim");
+const { createMemoryBackend, createExtensionStorage } = require("../src/electron/extensions/internal/shim/storage");
+const { createGrantGate, requiredPermission } = require("../src/electron/extensions/internal/broker/permissions");
 
 const makeApi = (declared) => {
   const warnings = [];

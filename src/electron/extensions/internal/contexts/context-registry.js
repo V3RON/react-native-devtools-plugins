@@ -3,13 +3,13 @@
 //
 // Several host behaviors produce an event that belongs to ONE extension context and
 // nowhere else: a system notification the user clicked, a download that finished, an
-// alarm that fired. The router in src/main/message-router.js is the wrong tool — it
+// alarm that fired. The router in src/electron/extensions/internal/contexts/message-router.js is the wrong tool — it
 // fans out to every frame of an extension, and Chrome does not do that: it delivers
 // to the context that registered the listener. So the host keeps its own registry of
 // the `send` closure each registered frame was handed, and delivers by that key.
 //
 // Why this is not a privileged channel: the `send` closure is the SAME one
-// src/main/ipc.js builds for the message router and the background host's lifecycle
+// src/electron/extensions/internal/broker/ipc.js builds for the message router and the background host's lifecycle
 // push (`frame.send(...)` — the only form measured to actually land on Electron 38,
 // see the note in ipc.js). A frame cannot register, look up, or address another
 // frame's key: keys are built from the host's own `WebContents` id + `frameId`, and
@@ -57,7 +57,7 @@ const createContextRegistry = () => {
    * Push one delivery to EVERY reachable context (host state every context shares,
    * e.g. the DevTools theme).
    * @returns {number} how many contexts `send` returned from without throwing. Not an
-   *          acknowledgement: production senders (makeFrameSender in src/main/ipc.js)
+   *          acknowledgement: production senders (makeFrameSender in src/electron/extensions/internal/broker/ipc.js)
    *          swallow a detached frame themselves and retire it, so the count can
    *          include a context that was already going away.
    */
@@ -87,14 +87,4 @@ const createContextRegistry = () => {
   };
 };
 
-// The process-wide registry src/main/ipc.js feeds (created lazily so requiring this
-// module from a test pulls in nothing).
-let instance;
-const getContextRegistry = () => {
-  if (!instance) {
-    instance = createContextRegistry();
-  }
-  return instance;
-};
-
-module.exports = { createContextRegistry, getContextRegistry };
+module.exports = { createContextRegistry };

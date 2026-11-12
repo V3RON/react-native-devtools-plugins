@@ -14,7 +14,7 @@
 //   3. THE EVENT GOES TO THE CONTEXT THAT CREATED IT. Chrome delivers to the context
 //      that made the notification, not to every frame of the extension, so the owner's
 //      frame key is recorded at show time and the delivery goes back through
-//      src/main/context-registry.js — the same `send` closure the message router and
+//      src/electron/extensions/internal/contexts/context-registry.js — the same `send` closure the message router and
 //      the background host's lifecycle push use.
 //
 // `notifier` is injected: a test records what would have been shown and hands back
@@ -143,8 +143,7 @@ const createNotificationHost = ({
   };
 };
 
-// ── the Electron-backed singleton, created lazily by src/main/ipc.js ─────────
-let instance;
+// ── the Electron-backed host the extension host builds (ExtensionHost.js) ────────
 
 /**
  * Electron's `Notification`, wrapped in the injected-notifier shape.
@@ -200,11 +199,11 @@ const electronNotifier = () => {
   return show;
 };
 
-const attachNotificationHost = (deps = {}) => {
-  const { getContextRegistry } = require("./context-registry");
-  instance = createNotificationHost({
+/** @param {object} deps `contextRegistry` is required; the rest override Electron's. */
+const attachNotificationHost = ({ contextRegistry, ...deps } = {}) =>
+  createNotificationHost({
     notifier: electronNotifier(),
-    contextRegistry: getContextRegistry(),
+    contextRegistry,
     permissionLevel: () => {
       const { Notification } = require("electron");
       try {
@@ -215,14 +214,9 @@ const attachNotificationHost = (deps = {}) => {
     },
     ...deps,
   });
-  return instance;
-};
-
-const getNotificationHost = () => instance || attachNotificationHost();
 
 module.exports = {
   createNotificationHost,
   electronNotifier,
   attachNotificationHost,
-  getNotificationHost,
 };

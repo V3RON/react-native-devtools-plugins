@@ -51,7 +51,7 @@ const createMessageRouter = () => {
    *
    * Read-only and purely additive: it changes nothing about how a send settles, and the
    * frame-side `RUNTIME_SEND_MESSAGE` path does not consult it (see the note on
-   * `sendMessage`). The app-side sender in src/main/content-bridge.js does.
+   * `sendMessage`). The app-side sender in src/electron/extensions/internal/content/content-bridge.js does.
    */
   const hasPeers = (fromKey) => peersOf(fromKey).length > 0;
 
@@ -78,8 +78,8 @@ const createMessageRouter = () => {
    * Known divergence from Chrome, left alone on purpose: when `fromKey` has no peers at
    * all, this resolves `undefined` — the value Chrome's `runtime.sendMessage` reserves for
    * "a listener answered nothing", while Chrome itself rejects with NO_RECEIVER here. It
-   * stays as it is because layers above (`RUNTIME_SEND_MESSAGE` in src/main/ipc.js and the
-   * frame-side client in src/chrome-shim/messaging.js) and their tests are written against
+   * stays as it is because layers above (`RUNTIME_SEND_MESSAGE` in src/electron/extensions/internal/broker/ipc.js and the
+   * frame-side client in src/electron/extensions/internal/shim/messaging.js) and their tests are written against
    * `Promise.resolve(undefined)`, and a sender that needs to know the difference can ask
    * `hasPeers` BEFORE sending, which is exactly what the app-side sender does. Fixing the
    * fidelity means changing that layer, not this contract.
@@ -166,7 +166,7 @@ const createMessageRouter = () => {
 
   /**
    * The host-side marker for "this context was reached and nothing was listening in it"
-   * (src/main/content-bridge.js turns the app loader's `nr: true` into this). It travels
+   * (src/electron/extensions/internal/content/content-bridge.js turns the app loader's `nr: true` into this). It travels
    * as a response because that is the only channel a leg has, but it is NOT one: such a
    * leg settles, so no sender waits for an answer nobody will send, yet it never becomes
    * the value a peer resolves with, and it must not let a fan-out finish early while other
@@ -188,7 +188,15 @@ const createMessageRouter = () => {
       settle(requestId);
       return;
     }
-    req.lastResponse = response;
+    // An empty answer never replaces a real one. A context whose listeners all returned
+    // without responding concludes its leg with `undefined` (shim/messaging.js), and in
+    // Chrome such a context does not answer at all: when it settles AFTER a context that
+    // did respond, keeping the last value would hand the sender `undefined` for a message
+    // that was answered. Which leg lands last is timing (a worker that is already up
+    // answers before a panel that is still booting), so this is a race, not an edge case.
+    if (response !== undefined || req.lastResponse === undefined) {
+      req.lastResponse = response;
+    }
     // A real answer outranks a silent leg that arrived first: something did listen.
     req.silent = undefined;
     settle(requestId);

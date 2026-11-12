@@ -68,7 +68,7 @@ const runHarness = ({
   // a recorder, so the suite never raises a real system notification), "deny" (a
   // recorder that fails every show, to observe the no-id path) or "real".
   notifier = "fake",
-  // Compress the background context's alarm clock (see src/main/config.js).
+  // Compress the background context's alarm clock (see src/electron/shell/config.js).
   alarmClockScale = 1,
   // Where a save lands. Set, and the harness installs the production save service
   // with its dialog and fetch answered by the harness and its filesystem REAL, pointed
@@ -122,8 +122,9 @@ const runHarness = ({
       ...process.env,
       // ELECTRON_RUN_AS_NODE has to go, even though it may be in the parent's env: it
       // turns the Electron binary into plain Node, and a plain Node cannot run this
-      // app's main — every harness dies in electron-store's ESM preparse at
-      // src/main/preferences.js:6, long before the protocol is registered. Under
+      // app's main — `require("electron")` is then a path string, not the API, so
+      // every harness dies on its first Electron call, long before the protocol is
+      // registered. Under
       // `npm start` from a shell the variable is absent; a test run that merely
       // INHERITS it (a developer's own shell, or a CI job that exports it for other
       // Node suites) must not silently become a dozen failing suites, so the runner
