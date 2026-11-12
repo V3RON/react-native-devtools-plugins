@@ -504,8 +504,8 @@ Accepted, as today (`SECURITY-PLATFORM.md` §7):
 - **Real-Electron suites (10).** These boot a production-shaped shell headless and observe it as
   NDJSON. Upstream has no Electron tests, so the suites **stay in this repository as a conformance
   suite**. Its harness drives the fork's package through `createExtensionHost` plus the internal
-  test options. Today it patches module singletons and private Electron internals
-  (`ipcMain._invokeHandlers`, `WebFrameMain.prototype.send`); injection replaces both. Q7 asks
+  test options. It still patches one private Electron internal (`WebFrameMain.prototype.send`,
+  to observe deliveries); the `ipcMain._invokeHandlers` patch is gone (a `wrapHandler` hook). Q7 asks
   whether RN CI can run them headless.
 - **The Electron 38 → 43 delta** has to be measured again before PR 1:
   - the `console-message` signature;
@@ -593,11 +593,27 @@ check on a device (Q1): dev-middleware forces `supportsMultipleDebuggers: false`
 `enableStandaloneFuseboxShell` experiment is on (`Device.js`), so a dev server without it gets no
 host session.
 
+**Bundled sandboxed preload: done** for this repository. `scripts/bundle-preload.js` (no
+dependencies) bundles each preload's CommonJS graph into one file, and refuses to build if a
+module needs anything a sandboxed preload's `require` lacks: anything but `electron`, `events`,
+`timers` and `url`, or a non-literal `require`. Two bundles go to gitignored `dist/` folders:
+the extension preload, registered on the session, and the development shell's own preload. The
+frame policy is `sandbox: true` for every frame class. Measured on Electron 38 by the existing
+Electron suites:
+- the session preload still runs in `rozenite://` iframes with `nodeIntegrationInSubFrames`;
+- `process.isMainFrame` is available sandboxed;
+- `chrome.*`, messaging, ports, workers and options pages all work.
+
+The shell rebuilds the bundles at startup when unpackaged, and so do the test harnesses. The
+host refuses to start without its bundle. Upstream still needs Q2's answer for its own build.
+
+The test harness no longer patches `ipcMain._invokeHandlers`: the broker takes a `wrapHandler`
+hook instead.
+
 **Still to do before PR 1**, all behaviour changes:
 - launch flags instead of env (§5.9);
 - document-relative frontend imports;
 - the upstream partition;
-- a bundled sandboxed preload (Q2).
 
 ## 11. Open questions
 
@@ -631,7 +647,7 @@ The in-place restructure (§10) already moved the code. Paths are under `src/ele
 | `internal/cdp/` | `main/cdp-bridge.js` (→ new `cdp-session.js`), `inspected-window.js`, `network-model.js`, `network-service.js` | the host's own session (§5.6); consumers re-arm on `onAttach` |
 | `internal/content/` | `main/content-bridge.js`, `content-scripts.js`, `content-gate.js` | |
 | `internal/services/` | `main/storage-service.js`, `shared/storage-core.js`, `notification-host.js`, `save-service.js`, `tab-host.js`, `tab-send.js`, `external-open.js` | electron-store → adapter; node-fetch → `session.fetch` (to do) |
-| `internal/preload/` | `preload/index.js`, `extension-frame.js`, + new `frontend-bridge.js` | registered on the session; to be bundled (Q2) |
+| `internal/preload/` | `preload/index.js`, `extension-frame.js`, + new `frontend-bridge.js` | registered on the session as one sandboxed bundle (`dist/extension-preload.js`, `scripts/bundle-preload.js`) |
 | `internal/shim/` | `chrome-shim/*` | unchanged, already pure |
 | `shell/` (**not ported**) | `main/index.js`, `window.js`, `config.js`, `ipc.js` (shell channels), `context-menu.js`, `host-config.js`, `host-files.js`, `dispatch.js`, `window-open-policy.js`, `preload/frontend-host.js`, `shared/ipc.js` (shell channels) | the InspectorFrontendHost replacement (§4) and this repo's env config |
 | `shell/frontend-target.js` (**not ported**) | new | picks the target from Metro's `/json/list` and builds the `ws=`; upstream gets it from `--frontendUrl` |

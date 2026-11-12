@@ -7,6 +7,13 @@
 // InspectorFrontendHost replacement, its IPC, the env config — is this repository's
 // development shell and is not ported.
 const { app, BrowserWindow } = require("electron");
+
+// Both preloads run sandboxed, so each is one bundled file. A development run rebuilds
+// them from source first; `npm run build:preload` does the same by hand.
+if (!app.isPackaged) {
+  require("../../../scripts/bundle-preload").buildPreloads();
+}
+
 const { registerExtensionSchemes, createExtensionHost } = require("../extensions");
 const config = require("./config");
 const { createWindow } = require("./window");

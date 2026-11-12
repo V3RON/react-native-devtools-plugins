@@ -22,6 +22,9 @@
 // load failures, preload errors and the final frame tree. One NDJSON line per
 // observation on --out, then exit.
 const { app, BrowserWindow } = require("electron");
+// The production preloads are bundles (sandboxed renderers); build them from the
+// current sources before anything loads one.
+require("../scripts/bundle-preload").buildPreloads();
 const { default: Store } = require("electron-store");
 const fs = require("fs");
 const path = require("path");

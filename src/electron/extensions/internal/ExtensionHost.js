@@ -18,6 +18,7 @@
 //
 // Background contexts belong to the attachment: `detach()` (the window's `closed`)
 // closes their hidden windows, so the embedder's `window-all-closed` still fires.
+const fs = require("fs");
 const { session: electronSession } = require("electron");
 const { configure, reset, settings } = require("./settings");
 const { EXTENSION_SCHEME } = require("./scheme/protocol");
@@ -84,6 +85,12 @@ const createExtensionHost = (config = {}, options = {}, hooks = {}) => {
   );
 
   // ── scheme + preload, on the host's session ───────────────────────────────
+  if (!fs.existsSync(EXTENSION_PRELOAD_PATH)) {
+    // A sandboxed preload is one bundled file; without it no extension frame gets chrome.*.
+    throw new Error(
+      `the extension preload is not built (${EXTENSION_PRELOAD_PATH}): run npm run build:preload`
+    );
+  }
   const policyFor = registerExtensionProtocol({ protocol: ses.protocol });
   ses.registerPreloadScript({ type: "frame", id: PRELOAD_ID, filePath: EXTENSION_PRELOAD_PATH });
 

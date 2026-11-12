@@ -200,7 +200,7 @@ test("attach() starts one hidden window per declared background", () => {
   // the session, so every window on it (this one included) runs it.
   assert.strictEqual(host.windows[0].options.webPreferences.preload, undefined, "the session supplies the preload");
   assert.strictEqual(host.windows[0].options.webPreferences.nodeIntegrationInSubFrames, true);
-  assert.strictEqual(host.windows[0].options.webPreferences.sandbox, false);
+  assert.strictEqual(host.windows[0].options.webPreferences.sandbox, true, "a sandboxed renderer");
   assert.match(host.windows[0].url, /^rozenite:\/\/graphql\/__rozenite_background__/);
   assert.match(host.windows[1].url, /type=module$/, "altair's worker is an ES module");
 });

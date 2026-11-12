@@ -270,6 +270,7 @@ test("every frame class runs with the narrowed baseline", () => {
   assert.equal(prefs.contextIsolation, true);
   assert.equal(prefs.webSecurity, true, "same-origin checks on");
   assert.equal(prefs.allowRunningInsecureContent, false);
+  assert.equal(prefs.sandbox, true, "a sandboxed renderer: the preloads are bundles");
   // Load-bearing, and measured rather than assumed: with this false the preload
   // does not run in a rozenite:// iframe at all, so no chrome.* exists.
   assert.equal(prefs.nodeIntegrationInSubFrames, true);

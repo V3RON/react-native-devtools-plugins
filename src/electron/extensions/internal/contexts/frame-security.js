@@ -26,10 +26,10 @@
 //       page world; it is already false and stays false (asserted by
 //       tests/extension-frame-electron.test.js).
 //   sandbox: true                     → the preload can no longer require ANY
-//       file: not `fs`/`path` (Electron's sandboxed built-in subset) and not
-//       `./chrome-shim` (local files are unreachable). Turning it on means
-//       shipping one bundled, self-contained preload file, i.e. a build step
-//       this repo deliberately does not have. Still open — LIMITATIONS.md.
+//       file: not `fs`/`path` (Electron's sandboxed built-in subset) and not a
+//       sibling module (local files are unreachable). So the preload is shipped
+//       as one bundled, self-contained file (scripts/bundle-preload.js), and the
+//       renderer runs sandboxed: on, for every frame class.
 //   webSecurity: true                 → `rozenite://` iframes DO still load
 //       inside the `http://127.0.0.1:8081` frontend: the scheme is registered
 //       standard + secure + `bypassCSP`, which is what the embedding needs.
@@ -48,14 +48,16 @@
 const path = require("path");
 
 /**
- * The extension preload (./preload/index.js). It is not a `webPreferences.preload`:
+ * The extension preload: ../preload/index.js and everything it requires, bundled into one
+ * file by scripts/bundle-preload.js, because a sandboxed preload cannot require siblings.
+ * It is not a `webPreferences.preload`:
  * the host registers it on the session (`session.registerPreloadScript`, ExtensionHost.js),
  * so the embedding shell keeps its own preload for the frontend and every window on the
  * session (the frontend, background and options windows) runs this one too. Measured
  * with Electron 38: a session-registered frame preload runs in the frontend's main
  * frame, in its `rozenite://` iframes and in a hidden window's main frame.
  */
-const EXTENSION_PRELOAD_PATH = path.join(__dirname, "..", "preload", "index.js");
+const EXTENSION_PRELOAD_PATH = path.join(__dirname, "..", "preload", "dist", "extension-preload.js");
 
 /** The policy every frame in an extension-hosting window runs under. */
 const FRAME_POLICY = Object.freeze({
@@ -76,9 +78,9 @@ const FRAME_POLICY = Object.freeze({
   // webSecurity on is not the same as per-extension origin isolation.
   webSecurity: true,
   allowRunningInsecureContent: false,
-  // Still false: a sandboxed preload cannot require this repo's preload modules
-  // (no bundler). See the header and docs/LIMITATIONS.md.
-  sandbox: false,
+  // The renderer is sandboxed: the preload is one bundled file that requires only
+  // `electron` (scripts/bundle-preload.js), so nothing it needs is lost.
+  sandbox: true,
 });
 
 /** The shared baseline for every frame in an extension-hosting window. */

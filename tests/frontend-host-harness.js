@@ -9,6 +9,9 @@
 // The caller sets DEVTOOLS_TEST_OPEN_LOG / DEVTOOLS_TEST_SAVE_DIALOG, so nothing opens a
 // browser or raises a dialog.
 const { app, BrowserWindow } = require("electron");
+// The production preloads are bundles (sandboxed renderers); build them from the
+// current sources before anything loads one.
+require("../scripts/bundle-preload").buildPreloads();
 const fs = require("fs");
 const http = require("http");
 

@@ -22,10 +22,14 @@ const ALLOWED_SHELL_REACHES = new Map([
   ["ipc.js", ["../extensions/internal/services/external-open"]],
 ]);
 
+// Sources only: `dist/` holds the generated preload bundles (scripts/bundle-preload.js).
 const walk = (dir) =>
   fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
     const full = path.join(dir, entry.name);
-    return entry.isDirectory() ? walk(full) : entry.name.endsWith(".js") ? [full] : [];
+    if (entry.isDirectory()) {
+      return entry.name === "dist" ? [] : walk(full);
+    }
+    return entry.name.endsWith(".js") ? [full] : [];
   });
 
 /** Code without comments, so a path named in prose is not an import. */

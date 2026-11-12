@@ -166,9 +166,10 @@ module.exports = {
   extensionsDir:
     process.env.DEVTOOLS_EXTENSIONS_DIR || path.join(repoRoot, "extensions"),
 
-  // The shell's own preload: the InspectorFrontendHost replacement (./preload.js). The
+  // The shell's own preload: the InspectorFrontendHost replacement (./preload.js), bundled
+  // into one file (scripts/bundle-preload.js) because the window is sandboxed. The
   // extension preload is registered on the session by the extension host.
-  preloadPath: path.join(__dirname, "preload.js"),
+  preloadPath: path.join(__dirname, "dist", "preload.js"),
 
   // Override for the UI locale chrome.i18n reports (`pt-BR`, `de`...). Unset = what
   // Electron resolved for the app (`--lang=`, then the OS language) — see

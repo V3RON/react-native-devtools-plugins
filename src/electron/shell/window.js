@@ -16,8 +16,8 @@ let currentWindow = null;
 
 /**
  * The shell's own preferences: its preload. The extension host lays the frame policy
- * over them (contextIsolation, no Node in page worlds, and sandbox off — which this
- * preload also needs, because it `require`s its siblings).
+ * over them (contextIsolation, no Node in page worlds, a sandboxed renderer — which is
+ * why this preload is loaded as a bundle, scripts/bundle-preload.js).
  */
 const shellPreferences = () => ({ preload: config.preloadPath });
 

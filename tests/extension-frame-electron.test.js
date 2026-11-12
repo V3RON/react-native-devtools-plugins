@@ -222,7 +222,7 @@ suite(
       contextIsolation: true,
       webSecurity: true,
       allowRunningInsecureContent: false,
-      sandbox: false,
+      sandbox: true,
     });
 
     // ── no Node / Electron surface in the page world ───────────────────────
