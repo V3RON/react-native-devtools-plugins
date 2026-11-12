@@ -3,7 +3,7 @@
 // (docs/features/DEVTOOLS-NETWORK.md, docs/features/WEBREQUEST.md).
 //
 // Composition:
-//   cdp-bridge (the RN debugger session)
+//   cdp-session (the host's own RN debugger session)
 //        │ onEvent("*")  ── Network.* ──►  network-model (this file's model)
 //        │ sendCommand("Network.enable" / "Network.getResponseBody")
 //        ▼
@@ -59,15 +59,17 @@ const serializeRecord = (record) => ({
  * @param {object} deps
  * @param {(method: string, params?: object, opts?: object) => Promise<object>} deps.sendCommand
  * @param {(method: string, handler: Function) => Function} deps.onEvent
- * @param {() => {attached: boolean, target: object|null, clients: number}} [deps.bridgeStatus]
- *        the bridge's status, used for the onNavigated payload (RN has no URLs)
+ * @param {(handler: Function) => Function} [deps.onAttach] the session's new-session hook
+ * @param {() => {attached: boolean, target: object|null}} [deps.sessionStatus]
+ *        the session's status, used for the onNavigated payload (RN has no URLs)
  * @param {(level: string, message: string) => void} [deps.log]
  * @param {number} [deps.maxEntries]
  */
 const createNetworkService = ({
   sendCommand,
   onEvent,
-  bridgeStatus = () => ({ attached: false, target: null, clients: 0 }),
+  onAttach = null,
+  sessionStatus = () => ({ attached: false, target: null }),
   log = () => {},
   maxEntries,
 } = {}) => {
@@ -110,6 +112,7 @@ const createNetworkService = ({
   const model = createNetworkModel({
     sendCommand,
     onEvent,
+    onAttach,
     onObserved,
     // Availability flipped (domain came up, or the backend refused it): push the
     // new status so a frame's "no network data" note is never a guess and never
@@ -131,7 +134,7 @@ const createNetworkService = ({
   // divergence is documented in docs/features/DEVTOOLS-NETWORK.md.
   let lastNavigatedKey = null;
   const maybeNavigate = (cause) => {
-    const target = bridgeStatus().target || {};
+    const target = sessionStatus().target || {};
     const key = `${cause}:${target.id || target.title || lastDocumentURL || ""}`;
     if (key === lastNavigatedKey) {
       return;
@@ -178,7 +181,7 @@ const createNetworkService = ({
         } catch {
           /* frame already gone */
         }
-        const target = bridgeStatus().target;
+        const target = sessionStatus().target;
         if (target) {
           maybeNavigate("attach");
         }

@@ -4,48 +4,23 @@ const path = require("path");
 
 const repoRoot = path.join(__dirname, "..", "..", "..");
 
-// `?ws=` in the frontend URL is load-bearing: it makes the frontend build open a
-// core/sdk/WebSocketConnection to that host:port instead of using
-// InspectorFrontendHost.sendMessageToBackend. The CDP bridge (src/electron/extensions/internal/cdp/cdp-bridge.js)
-// listens there and owns the RN debugger session.
-const DEFAULT_FRONTEND_URL =
-  "http://127.0.0.1:8081/rozenite/rn_fusebox.html?ws=localhost:9223";
-
-// "off"/"disabled"/"false"/"0" -> the shell does not touch the CDP socket at all;
-// an external relay (npm run rn-cdp, npm run fake-cdp) must answer on the
-// frontend's `ws` host:port instead.
-const bridgeDisabled = ["off", "disabled", "false", "0"].includes(
-  (process.env.DEVTOOLS_CDP_BRIDGE || "").toLowerCase()
-);
-
 const positiveNumber = (name, fallback) => {
   const value = Number(process.env[name]);
   return Number.isFinite(value) && value > 0 ? value : fallback;
 };
 
-// Resolved once: the CDP socket's Origin allowlist below has to name the same
-// origin the frontend window actually loads (src/electron/extensions/internal/frontend/frontend-frame.js applies
-// the same rule to the IPC channels).
-const frontendURL = process.env.DEVTOOLS_FRONTEND_URL || DEFAULT_FRONTEND_URL;
+// Metro, where the frontend page is served and the app's targets are listed.
+const metroHost = process.env.DEVTOOLS_METRO_HOST || "127.0.0.1";
+const metroPort = positiveNumber("DEVTOOLS_METRO_PORT", 8081);
 
-// The origin of the frontend URL, or null when it is not a valid absolute URL or
-// carries an opaque origin (`file:`/`data:`, whose `URL.origin` is the literal
-// string "null"). In both cases there is no origin to put on the allowlist, and an
-// Origin-bearing frontend is then refused for the plain reason that no origin is
-// allowlisted — it does NOT fall through to the Origin-less-loopback rule, because
-// a browser always sends an `Origin` and a page cannot send an empty one. A
-// frontend like that has to name its origin in DEVTOOLS_CDP_ALLOWED_ORIGINS (an
-// opaque origin has none to name, so in practice it cannot use this socket at all).
-// Failing closed here is the point (docs/SECURITY-PLATFORM.md F3).
-const originOf = (url) => {
-  try {
-    const { origin } = new URL(String(url));
-    return origin === "null" ? null : origin;
-  } catch {
-    return null;
-  }
-};
-const originOfFrontendURL = originOf(frontendURL);
+// The frontend page. Without a `?ws=` the shell picks the target itself from Metro's
+// /json/list (./frontend-target.js) and adds it; a DEVTOOLS_FRONTEND_URL that names one
+// is loaded as it is. Either way the frontend dials Metro's inspector proxy directly,
+// and the extension host opens its own second session to the same target
+// (src/electron/extensions/internal/cdp/cdp-session.js). The origin is what both the
+// shell's and the host's frontend guards check, and it is the same with or without ws=.
+const frontendURL =
+  process.env.DEVTOOLS_FRONTEND_URL || `http://${metroHost}:${metroPort}/rozenite/rn_fusebox.html`;
 
 // What `chrome.tabs.create({url})` is allowed to do with the URL
 // (docs/features/SMALL-SHIMS.md, docs/LIMITATIONS.md).
@@ -171,7 +146,7 @@ const extensionHostConfig = (values = module.exports) => ({
   alarmClockScale: values.alarmClockScale,
   testOpenLog: values.testOpenLog,
   testSaveDialog: values.testSaveDialog,
-  cdp: values.cdpBridge,
+  cdp: values.cdp,
 });
 
 module.exports = {
@@ -182,8 +157,9 @@ module.exports = {
   testSaveDialog,
   hostConfigOverride: hostConfigOverride(),
 
-  // The RN DevTools frontend, served by the patched fork's Metro dev server.
-  // See docs/ARCHITECTURE.md — this coupling is a known limitation.
+  // The RN DevTools frontend page, served by the patched fork's Metro dev server
+  // (docs/ARCHITECTURE.md: this coupling is a known limitation). main.js resolves the
+  // target into it before loading (./frontend-target.js).
   frontendURL,
 
   // Root folder holding the unpacked extensions ("installed extensions").
@@ -222,33 +198,17 @@ module.exports = {
   // unless the scale really arrives.
   alarmClockScale: alarmClockScale(),
 
-  // In-process CDP bridge (src/electron/extensions/internal/cdp/cdp-bridge.js). Metro host/port and the
-  // target filters mirror the flags src/tools/rn-cdp.js takes.
-  cdpBridge: {
-    enabled: !bridgeDisabled,
-    metroHost: process.env.DEVTOOLS_METRO_HOST || "127.0.0.1",
-    metroPort: positiveNumber("DEVTOOLS_METRO_PORT", 8081),
-    // Unset = the bridge's own loopback default (docs/SECURITY-PLATFORM.md F3).
-    // Set it (e.g. to a LAN address) only for remote-device development.
-    listenHost: process.env.DEVTOOLS_CDP_HOST || undefined,
-    listenPort: positiveNumber("DEVTOOLS_CDP_PORT", 9223),
-    // Which browser origins may open the CDP socket. Always includes the
-    // frontend's own origin — it is the only browser document that dials the
-    // socket — and DEVTOOLS_CDP_ALLOWED_ORIGINS is the documented escape hatch
-    // for serving the frontend from another host. Unset by default, so nothing
-    // beyond the frontend gets in (src/electron/extensions/internal/cdp/cdp-bridge.js `verifyClient`).
-    // Entries are taken as typed; the bridge normalizes each to an origin and logs
-    // what it ended up allowing, because this module is required by processes that
-    // read their stdout back as data.
-    allowedOrigins: [
-      originOfFrontendURL,
-      ...(process.env.DEVTOOLS_CDP_ALLOWED_ORIGINS || "")
-        .split(/[,\s]+/)
-        .map((origin) => origin.trim())
-        .filter((origin) => origin !== ""),
-    ].filter((origin) => origin !== null),
+  // Which target ./frontend-target.js picks when the frontend URL names none: the first
+  // React Native target on Metro whose app / device contains these substrings.
+  target: {
+    metroHost,
+    metroPort,
     app: process.env.DEVTOOLS_APP_FILTER || null,
     device: process.env.DEVTOOLS_DEVICE_FILTER || null,
+  },
+
+  // The extension host's own CDP session (src/electron/extensions/internal/cdp/cdp-session.js).
+  cdp: {
     // chrome.devtools.inspectedWindow.eval waits at most this long for the app.
     requestTimeoutMs: positiveNumber("DEVTOOLS_CDP_REQUEST_TIMEOUT_MS", 10000),
   },

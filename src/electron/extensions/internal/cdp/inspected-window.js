@@ -1,4 +1,4 @@
-// chrome.devtools.inspectedWindow.eval on top of the CDP bridge
+// chrome.devtools.inspectedWindow.eval on top of the host's CDP session
 // (docs/features/INSPECTED-WINDOW.md).
 //
 // Chrome's contract (developer.chrome.com/docs/extensions/reference/api/devtools/
@@ -10,8 +10,8 @@
 // The returned value must be JSON-compliant; anything else comes back undefined.
 //
 // RN mapping: CDP `Runtime.evaluate` against the app's JS context. The command
-// rides the *frontend's* debugger session through src/electron/extensions/internal/cdp/cdp-bridge.js, so the
-// app never learns that a second debugger exists.
+// rides the host's own debugger session (./cdp-session.js), a second session next to
+// the frontend's, so nothing it does lands in the frontend's models.
 //
 // `mapEvaluation` is pure (CDP reply -> Chrome pair) and exported for tests;
 // `createEvalInPage` binds it to a command sender, and `evalInPage` is the

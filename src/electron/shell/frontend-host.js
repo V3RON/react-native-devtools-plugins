@@ -13,10 +13,10 @@
 // consumer (contextMenuItemSelected / contextMenuCleared).
 //
 // `sendMessageToBackend` is a no-op **by design, not by omission**: the frontend
-// URL carries `?ws=` (src/electron/shell/config.js), so the frontend build selects
-// core/sdk/WebSocketConnection and talks to the CDP socket itself — MainConnection,
-// the only user of sendMessageToBackend, is never constructed. The host reaches
-// the backend on that socket instead (src/electron/extensions/internal/cdp/cdp-bridge.js).
+// URL carries `?ws=` (src/electron/shell/frontend-target.js), so the frontend build selects
+// core/sdk/WebSocketConnection and talks to Metro's inspector proxy itself — MainConnection,
+// the only user of sendMessageToBackend, is never constructed. The extension host opens
+// its own second session to the same target (src/electron/extensions/internal/cdp/cdp-session.js).
 
 const { contextBridge, ipcRenderer, webFrame } = require("electron");
 const {
@@ -250,9 +250,9 @@ const InspectorFrontendHost = {
   // builds a core/sdk/WebSocketConnection to that host:port and never calls
   // through here — verified against the bundle we load: the connection factory
   // (core/sdk/sdk.js) selects WebSocketConnection whenever the `ws`/`wss` query
-  // param is present. The host therefore reaches the RN backend on that socket:
-  // src/electron/extensions/internal/cdp/cdp-bridge.js owns it and answers host commands by message id
-  // (docs/features/INSPECTED-WINDOW.md, docs/features/DISPATCH-CHANNEL.md).
+  // param is present. The extension host reaches the RN backend on its own session
+  // instead (src/electron/extensions/internal/cdp/cdp-session.js,
+  // docs/features/INSPECTED-WINDOW.md).
   sendMessageToBackend(message) {},
 
   // ── [STUB] device discovery (sleeper feature for an RN host) ─────────────

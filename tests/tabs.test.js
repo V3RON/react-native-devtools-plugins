@@ -443,7 +443,7 @@ test("chrome.tabs is gated on the declared tabs permission, promise and callback
 test("targetInfo answers about:blank-equivalent when the bridge is not attached, without asking", async () => {
   let asked = 0;
   const host = createTabHost({
-    bridgeStatus: () => ({ attached: false, target: null }),
+    sessionStatus: () => ({ attached: false, target: null }),
     sendCommand: async () => {
       asked++;
       return { targetInfo: { url: "ws://should-not-be-asked", title: "nope" } };
@@ -455,7 +455,7 @@ test("targetInfo answers about:blank-equivalent when the bridge is not attached,
 
 test("targetInfo prefers Target.getTargetInfo and falls back to the bridge's own target record", async () => {
   const fromCommand = createTabHost({
-    bridgeStatus: () => ({ attached: true, target: { url: "ws://from/list" } }),
+    sessionStatus: () => ({ attached: true, target: { url: "ws://from/list" } }),
     sendCommand: async (method) => {
       assert.equal(method, "Target.getTargetInfo");
       return { targetInfo: { url: "ws://from/cdp", title: "App" } };
@@ -468,7 +468,7 @@ test("targetInfo prefers Target.getTargetInfo and falls back to the bridge's own
   });
 
   const refused = createTabHost({
-    bridgeStatus: () => ({ attached: true, target: { url: "ws://from/list", title: "Listed" } }),
+    sessionStatus: () => ({ attached: true, target: { url: "ws://from/list", title: "Listed" } }),
     sendCommand: async () => {
       throw new Error("CDP method not available");
     },
@@ -479,7 +479,7 @@ test("targetInfo prefers Target.getTargetInfo and falls back to the bridge's own
     title: "Listed",
   });
 
-  const silent = createTabHost({ bridgeStatus: () => ({ attached: true, target: null }) });
+  const silent = createTabHost({ sessionStatus: () => ({ attached: true, target: null }) });
   assert.deepStrictEqual(await silent.targetInfo(), { attached: true, url: "", title: "" });
 });
 

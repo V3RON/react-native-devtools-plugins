@@ -29,7 +29,7 @@ const registerExtensionSchemes = () => {
 /**
  * @param {object} config extensionsDir (required to host anything), contentScripts,
  *        and the development options listed in ./internal/settings.js; `cdp` holds the
- *        CDP bridge's options
+ *        host's CDP session options (requestTimeoutMs, …)
  * @param {{partition?: string}} [options] the session the embedder's windows use
  * @returns {{
  *   webPreferences: (base: object) => object,

@@ -11,20 +11,23 @@ const { registerExtensionSchemes, createExtensionHost } = require("../extensions
 const config = require("./config");
 const { createWindow } = require("./window");
 const { registerShellIpcHandlers } = require("./ipc");
+const { resolveFrontendURL } = require("./frontend-target");
 
 // Before 'ready': the scheme's privileges can only be registered now.
 registerExtensionSchemes();
 
 let extensionHost = null;
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   registerShellIpcHandlers();
   extensionHost = createExtensionHost(config.extensionHostConfig());
-  createWindow(extensionHost);
+  // Upstream gets this from dev-middleware's --frontendUrl; this shell picks the target.
+  const frontendURL = await resolveFrontendURL(config);
+  createWindow(extensionHost, frontendURL);
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
-      createWindow(extensionHost);
+      createWindow(extensionHost, frontendURL);
     }
   });
 });

@@ -476,7 +476,7 @@ const createBroker = ({
 
     // ── inspected window (docs/features/INSPECTED-WINDOW.md) ──────────────────
     // chrome.devtools.inspectedWindow.eval -> CDP Runtime.evaluate over the
-    // frontend's debugger session (src/electron/extensions/internal/cdp/cdp-bridge.js). Same frame gate as
+    // host's own debugger session (src/electron/extensions/internal/cdp/cdp-session.js). Same frame gate as
     // panels.create: an unregistered frame gets a visible isError, never a
     // fabricated value.
     handle(DEVTOOLS_EVAL, (event, { expression, options } = {}) => {

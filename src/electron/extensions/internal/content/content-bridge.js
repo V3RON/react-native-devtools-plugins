@@ -4,7 +4,7 @@
 //
 // ── what this file is, honestly ─────────────────────────────────────────────────
 // It generates a JS source string (the "loader") and evaluates `loader + script` into
-// the app through the CDP bridge's `Runtime.evaluate`. That string is CONTENT-SCRIPT
+// the app through the host's CDP session's `Runtime.evaluate`. That string is CONTENT-SCRIPT
 // CODE RUNNING IN THE APP — which is exactly what a content script is, and exactly
 // what the issue's definition of done asks for.
 //
@@ -44,7 +44,7 @@
 // lets a manifest or a message choose it.
 //
 // ── lifecycle, and the two things it will not do ───────────────────────────────
-// Inject on attach, re-inject when the bridge sees the app's execution context created
+// Inject on attach, re-inject when the session sees the app's execution context created
 // or cleared (Hermes has no `Page.addScriptToEvaluateOnNewDocument`, so re-injection is
 // the host's job). Injecting while detached is never queued as a lie: the entry is
 // marked pending and the report says so in words. When the session dies, the app's seat
@@ -687,6 +687,7 @@ const appFrameURL = (extensionId) => `rozenite://${extensionId}/`;
 const createContentBridge = ({
   sendCommand,
   onEvent,
+  onAttach = null,
   isAttached = () => false,
   scan = () => [],
   readManifest = () => ({}),
@@ -743,6 +744,7 @@ const createContentBridge = ({
   const bindingGeneration = () => (isAttached() ? `epoch:${contextEpoch}` : null);
   let unsubscribe = null;
   let unsubscribeBinding = null;
+  let unsubscribeAttach = null;
   let reinjectTimer = null;
   let sweeper = null;
   let disposed = false;
@@ -1372,6 +1374,12 @@ const createContentBridge = ({
         scheduleReinject("Runtime.executionContextsCleared");
       }
     });
+    // A new debugger session (cdp-session.js) has none of the old one's bindings: the
+    // app keeps its injected loader (the in-app dedup skips the scripts themselves), but
+    // `Runtime.addBinding` is per session, so the injection pass runs again to re-add it.
+    unsubscribeAttach = onAttach
+      ? onAttach(() => scheduleReinject("a new debugger session attached"))
+      : null;
     return refresh();
   };
 
@@ -1379,6 +1387,7 @@ const createContentBridge = ({
     disposed = true;
     if (unsubscribe) unsubscribe();
     if (unsubscribeBinding) unsubscribeBinding();
+    if (unsubscribeAttach) unsubscribeAttach();
     if (reinjectTimer) clearTimer(reinjectTimer);
     if (sweeper) clearTimer(sweeper);
     for (const extensionId of [...state.keys()]) {
@@ -1463,14 +1472,14 @@ const createContentBridge = ({
 // ── the host's content bridge ────────────────────────────────────────────────
 // Same shape as `attachBackgroundHost` / `attachTabHost`: built by the extension host
 // (ExtensionHost.js) with the real collaborators, then started. Nothing here reaches a
-// frame directly — the bridge talks to the app over the CDP bridge and to every other
+// frame directly — the bridge talks to the app over the host's CDP session and to every other
 // context through the ONE message router it is handed.
 
 /**
  * @param {object} deps overrides for tests; each default is the real collaborator.
  * @param {object} deps.router the message router the app's seat joins (required: an
  *        injected script with no way to reach a panel is a silently broken one)
- * @param {object} deps.cdp the host's debugger session (sendCommand/onEvent/status)
+ * @param {object} deps.cdp the host's debugger session (sendCommand/onEvent/onAttach/status)
  * @param {() => object} deps.targetInfo the inspected target, as chrome.tabs reports it
  * @param {string|null} [deps.allowlist] the content-script opt-in (host settings)
  */
@@ -1482,6 +1491,7 @@ const attachContentBridge = ({ router, cdp, targetInfo, allowlist = null, log = 
   const bridge = createContentBridge({
     sendCommand: cdp.sendCommand,
     onEvent: cdp.onEvent,
+    onAttach: cdp.onAttach,
     isAttached: () => Boolean(cdp.status().attached),
     scan: scanContentScriptExtensions,
     readManifest: loadManifest,

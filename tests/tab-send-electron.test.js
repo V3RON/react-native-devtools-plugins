@@ -12,7 +12,7 @@
 //      turned into an injection question.
 //
 // What this is NOT: no content script is injected in any of these runs. The harness runs
-// with no CDP session (`DEVTOOLS_CDP_BRIDGE=off`), and the gate is default-closed, so the
+// with no CDP session (its frontend URL names no ws=), and the gate is default-closed, so the
 // honest outcome is a refusal. Claiming a delivery here would require a device, and
 // docs/features/CONTENT-SCRIPTS.md records that as still outstanding rather than faking it.
 const test = require("node:test");

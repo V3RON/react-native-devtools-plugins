@@ -66,10 +66,10 @@ module.exports = {
 
   // ── inspected window (docs/features/INSPECTED-WINDOW.md) ──────────────────
   /** ({expression, options}) from an extension frame -> Chrome's
-   *  [value, exceptionInfo] pair, answered from the CDP bridge. */
+   *  [value, exceptionInfo] pair, answered over the host's CDP session. */
   DEVTOOLS_EVAL: "devtools-eval",
 
-  /** ({options}) from an extension frame -> CDP Page.reload on the bridge. */
+  /** ({options}) from an extension frame -> CDP Page.reload on the host's session. */
   DEVTOOLS_RELOAD: "devtools-reload",
 
   // ── devtools.network / webRequest (docs/features/DEVTOOLS-NETWORK.md) ──────

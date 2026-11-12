@@ -2,7 +2,7 @@
 //
 // Two capabilities the frame's shim cannot do for itself:
 //
-//   targetInfo() — the inspected target's real url + title. The CDP bridge is the
+//   targetInfo() — the inspected target's real url + title. The host's CDP session is the
 //     only thing in this process that knows what is being inspected, so it is the
 //     only honest source. When no session is attached the answer is
 //     `{attached: false}` and the SHIM decides the fallback (Chrome's
@@ -17,7 +17,7 @@
 //     automatic external open would launch the user's browser because a devtools
 //     session started.
 //
-// Everything is injected — `bridgeStatus`, `sendCommand`, `openExternal`,
+// Everything is injected — `sessionStatus`, `sendCommand`, `openExternal`,
 // `openWindow` — so the rules are unit-testable under bare Node and a test can
 // observe an open without launching anything (docs/ARCHITECTURE.md's layering).
 //
@@ -103,7 +103,7 @@ const openableWindowUrl = (url) => {
 
 /**
  * @param {object} deps
- * @param {() => {attached: boolean, target: object|null}} deps.bridgeStatus
+ * @param {() => {attached: boolean, target: object|null}} deps.sessionStatus
  * @param {(method: string, params?: object) => Promise<object>} [deps.sendCommand]
  * @param {(url: string) => (void|Promise<void>)} [deps.openExternal] shell.openExternal
  * @param {(url: string) => (number|null)} [deps.openWindow] opens an internal window,
@@ -113,7 +113,7 @@ const openableWindowUrl = (url) => {
  * @param {"none"|"external"|"window"} [deps.policy]
  */
 const createTabHost = ({
-  bridgeStatus = () => ({ attached: false, target: null }),
+  sessionStatus = () => ({ attached: false, target: null }),
   sendCommand = null,
   openExternal = null,
   openWindow = null,
@@ -124,13 +124,13 @@ const createTabHost = ({
    * What the host knows about the inspected target.
    *
    * `Target.getTargetInfo` is the direct question, and it is asked only while a
-   * session is open (the bridge rejects the command otherwise). Its failure is not
-   * fatal: the bridge's own target record — the entry from the CDP target list it
+   * session is open (the session rejects the command otherwise). Its failure is not
+   * fatal: the session's own target record — the entry from the CDP target list it
    * attached to, i.e. real data it already has — answers the same question. When
    * neither has a url, `attached` says so and the shim falls back.
    */
   const targetInfo = async () => {
-    const status = bridgeStatus() || {};
+    const status = sessionStatus() || {};
     if (!status.attached) {
       return { ...NO_TARGET };
     }
@@ -236,7 +236,7 @@ const createTabHost = ({
  */
 const attachTabHost = ({ cdp, externalOpener, policy = "none", ...deps } = {}) =>
   createTabHost({
-    bridgeStatus: cdp.status,
+    sessionStatus: cdp.status,
     sendCommand: cdp.sendCommand,
     policy,
     // http(s) only — the allowlist InspectorFrontendHost.openInNewTab uses

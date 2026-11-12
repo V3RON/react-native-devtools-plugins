@@ -1,9 +1,9 @@
 // The host-side network model: the shell's own view of the RN app's traffic,
-// built from the CDP `Network.*` notifications the bridge already relays
+// built from the CDP `Network.*` notifications the host's session receives
 // (docs/features/DEVTOOLS-NETWORK.md, docs/features/WEBREQUEST.md).
 //
-// Why it lives in main: the CDP session belongs to the bridge
-// (src/electron/extensions/internal/cdp/cdp-bridge.js) and every extension frame needs the same answers, so
+// Why it lives in main: the CDP session belongs to the host
+// (src/electron/extensions/internal/cdp/cdp-session.js) and every extension frame needs the same answers, so
 // the model accumulates once here and is consumed by `chrome.devtools.network`
 // and `chrome.webRequest` over one async IPC channel. The frontend's `Events`
 // postMessage broadcast and the hardcoded fake body are gone: nothing in this
@@ -136,9 +136,11 @@ const byteLength = (text) => {
 /**
  * @param {object} deps
  * @param {(method: string, params?: object, opts?: object) => Promise<object>} deps.sendCommand
- *        CDP command sender — the bridge's `sendCommand` in production.
+ *        CDP command sender — the session's `sendCommand` in production.
  * @param {(method: string, handler: Function) => Function} deps.onEvent
- *        CDP notification subscription — the bridge's `onEvent`.
+ *        CDP notification subscription — the session's `onEvent`.
+ * @param {(handler: Function) => Function} [deps.onAttach] called after every new
+ *        debugger session attached (cdp-session.js): its Network.enable is not ours yet
  * @param {(record: object, event: string, extra: object) => void} [deps.onObserved]
  *        Called for every lifecycle step of a tracked request; the IPC service
  *        turns it into devtools.network / webRequest deliveries.
@@ -153,6 +155,7 @@ const byteLength = (text) => {
 const createNetworkModel = ({
   sendCommand,
   onEvent,
+  onAttach = null,
   onObserved = () => {},
   onStatusChange = () => {},
   log = () => {},
@@ -463,11 +466,12 @@ const createNetworkModel = ({
     return attempt;
   };
 
-  // The bridge owns the socket, so a fresh debugger session shows up here as the
-  // notifications it already fans out — no extra hook in that layer:
+  // Our enable can go away under us, and each time it is re-armed:
   //   Runtime.executionContextsCleared  app reload / instance swap (HostAgent.cpp:417)
   //   Network.disable                   host count changed (HostAgent.cpp:435)
-  // Our enable went with the old session, so re-arm it.
+  //   onAttach                          a new debugger session (cdp-session.js): the
+  //                                     domain is enabled per session, and the old
+  //                                     session's enable went with its socket
   const sessionMayHaveChurned = (method) =>
     method === "Runtime.executionContextsCleared" || method === "Network.disable";
 
@@ -486,6 +490,15 @@ const createNetworkModel = ({
     }
   };
 
+  let offAttach = null;
+  const onSessionAttached = () => {
+    if (observing) {
+      enableState = "idle";
+      enableInFlight = null;
+      requestEnable();
+    }
+  };
+
   /** Start accumulating: subscribe to Network.* and ask the backend for them. */
   const start = () => {
     if (observing) {
@@ -493,6 +506,7 @@ const createNetworkModel = ({
     }
     observing = true;
     offEvents = onEvent("*", onAnyEvent);
+    offAttach = onAttach ? onAttach(onSessionAttached) : null;
     requestEnable();
   };
 
@@ -501,6 +515,10 @@ const createNetworkModel = ({
     if (offEvents) {
       offEvents();
       offEvents = null;
+    }
+    if (offAttach) {
+      offAttach();
+      offAttach = null;
     }
   };
 

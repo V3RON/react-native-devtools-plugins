@@ -9,12 +9,12 @@
 //                                               registry settings, storage, install
 //                                               state, router, context registry, request
 //                                               queue, notifications, save, options,
-//                                               theme, the CDP bridge and the broker's
-//                                               handler table
+//                                               theme, the CDP session object and the
+//                                               broker's handler table
 //   attachment  attachWindow() (one in v1)      frontend guard, the broker's channels on
 //                                               the window's WebContents, panel host, the
-//                                               CDP bridge's listener, content bridge,
-//                                               background contexts
+//                                               CDP session to the frontend URL's ws=,
+//                                               content bridge, background contexts
 //
 // Background contexts belong to the attachment: `detach()` (the window's `closed`)
 // closes their hidden windows, so the embedder's `window-all-closed` still fires.
@@ -37,7 +37,7 @@ const {
   extensionFramePreferences,
   frontendPreferences,
 } = require("./contexts/frame-security");
-const { createCdpBridge } = require("./cdp/cdp-bridge");
+const { createCdpSession } = require("./cdp/cdp-session");
 const { createEvalInPage, createReloadInPage } = require("./cdp/inspected-window");
 const { createNetworkService } = require("./cdp/network-service");
 const { attachContentBridge } = require("./content/content-bridge");
@@ -60,7 +60,7 @@ const prefixed = (prefix) => (level, message) => {
  * @param {object} config what the embedder decided (src/electron/shell/config.js maps
  *        the DEVTOOLS_* environment): extensionsDir, contentScripts, uiLocale, tabsOpen,
  *        showPanel, alarmClockScale, testOpenLog, testSaveDialog, and `cdp` — the
- *        options of the CDP bridge (cdp/cdp-bridge.js)
+ *        options of the host's CDP session (cdp/cdp-session.js: requestTimeoutMs, …)
  * @param {object} [options]
  * @param {string} [options.partition] the session the embedder's windows use; the
  *        default session when omitted
@@ -68,7 +68,9 @@ const prefixed = (prefix) => (level, message) => {
  *        `notifications`, `save`, `options`, `tabs` override the matching service's
  *        Electron-backed defaults; `background` is the background host's options, or
  *        `false` for no background contexts; `installState` replaces the store;
- *        `wrapIpcHandler(channel, handler)` decorates each broker handler
+ *        `wrapIpcHandler(channel, handler)` decorates each broker handler;
+ *        `cdpFrontendUrl` is the URL the CDP session reads ws= and the dev server from,
+ *        when the test's frontend page is not served by the dev server it debugs
  * @returns {{webPreferences: function, attachWindow: function, dispose: function}}
  */
 const createExtensionHost = (config = {}, options = {}, hooks = {}) => {
@@ -120,13 +122,14 @@ const createExtensionHost = (config = {}, options = {}, hooks = {}) => {
   });
   const externalOpener = electronExternalOpener({ testOpenLog: settings.testOpenLog });
 
-  // The debugger session extensions use (today: the in-process bridge in front of the
-  // frontend's socket, cdp/cdp-bridge.js). Nothing binds until attachWindow starts it.
-  const cdp = createCdpBridge({ ...(config.cdp || {}), log: prefixed("cdp-bridge") });
+  // The host's own debugger session, next to the frontend's (cdp/cdp-session.js). The
+  // consumers below subscribe once; attachWindow opens it for that window's ws=.
+  const cdp = createCdpSession({ ...(config.cdp || {}), log: prefixed("cdp") });
   const networkService = createNetworkService({
     sendCommand: cdp.sendCommand,
     onEvent: cdp.onEvent,
-    bridgeStatus: cdp.status,
+    onAttach: cdp.onAttach,
+    sessionStatus: cdp.status,
     log: prefixed("network"),
   });
   const tabHost = attachTabHost({ cdp, externalOpener, policy: settings.tabsOpen, ...(hooks.tabs || {}) });
@@ -188,7 +191,7 @@ const createExtensionHost = (config = {}, options = {}, hooks = {}) => {
     if (backgroundHost) {
       backgroundHost.closeAll();
     }
-    await cdp.stop().catch(() => {});
+    await cdp.close();
   };
 
   const attachWindow = (win, frontendUrl) => {
@@ -204,15 +207,10 @@ const createExtensionHost = (config = {}, options = {}, hooks = {}) => {
     panelHost.attach(contents);
     attachment = { win, panelHost, detachIpc, backgroundHost: null, cdpStarted: null };
 
-    // Owns the RN debugger session before the frontend dials its `?ws=` socket.
-    // Rejected only when the port is taken; the shell still runs and
-    // inspectedWindow.eval reports isError instead of guessing.
-    attachment.cdpStarted = cdp.start().catch((error) => {
-      console.error(
-        `[cdp-bridge] listen failed: ${error.message} — stop the external relay ` +
-          "(npm run rn-cdp / fake-cdp) or set DEVTOOLS_CDP_BRIDGE=off"
-      );
-    });
+    // The host's own session to the target in the frontend URL's ws=. It never blocks
+    // the window: until (or unless) it attaches, CDP-backed APIs fail with the reason
+    // (status().reason), and panels, storage and messaging work without it.
+    attachment.cdpStarted = cdp.open(hooks.cdpFrontendUrl || frontendUrl);
 
     // Background contexts after the protocol and the IPC handlers their preload calls.
     if (hooks.background !== false) {

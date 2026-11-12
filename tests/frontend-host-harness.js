@@ -19,7 +19,6 @@ const arg = (name) => {
 const outFile = arg("out");
 const userDataDir = arg("user-data-dir");
 if (userDataDir) app.setPath("userData", userDataDir);
-process.env.DEVTOOLS_CDP_BRIDGE = "off";
 
 // A page that records every InspectorFrontendAPI event it is sent, with a child iframe.
 const page = (child) =>

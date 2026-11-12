@@ -22,7 +22,7 @@
 //    test could never have caught that, because the function it tested was fine;
 //    only "a real push reaches a real subscribed frame" catches it. That is the
 //    suite below: the production shell in Electron (tests/extension-frame-harness.js)
-//    with the production CDP bridge pointed at a fake inspected app that keeps
+//    with the production CDP session pointed at a fake inspected app that keeps
 //    reporting real CDP traffic (tests/fake-rn-app.js), and the evidence is the
 //    `chrome.webRequest` / `chrome.devtools.network` events a real `rozenite://`
 //    frame observed.
@@ -331,8 +331,8 @@ suite(
       root: path.join(root, "run1"),
       extensionsDir,
       hostPage,
-      // Neither port is chosen here. The fake app binds an ephemeral port and the
-      // bridge dials what it got (tests/extension-frame-harness.js reports it on the
+      // No port is chosen here. The fake app binds an ephemeral port and the
+      // host's session dials what it got (tests/extension-frame-harness.js reports it on the
       // `harness` line); asking the OS for a port here, closing it, and hoping it is
       // still free when the child rebinds is a race this suite has no reason to run.
       // The fake app streams one request lifecycle every 400 ms, so a frame that is
@@ -372,7 +372,7 @@ suite(
         `  granted: ${JSON.stringify(granted)}`,
         `  ungranted: ${JSON.stringify(ungranted)}`,
         `  main sent (kind -> count): ${JSON.stringify(sentTo)}`,
-        `  harness: ${JSON.stringify({ fakeAppPort: harnessLine.fakeAppPort, cdpListenPort: harnessLine.cdpListenPort })}`,
+        `  harness: ${JSON.stringify({ fakeAppPort: harnessLine.fakeAppPort, cdpSession: harnessLine.cdpSession })}`,
         `  console: ${consoleLines(run.observed).slice(-15).join(" | ")}`,
         `  output tail: ${String(run.output).slice(-1500)}`,
       ].join("\n");
@@ -381,12 +381,12 @@ suite(
     //    really served traffic through it. Without this, an empty event list below
     //    would be a passing "no data" test rather than a failing delivery test.
     //
-    //    The two ports the harness reports are part of that premise, in this
-    //    direction: a run that bound Metro's 8081 would be attaching to whatever real
-    //    app a developer happens to be running, and measuring that instead of the fake
-    //    one is not a delivery test. Neither is asserted as a specific value: the suite
-    //    asks for no number, and demanding one would put the parent back in charge of
-    //    choosing it — the race this removed.
+    //    The port the harness reports is part of that premise, in this direction: a
+    //    run that bound Metro's 8081 would be attaching to whatever real app a
+    //    developer happens to be running, and measuring that instead of the fake one is
+    //    not a delivery test. It is not asserted as a specific value: the suite asks for
+    //    no number, and demanding one would put the parent back in charge of choosing
+    //    it — the race this removed.
     assert.ok(
       harnessLine.fakeAppPort > 0 && harnessLine.fakeAppPort !== 8081,
       `the fake app did not take Metro's port:${JSON.stringify({
@@ -394,14 +394,17 @@ suite(
       })}${dump()}`
     );
     assert.ok(
-      harnessLine.cdpListenPort > 0 && harnessLine.cdpListenPort !== 9223,
-      `the bridge did not take the port a real frontend dials:${JSON.stringify({
-        cdpListenPort: harnessLine.cdpListenPort,
-      })}${dump()}`
+      harnessLine.cdpSession && harnessLine.cdpSession.attached,
+      `the host's own CDP session attached to the fake app:${dump()}`
+    );
+    const dialled = run.observed.find((line) => line.kind === "fake-app-attached") || {};
+    assert.ok(
+      dialled.origin,
+      `the session dialled with an Origin, which the inspector proxy requires:${dump()}`
     );
     assert.ok(
       fakeApp.enabled,
-      `the model's lazy Network.enable reached the inspected app over the real bridge:${dump()}`
+      `the model's lazy Network.enable reached the inspected app over the host's session:${dump()}`
     );
     assert.ok(
       fakeApp.announced.length > 0,

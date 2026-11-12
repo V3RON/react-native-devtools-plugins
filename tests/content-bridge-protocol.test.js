@@ -24,7 +24,7 @@ const { ALL_RN_TARGETS } = require("../src/electron/extensions/internal/content/
 
 /**
  * A scripted CDP backend: it answers the Runtime methods this layer uses with the
- * shapes RN's backend really answers (the same shapes tests/cdp-bridge.test.js pins)
+ * shapes RN's backend really answers (the same shapes tests/cdp-session.test.js round-trips)
  * and records everything it was asked to evaluate.
  */
 function makeBackend({
@@ -92,7 +92,7 @@ function makeBackend({
     sendCommand,
     evaluates: () => commands.filter((c) => c.method === "Runtime.evaluate"),
     addBindings: () => commands.filter((c) => c.method === "Runtime.addBinding"),
-    // Faithful to src/electron/extensions/internal/cdp/cdp-bridge.js: a handler sees an event only if it subscribed to
+    // Faithful to src/electron/extensions/internal/cdp/cdp-session.js: a handler sees an event only if it subscribed to
     // that exact method name or to "*". Fanning everything to every handler — which this
     // fake used to do — lets a bridge that never subscribed to `Runtime.bindingCalled` pass
     // every test here, because the tests drove the app→host leg through the seam instead.

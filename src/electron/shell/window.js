@@ -21,8 +21,11 @@ let currentWindow = null;
  */
 const shellPreferences = () => ({ preload: config.preloadPath });
 
-/** @param {object} extensionHost the extension host (src/electron/extensions/index.js) */
-const createWindow = (extensionHost) => {
+/**
+ * @param {object} extensionHost the extension host (src/electron/extensions/index.js)
+ * @param {string} [frontendURL] the page with its ws= (./frontend-target.js)
+ */
+const createWindow = (extensionHost, frontendURL = config.frontendURL) => {
   const win = new BrowserWindow({
     width: 800,
     height: 600,
@@ -35,8 +38,8 @@ const createWindow = (extensionHost) => {
   setFrontendWebContents(win.webContents);
   setFrontendContents(win.webContents); // who may call the shell's frontend-only channels
   guardNavigation(win.webContents); // ...and the frontend cannot be navigated away from its origin
-  extensionHost.attachWindow(win, config.frontendURL); // before loadURL
-  win.loadURL(config.frontendURL);
+  extensionHost.attachWindow(win, frontendURL); // before loadURL; the host reads its ws=
+  win.loadURL(frontendURL);
 
   win.on("closed", () => {
     if (currentWindow === win) {

@@ -43,7 +43,7 @@ This spec moves that host into the upstream Electron shell as:
 | Session | `persist:react-native-devtools` | default session (nothing sets a partition) |
 | Windows | one per `windowKey`, reused on `second-instance` | one global `currentWindow` |
 | Frontend host | stock `InspectorFrontendHostStub`, decorated with `bringToFront` | full replacement (`src/preload/frontend-host.js`) |
-| CDP | the frontend dials the `ws=` Metro gave it | MITM bridge on `:9223`; target found through Metro `/json/list` |
+| CDP | the frontend dials the `ws=` Metro gave it | the frontend dials Metro's `ws=` directly (the shell picks the target from `/json/list`); the host opens its own second session (§5.6) |
 | Persistence | `SettingsStore` (JSON in `userData`) | `electron-store`; frontend prefs in `localStorage` |
 | Size | 572 lines across 8 files | ~14k lines of source, 45 test files (10 real-Electron) |
 
@@ -87,7 +87,7 @@ RN DevTools has no anchor for them (`docs/OVERVIEW.md`, "the anchor list").
 | Install/uninstall/reload UI, consent dialog, folder watcher, CRX / Web Store install | Dropping a folder into the directory is the install, as it is today |
 | MV3 worker eviction and wake, `onSuspend` | The context is always-on: a superset of what a DevTools host needs |
 | Per-extension origin isolation for reads (`SECURITY-PLATFORM.md` L6) and per-extension `WebContentsView` (L8) | L6 is low value. L8 breaks `Panel.onShown(window)` |
-| Porting `src/tools/fake-cdp.js` and `rn-cdp.js`, and the external-relay mode | Developer tools for this prototype only |
+| Porting `src/tools/fake-cdp.js` | A developer tool for this prototype only |
 | 🚷 `panels.elements.*`, `getSelectedNode`, `webRequest` blocking, DOM content scripts (`css`, isolated worlds, URL `matches`), `action` popup, `contextMenus.onClicked`, `sidePanel.open`, real `chrome.windows` | No Elements panel, no `Fetch` domain, no document, no browser UI |
 
 ## 5. Detailed design
@@ -326,10 +326,11 @@ These fixes are folded in while the code moves:
 
 ### 5.6 CDP: the host's own session
 
-The current bridge (`src/main/cdp-bridge.js`) puts itself between the frontend and the app:
-- it finds the target through `/json/list` and takes `pages[0]`;
-- it listens on `:9223`;
-- it multiplexes host commands with ids ≥ `HOST_ID_BASE = 1e15`.
+The bridge this replaced (`src/main/cdp-bridge.js`, deleted) put itself between the frontend
+and the app:
+- it found the target through `/json/list` and took `pages[0]`;
+- it listened on `:9223`;
+- it multiplexed host commands with ids ≥ `HOST_ID_BASE = 1e15`.
 
 **Decision: the host opens a second, independent session** to the inspector URL from `ws=`.
 Upstream supports multiple debuggers per target, so the shell needs no frontend URL rewrite, no
@@ -580,9 +581,20 @@ touches `ipcMain` (asserted in `tests/architecture-boundary.test.js`). A WebCont
 attached, such as a second frontend window or a `chrome.tabs` window, gets "no handler" for
 every extension channel.
 
+**`CdpSession`: done** (`internal/cdp/cdp-session.js`). The host opens its own session to the
+attached window's `ws=` with `Origin: <frontend URL origin>`, after a `/json/list` check of
+`supportsMultipleDebuggers` before every dial. Without the capability it does not connect, and
+CDP-backed APIs fail with the reason. Each new session sends `Runtime.enable` before it reports
+attached, then `onAttach` fires: the network model re-enables `Network`, and the content bridge
+re-adds its binding. The bridge on `:9223`, its Origin gate, ownership rule and `rn-cdp` CLI
+are gone. The development shell now picks the target itself (`shell/frontend-target.js`) and
+gives the frontend Metro's `ws=` directly, as dev-middleware does upstream. One consequence to
+check on a device (Q1): dev-middleware forces `supportsMultipleDebuggers: false` unless the
+`enableStandaloneFuseboxShell` experiment is on (`Device.js`), so a dev server without it gets no
+host session.
+
 **Still to do before PR 1**, all behaviour changes:
 - launch flags instead of env (§5.9);
-- the `CdpSession` (§5.6) in place of the man-in-the-middle bridge;
 - document-relative frontend imports;
 - the upstream partition;
 - a bundled sandboxed preload (Q2).
@@ -616,13 +628,14 @@ The in-place restructure (§10) already moved the code. Paths are under `src/ele
 | `internal/broker/` | `main/ipc.js` (extension channels), `delivery-scope.js`, `shared/permissions.js`, `shared/ipc.js` (extension channels) | `createBroker(deps)`; channels per WebContents (`attachContents`) |
 | `internal/frontend/` | `main/panel-host.js`, `theme-host.js`, `frontend-frame.js`, `frontend/panel-bridge.js`, `shared/theme.js` | panel host and frontend guard per attachment |
 | `internal/contexts/` | `main/message-router.js`, `context-registry.js`, `context-request.js`, `background-host.js`, `options-host.js`, `frame-security.js` | windows on the host's session |
-| `internal/cdp/` | `main/cdp-bridge.js`, `inspected-window.js`, `network-model.js`, `network-service.js` | bridge built by the host; → `CdpSession` (§5.6) |
+| `internal/cdp/` | `main/cdp-bridge.js` (→ new `cdp-session.js`), `inspected-window.js`, `network-model.js`, `network-service.js` | the host's own session (§5.6); consumers re-arm on `onAttach` |
 | `internal/content/` | `main/content-bridge.js`, `content-scripts.js`, `content-gate.js` | |
 | `internal/services/` | `main/storage-service.js`, `shared/storage-core.js`, `notification-host.js`, `save-service.js`, `tab-host.js`, `tab-send.js`, `external-open.js` | electron-store → adapter; node-fetch → `session.fetch` (to do) |
 | `internal/preload/` | `preload/index.js`, `extension-frame.js`, + new `frontend-bridge.js` | registered on the session; to be bundled (Q2) |
 | `internal/shim/` | `chrome-shim/*` | unchanged, already pure |
 | `shell/` (**not ported**) | `main/index.js`, `window.js`, `config.js`, `ipc.js` (shell channels), `context-menu.js`, `host-config.js`, `host-files.js`, `dispatch.js`, `window-open-policy.js`, `preload/frontend-host.js`, `shared/ipc.js` (shell channels) | the InspectorFrontendHost replacement (§4) and this repo's env config |
-| `src/tools/` (**not ported**) | `tools/fake-cdp.js`, `tools/rn-cdp.js` | development only |
+| `shell/frontend-target.js` (**not ported**) | new | picks the target from Metro's `/json/list` and builds the `ws=`; upstream gets it from `--frontendUrl` |
+| `src/tools/` (**not ported**) | `tools/fake-cdp.js` (`rn-cdp.js` deleted with the bridge) | development only |
 
 ## References
 
