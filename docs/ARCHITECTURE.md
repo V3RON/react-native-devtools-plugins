@@ -134,7 +134,10 @@ expression `executeJavaScript`-ed into the frontend's main world, never `require
   (`script-src 'self'`) would refuse the inline script the alternative implies. Files are
   streamed from the package with a type from `scheme/mime.js` (a module script with the
   wrong type is a hard load failure; a name with no known extension gets no type, so
-  Chromium sniffs it as its `file://` loader did) and the extension's CSP.
+  Chromium sniffs it as its `file://` loader did) and the extension's CSP. One byte range
+  per request is honoured (`scheme/range.js`: `206` + `Content-Range`, `416` past the end,
+  `Accept-Ranges: bytes` always), and the scheme carries the `stream` privilege, so an
+  extension's own `<video>`/`<audio>` streams and seeks (`tests/range-electron.test.js`).
   Reserved paths are reserved in both directions, so a real file cannot shadow the bootstrap
   and `?script=` cannot name a file outside the extension — it goes through the same
   containment check as any other request.

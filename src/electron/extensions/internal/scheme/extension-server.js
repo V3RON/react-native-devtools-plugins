@@ -30,6 +30,7 @@ const {
 } = require("./protocol");
 const { contentSecurityPolicyFor, unsafeReason } = require("./csp");
 const { contentTypeFor } = require("./mime");
+const { parseRange } = require("./range");
 const i18nHost = require("../registry/i18n-host");
 const { packageFor, resolveExtensionFile, resolveInsideExtension } = require("../registry/packages");
 
@@ -67,8 +68,10 @@ const registerExtensionSchemePrivileges = () => {
       // loadable inside the http:// frontend with webSecurity on; `bypassCSP`
       // keeps the frontend's own policy from applying to extension resources —
       // each response carries its extension's policy instead (verified in
-      // tests/extension-frame-electron.test.js).
-      privileges: { standard: true, supportFetchAPI: true, bypassCSP: true },
+      // tests/extension-frame-electron.test.js). `stream` lets <video>/<audio> stream
+      // from an extension's own origin; with the byte ranges served below, a seek
+      // fetches only what it needs (tests/range-electron.test.js).
+      privileges: { standard: true, supportFetchAPI: true, bypassCSP: true, stream: true },
     },
   ]);
 };
@@ -239,7 +242,7 @@ const registerExtensionProtocol = ({ log = console, protocol: target = protocol 
     );
   };
 
-  const serveFile = (extensionId, innerPath) => {
+  const serveFile = (extensionId, innerPath, rangeHeader) => {
     const pkg = packageFor(extensionId);
     const file = pkg ? pkg.entry(innerPath) : { kind: "missing" };
     if (file.kind !== "file") {
@@ -257,16 +260,34 @@ const registerExtensionProtocol = ({ log = console, protocol: target = protocol 
     }
     // Streamed from the package, with the type decided here (./mime.js) rather than by
     // Chromium's file:// loader, so a package that is not a folder is served the same way.
-    const opened = pkg.open(innerPath);
+    // One byte range is honoured (./range.js): a media element seeks with it, and an
+    // extension may fetch a slice of a large file.
+    const type = contentTypeFor(innerPath);
+    const base = { ...(type ? { "Content-Type": type } : {}), "Accept-Ranges": "bytes" };
+    const range = parseRange(rangeHeader, file.size);
+    if (range.kind === "unsatisfiable") {
+      return new Response(null, {
+        status: 416,
+        headers: headersFor(extensionId, { ...base, "Content-Range": `bytes */${file.size}` }),
+      });
+    }
+    const partial = range.kind === "partial";
+    const opened = pkg.open(innerPath, partial ? { start: range.start, end: range.end } : {});
     if (!opened) {
       return notFound(extensionId, `unreadable file: ${innerPath}`);
     }
-    const type = contentTypeFor(innerPath);
+    if (!partial) {
+      return new Response(Readable.toWeb(opened.stream), {
+        status: 200,
+        headers: headersFor(extensionId, { ...base, "Content-Length": String(opened.size) }),
+      });
+    }
     return new Response(Readable.toWeb(opened.stream), {
-      status: 200,
+      status: 206,
       headers: headersFor(extensionId, {
-        ...(type ? { "Content-Type": type } : {}),
-        "Content-Length": String(opened.size),
+        ...base,
+        "Content-Range": `bytes ${range.start}-${range.end}/${opened.size}`,
+        "Content-Length": String(range.end - range.start + 1),
       }),
     });
   };
@@ -283,7 +304,7 @@ const registerExtensionProtocol = ({ log = console, protocol: target = protocol 
     if (innerPath === I18N_BUNDLE_PATH) {
       return serveI18nBundle(parsed.extensionId);
     }
-    return serveFile(parsed.extensionId, innerPath);
+    return serveFile(parsed.extensionId, innerPath, request.headers.get("range"));
   });
 
   return policyFor;

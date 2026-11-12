@@ -134,3 +134,22 @@ test("host code reads extension files only through a package", () => {
     assert.doesNotMatch(code, /require\(\s*["'](node:)?fs["']\s*\)/, `${rel} reads the filesystem directly`);
   }
 });
+
+test("one byte range is honoured; anything else is the whole file or a 416", () => {
+  const { parseRange } = require("../src/electron/extensions/internal/scheme/range");
+  const partial = (start, end) => ({ kind: "partial", start, end });
+  assert.deepEqual(parseRange(undefined, 10), { kind: "whole" });
+  assert.deepEqual(parseRange(null, 10), { kind: "whole" });
+  assert.deepEqual(parseRange("bytes=2-5", 10), partial(2, 5));
+  assert.deepEqual(parseRange("bytes=2-", 10), partial(2, 9));
+  assert.deepEqual(parseRange("bytes=8-99", 10), partial(8, 9), "the end is clamped to the file");
+  assert.deepEqual(parseRange("bytes=-3", 10), partial(7, 9), "a suffix is the last bytes");
+  assert.deepEqual(parseRange("bytes=-30", 10), partial(0, 9), "a suffix longer than the file is all of it");
+  assert.deepEqual(parseRange("BYTES = 0 - 0", 10), partial(0, 0));
+  assert.deepEqual(parseRange("bytes=10-", 10), { kind: "unsatisfiable" });
+  assert.deepEqual(parseRange("bytes=-0", 10), { kind: "unsatisfiable" });
+  assert.deepEqual(parseRange("bytes=0-", 0), { kind: "unsatisfiable" }, "an empty file has no bytes to range");
+  for (const ignored of ["bytes=0-1,4-5", "items=0-1", "bytes=5-2", "bytes=-", "nonsense"]) {
+    assert.deepEqual(parseRange(ignored, 10), { kind: "whole" }, ignored);
+  }
+});
