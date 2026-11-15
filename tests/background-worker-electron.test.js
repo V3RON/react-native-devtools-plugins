@@ -516,7 +516,11 @@ suite(
       ].join("\n")
     );
 
-    assert.equal(windows.length, 3, "graphql, altair and showcase each get a background context");
+    assert.equal(
+      windows.length,
+      4,
+      "graphql, altair, showcase and mobx-devtools each get a background context"
+    );
     assert.ok(
       windows.every((win) => win.visible === false),
       "every worker window is hidden"

@@ -1,4 +1,5 @@
 import { useNetworkActivityDevTools } from '@rozenite/network-activity-plugin';
+import { MobxDemo } from './MobxDemo';
 import { useState } from 'react';
 import {
   ActivityIndicator,
@@ -116,6 +117,8 @@ export default function App() {
           onPress={() => run('GraphQL', fetchGraphql)}
         />
       </View>
+
+      <MobxDemo />
 
       <ScrollView style={styles.results} contentContainerStyle={styles.resultsContent}>
         {result.kind === 'idle' && <Text style={styles.hint}>No requests yet.</Text>}

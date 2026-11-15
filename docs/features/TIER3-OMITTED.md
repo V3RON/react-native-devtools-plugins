@@ -12,9 +12,11 @@ never fire); otherwise leave `undefined`. Document every divergence.
 
 ## Page / DOM access
 
-- `chrome.scripting` (`executeScript`/`insertCSS`), `chrome.dom`, `userScripts`,
-  `declarativeContent`, `pageCapture`, `tabCapture`.
-  (Injecting via `Runtime.evaluate` is *eval*, not DOM injection — don't fake a DOM.)
+- `chrome.scripting.insertCSS`/`removeCSS` and dynamic content-script registration,
+  `chrome.dom`, `userScripts`, `declarativeContent`, `pageCapture`, `tabCapture`.
+  (`chrome.scripting.executeScript` is no longer here: it is *eval* via `Runtime.evaluate`,
+  not DOM injection, and is implemented behind the content-script opt-in →
+  [CONTENT-SCRIPTS.md](CONTENT-SCRIPTS.md#chromescriptingexecutescript). Still: don't fake a DOM.)
 - DOM-manipulating `content_scripts`: out of scope here; bridge-style ones are in scope →
   [features/CONTENT-SCRIPTS.md](CONTENT-SCRIPTS.md).
 

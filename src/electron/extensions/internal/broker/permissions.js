@@ -30,6 +30,7 @@ const API_PERMISSIONS = {
   alarms: "alarms",
   downloads: "downloads",
   debugger: "debugger",
+  scripting: "scripting",
 };
 
 // Namespaces Chrome's DevTools extensions may use without declaring anything.

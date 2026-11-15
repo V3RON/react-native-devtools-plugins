@@ -61,6 +61,7 @@ const {
   TABS_OPEN,
   TABS_CLOSE,
   TABS_SEND_TO_APP,
+  SCRIPTING_EXECUTE,
   NOTIFICATION_SHOW,
   NOTIFICATION_CLEAR,
   NOTIFICATION_PERMISSION,
@@ -643,6 +644,36 @@ const createBroker = ({
         sendTo: (args) => router.sendTo(args),
         message: details.message,
       });
+    });
+
+    // ── chrome.scripting.executeScript ──────────────────────────────────────────
+    // Two gates, both from host state: the frame's declared `scripting` permission, and
+    // the content-script opt-in (enforced by the bridge). The extension whose app context
+    // is addressed is the CALLING frame's own — the payload carries code, never an id.
+    handle(SCRIPTING_EXECUTE, async (event, details = {}) => {
+      if (!gatedFrameKey(event, "scripting")) {
+        return { ok: false, error: "scripting: permission 'scripting' is not declared" };
+      }
+      const extensionId = event.senderFrame ? extensionIdOfFrame(event) : null;
+      if (!extensionId) {
+        return { ok: false, error: "scripting.executeScript: the calling frame has no extension id" };
+      }
+      // Started on first need, against the host's router and session (ExtensionHost.js).
+      const bridge = getContentBridge();
+      if (!bridge) {
+        return { ok: false, error: "scripting.executeScript: this shell has no content bridge running" };
+      }
+      try {
+        return await bridge.executeScript({
+          extensionId,
+          files: Array.isArray(details.files) ? details.files.map(String) : null,
+          func: typeof details.func === "string" ? details.func : null,
+          args: details.args,
+          world: details.world || "ISOLATED",
+        });
+      } catch (error) {
+        return { ok: false, error: `scripting.executeScript: ${error && error.message}` };
+      }
     });
 
     // ── chrome.notifications (docs/features/SMALL-SHIMS.md) ────────────────────

@@ -53,6 +53,7 @@ const { createRuntime } = require("./runtime");
 const { createMessagingClient } = require("./messaging");
 const { createDevtools, tabIdFor } = require("./devtools");
 const { createTabs } = require("./tabs");
+const { createScripting } = require("./scripting");
 const { createAction, createNotifications } = require("./browser-apis");
 const { createPermissionsApi } = require("./permissions-api");
 const { createAlarms } = require("./alarms");
@@ -82,6 +83,7 @@ const createChromeNamespace = ({
   getTargetInfo = () => ({ attached: false }),
   openTabIn = null,
   sendToApp = null,
+  executeInApp = null,
   closeTabById = null,
   showNotification = null,
   hideNotification = null,
@@ -281,6 +283,19 @@ const createChromeNamespace = ({
       setLastError,
       onDenied: (method, error) => reportDenied(`${method}: ${error.message}`, "tabs"),
     }),
+
+    // [REAL for one tab] `chrome.scripting.executeScript` -> `Runtime.evaluate` in the
+    // inspected app (src/electron/extensions/internal/content/content-bridge.js). Gated on the declared `scripting`
+    // permission like Chrome's, and in main on the content-script opt-in as well.
+    scripting: gateCallbackNamespace(
+      createScripting({ tabId: tabIdFor(extensionId), execute: executeInApp, lastError: lastErrorScope }),
+      {
+        api: "scripting",
+        check: (api) => gate.check(api),
+        setLastError,
+        onDenied: (method, error) => reportDenied(`${method}: ${error.message}`, "scripting"),
+      }
+    ),
 
     // [REAL] chrome.storage: one store per extension shared by all its contexts, with
     // onChanged delivered to every one of them (session area: in memory, cleared when

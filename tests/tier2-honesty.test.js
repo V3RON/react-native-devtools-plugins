@@ -283,6 +283,7 @@ test("the namespaces that exist are exactly the ones the docs claim", () => {
     "notifications",
     "permissions",
     "runtime",
+    "scripting",
     "sidePanel",
     "storage",
     "tabs",
