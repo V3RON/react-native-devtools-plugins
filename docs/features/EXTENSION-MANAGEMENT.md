@@ -15,13 +15,13 @@ exposes them at `chrome-extension://<id>/`, and drives each declared execution c
 ## Current state here
 
 - Manifest loading (`extension-server.loadManifest`) + scan/enumeration
-  (`src/main/extensions.js`): folders with `devtools_page` get a hidden devtools page
+  (`src/electron/extensions/internal/registry/extensions.js`): folders with `devtools_page` get a hidden devtools page
   and their `panels.create` calls become real tabs — no fork knowledge anywhere
   ([DEVTOOLS-PANELS.md](DEVTOOLS-PANELS.md)).
 - "Install" = drop the folder in `extensions/`; the frontend picks it up on (re)load.
   The `rozenite://` protocol blindly maps
   `rozenite://<dir-name>/<path>` → `extensions/<dir-name>` (with a containment guard; see
-  `src/main/extension-server.js`). That guard decides containment on **resolved** paths —
+  `src/electron/extensions/internal/scheme/extension-server.js`). That guard decides containment on **resolved** paths —
   `fs.realpath` of the folder and of the target — so a symlink inside an extension folder
   cannot hand its pages a file from elsewhere on the machine, while links that stay inside
   the folder keep working. A **symlinked folder is never an extension root**: `readdir` +
@@ -31,14 +31,14 @@ exposes them at `chrome-extension://<id>/`, and drives each declared execution c
   a real renderer's `fetch()` in `tests/background-worker-electron.test.js`).
 - Extension id == directory name (works, and `runtime.getURL` consumers like Altair's
   `tabs.js` depend on hostname == id — keep it).
-- **Per-extension CSP**: `src/shared/csp.js` turns `content_security_policy` into the
+- **Per-extension CSP**: `src/electron/extensions/internal/scheme/csp.js` turns `content_security_policy` into the
   header every `rozenite://` response carries. No declaration ⇒ Chrome's MV3 default
   (`script-src 'self'; object-src 'self'`, plus `wasm-unsafe-eval` for service-worker
   extensions). A declaration that weakens `script-src`/`object-src` is not served — the
   strict default is, with one console line naming the extension and the reason.
-- **Declared permissions gate capability.** Two enforcement points: `src/main/delivery-scope.js`
+- **Declared permissions gate capability.** Two enforcement points: `src/electron/extensions/internal/broker/delivery-scope.js`
   filters host→frame deliveries using the manifest read **from disk** (a frame cannot talk
-  itself into data), and `src/chrome-shim/permission-gate.js` makes the promise/callback APIs
+  itself into data), and `src/electron/extensions/internal/shim/permission-gate.js` makes the promise/callback APIs
   answer with `runtime.lastError` + a rejected promise. The shim half is asserted in
   `tests/extension-frame-electron.test.js`; the main half in `tests/delivery-scope.test.js`,
   which additionally proves a live push really arrives at an entitled frame — the filter once
@@ -47,10 +47,10 @@ exposes them at `chrome-extension://<id>/`, and drives each declared execution c
   `permissions.contains()` — `host_permissions` is network reach, `optional_permissions`
   are by definition not granted.
 - **Background contexts are discovered and run.** `scanBackgroundExtensions()`
-  (`src/main/extensions.js`) lists folders declaring `background.service_worker` or a
+  (`src/electron/extensions/internal/registry/extensions.js`) lists folders declaring `background.service_worker` or a
   non-empty `background.scripts` — independently of the devtools-page scan, so an extension
   with both is hosted twice, as Chrome does. The host also remembers which extension
-  **versions** it has seen (`src/main/install-state.js`, `electron-store` under `userData`);
+  **versions** it has seen (`src/electron/extensions/internal/registry/install-state.js`, `electron-store` under `userData`);
   that is what turns "the manifest's version changed" into `runtime.onInstalled`
   (`install` / `update`) versus `onStartup`. It is the closest thing this shell has to an
   install record, and a fresh `--user-data-dir` correctly looks like a fresh install.
@@ -63,9 +63,9 @@ exposes them at `chrome-extension://<id>/`, and drives each declared execution c
 - Install/uninstall/reload: folder watcher for dev ergonomics + lifecycle UI.
 - ~~Per-extension CSP enforcement on the `rozenite:` frames~~ ✅ done — every
   `rozenite://` response carries the extension's own policy, or Chrome's MV3 default
-  (`src/shared/csp.js`), and an inline `<script>` in an extension page is refused.
+  (`src/electron/extensions/internal/scheme/csp.js`), and an inline `<script>` in an extension page is refused.
 - Enforce more than the shape: a declared permission now gates real capability
-  (`src/main/delivery-scope.js` + `src/chrome-shim/permission-gate.js`); `optional_permissions`
+  (`src/electron/extensions/internal/broker/delivery-scope.js` + `src/electron/extensions/internal/shim/permission-gate.js`); `optional_permissions`
   and a real `chrome.permissions.request` prompt are still open.
 
 ## Manifest key support matrix
@@ -74,13 +74,13 @@ exposes them at `chrome-extension://<id>/`, and drives each declared execution c
 | --- | --- |
 | `manifest_version: 3`, `name`, `version`, `description`, `icons` | Parse and honor |
 | `devtools_page` | **Core** — spawn hidden frame per extension |
-| `background.service_worker` / `background.scripts` | **Run** as an always-on hidden context (`src/main/background-host.js`), honoring `type: "module"`; `service_worker` wins over `scripts[0]` → [BACKGROUND-WORKER.md](BACKGROUND-WORKER.md) |
+| `background.service_worker` / `background.scripts` | **Run** as an always-on hidden context (`src/electron/extensions/internal/contexts/background-host.js`), honoring `type: "module"`; `service_worker` wins over `scripts[0]` → [BACKGROUND-WORKER.md](BACKGROUND-WORKER.md) |
 | `storage`, `alarms`, `notifications` permissions | Declared ⇒ granted, and now **enforced**: an undeclared API fails the call instead of working |
-| `host_permissions`, `webRequest` | `webRequest` enforced at the transport (deliveries are scoped to the declaration in `src/main/delivery-scope.js`); `host_permissions` still grant nothing beyond the RN app's own CDP reach |
+| `host_permissions`, `webRequest` | `webRequest` enforced at the transport (deliveries are scoped to the declaration in `src/electron/extensions/internal/broker/delivery-scope.js`); `host_permissions` still grant nothing beyond the RN app's own CDP reach |
 | `content_scripts` | Runner per [CONTENT-SCRIPTS.md](CONTENT-SCRIPTS.md) (bridge-style only) |
 | `action`, `commands`, `contextMenus`, `omnibox`, `side_panel` | Accept; no-op shells |
 | `options_ui` | Open in a separate Electron window |
-| `content_security_policy` | **Honored per extension** on `rozenite://` responses (`src/shared/csp.js`); no declaration ⇒ Chrome's MV3 default, a weakening declaration ⇒ the strict default plus one console line |
+| `content_security_policy` | **Honored per extension** on `rozenite://` responses (`src/electron/extensions/internal/scheme/csp.js`); no declaration ⇒ Chrome's MV3 default, a weakening declaration ⇒ the strict default plus one console line |
 | `web_accessible_resources` | Meaningful mainly for injected content scripts; serve files under the protocol anyway |
 | `permissions: tabs/identity/...` | Report granted; APIs themselves per [TIER3-OMITTED.md](TIER3-OMITTED.md) and feature docs |
 

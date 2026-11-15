@@ -1,9 +1,9 @@
-// The StorageArea rules (src/shared/storage-core.js): what get/set/remove/clear mean,
+// The StorageArea rules (src/electron/extensions/internal/services/storage-core.js): what get/set/remove/clear mean,
 // independent of where the state lives.
 const test = require("node:test");
 const assert = require("node:assert");
 
-const core = require("../src/shared/storage-core");
+const core = require("../src/electron/extensions/internal/services/storage-core");
 
 const area = (entries = {}) => new Map(Object.entries(entries));
 

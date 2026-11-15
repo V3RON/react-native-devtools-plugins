@@ -1,7 +1,7 @@
 // `chrome.tabs.sendMessage`'s wiring inside a REAL Electron process (GitHub issue #5).
 //
 // The unit suites prove the rules; only a real process can prove the chain that carries
-// them — production preload → production shim → IPC → `src/main/tab-send.js` → the real
+// them — production preload → production shim → IPC → `src/electron/extensions/internal/services/tab-send.js` → the real
 // content bridge → the real gate — and in particular the two things a fake cannot:
 //
 //   1. A call that reaches nothing REJECTS with a reason, in the frame, instead of
@@ -12,7 +12,7 @@
 //      turned into an injection question.
 //
 // What this is NOT: no content script is injected in any of these runs. The harness runs
-// with no CDP session (`DEVTOOLS_CDP_BRIDGE=off`), and the gate is default-closed, so the
+// with no CDP session (its frontend URL names no ws=), and the gate is default-closed, so the
 // honest outcome is a refusal. Claiming a delivery here would require a device, and
 // docs/features/CONTENT-SCRIPTS.md records that as still outstanding rather than faking it.
 const test = require("node:test");

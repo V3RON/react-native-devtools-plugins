@@ -8,8 +8,8 @@
 // no permission, no prompt. The fix compares the REALPATHS of the root and the
 // target; these tests are the ways that rule could be wrong, each with a real link on
 // disk. Every caller that asks the guard for a path inherits it — the scanners'
-// manifest reads, `src/main/content-scripts.js`, and the panel/options/registration
-// gates in `src/main/ipc.js`. `src/main/i18n-host.js` does NOT ask the guard: it
+// manifest reads, `src/electron/extensions/internal/content/content-scripts.js`, and the panel/options/registration
+// gates in `src/electron/extensions/internal/broker/ipc.js`. `src/electron/extensions/internal/registry/i18n-host.js` does NOT ask the guard: it
 // builds its OWN paths under the root, so it applies the same rule to them itself,
 // and that second copy is what makes the claim hold for every read there is (suite 6).
 //
@@ -21,17 +21,17 @@
 //      and the same refusal now lives inside `i18n-host.containmentFor` itself, so
 //      handing it a linked root directly serves nothing either. The two containment
 //      layers agree on what an extension is, and that agreement is stated in the
-//      guard's docblock (src/main/extension-server.js);
+//      guard's docblock (src/electron/extensions/internal/scheme/extension-server.js);
 //   4. the RESERVED inner paths keep their rules in both directions, and the main-side
 //      reads they exist for still work — the background bootstrap's script and the
 //      chrome.i18n bundle, which read the root and `_locales/` rather than a
 //      page-served file, so a realpath change could have broken them silently;
 //   5. a path that simply does not exist is still reported as MISSING, not REFUSED
-//      (the distinction `src/main/content-scripts.js` shows the developer);
+//      (the distinction `src/electron/extensions/internal/content/content-scripts.js` shows the developer);
 //   6. the message-bundle and CSS-localisation reads — which build their OWN paths
 //      under the root (`_locales/<locale>/messages.json`) and therefore never pass a
 //      page-facing resolver — are contained by the same rule, inside
-//      `src/main/i18n-host.js`. That is what makes the claim above ("every caller
+//      `src/electron/extensions/internal/registry/i18n-host.js`. That is what makes the claim above ("every caller
 //      inherits it") true rather than aspirational;
 //   7. the bundle cache's signature STATS go through the same containment — the one
 //      place a refused input's mtime and size could still be read — pinned by forging
@@ -51,21 +51,27 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 
-const config = require("../src/main/config");
+// The extension host's settings (what createExtensionHost configures), pointed at the
+// shipped extensions folder the shell would pass, so a test can swap the folder.
+const { settings: config } = require("../src/electron/extensions/internal/settings");
+config.extensionsDir = require("../src/electron/shell/config").extensionsDir;
 const {
   BACKGROUND_BOOTSTRAP_PATH,
   I18N_BUNDLE_PATH,
   loadManifest,
   resolveExtensionFile,
   resolveInsideExtension,
-} = require("../src/main/extension-server");
+} = require("../src/electron/extensions/internal/scheme/extension-server");
 const {
   extensionFolders,
   scanExtensions,
   scanBackgroundExtensions,
-} = require("../src/main/extensions");
-const i18nHost = require("../src/main/i18n-host");
-const i18n = require("../src/shared/i18n");
+} = require("../src/electron/extensions/internal/registry/extensions");
+const i18nHost = require("../src/electron/extensions/internal/registry/i18n-host");
+const { createDirectoryPackage, packageFor } = require("../src/electron/extensions/internal/registry/packages");
+/** A folder handed to i18n-host directly, as the package it reads through. */
+const packageAt = (root) => createDirectoryPackage({ id: path.basename(root), root });
+const i18n = require("../src/electron/extensions/internal/registry/i18n");
 
 const REAL_EXTENSIONS_DIR = config.extensionsDir;
 
@@ -187,7 +193,7 @@ suite("a link inside an extension folder that points outside is refused", { time
       const own = ["manifest.json", "own.js", "inner/nested.js"].map((innerPath) => {
         const resolved = resolveExtensionFile("steal", innerPath);
         // The guard hands back the REAL path, so the read walks no link component
-        // (src/main/extension-server.js). On macOS the temp root is itself behind
+        // (src/electron/extensions/internal/scheme/extension-server.js). On macOS the temp root is itself behind
         // `/var -> /private/var`, hence `real` rather than the text path.
         assert.strictEqual(resolved, real(path.join(root, `extensions/steal/${innerPath}`)));
         assert.ok(fs.existsSync(resolved));
@@ -258,7 +264,7 @@ suite("a link that stays inside the extension folder still resolves", { timeout:
 suite("a symlinked extension root is refused by the server and skipped by the scan", { timeout: 60000 }, () => {
   // Decided policy (issue #21): A SYMLINKED FOLDER IS NEVER AN EXTENSION ROOT.
   // Discovery reaches folders through `readdir({ withFileTypes: true })` +
-  // `isDirectory()`, which never reports a link (src/main/extensions.js); the server
+  // `isDirectory()`, which never reports a link (src/electron/extensions/internal/registry/extensions.js); the server
   // refuses a linked root for the same reason, so the layers cannot disagree about
   // what an extension is — and the disagreement could never be the permissive one.
   withTree(
@@ -305,14 +311,14 @@ suite("a symlinked extension root is refused by the server and skipped by the sc
       assert.deepStrictEqual(loadManifest("linked.ext"), {});
 
       // And the same refusal applies to i18n-host HANDED the linked path directly —
-      // doctrine in the module, not only in its callers (src/main/i18n-host.js's
+      // doctrine in the module, not only in its callers (src/electron/extensions/internal/registry/i18n-host.js's
       // `containmentFor` lstats the root it receives). A future caller that forgot to
       // check would otherwise get a full bundle out of a folder the scanner refuses to
       // even list, and the two layers' disagreement would be the permissive one.
       const linkedRoot = path.join(config.extensionsDir, "linked.ext");
       const { log, warnings } = quiet();
       const bundle = i18nHost.loadBundle({
-        root: linkedRoot,
+        pkg: packageAt(linkedRoot),
         extensionId: "linked.ext",
         uiLocaleOverride: "en",
         log,
@@ -326,7 +332,7 @@ suite("a symlinked extension root is refused by the server and skipped by the sc
         i18nHost.localizeManifest({
           manifest: { name: "__MSG_extName__" },
           rawText: '{"name":"__MSG_extName__"}',
-          root: linkedRoot,
+          pkg: packageAt(linkedRoot),
           extensionId: "linked.ext",
           uiLocaleOverride: "en",
           log,
@@ -367,7 +373,7 @@ suite("the reserved inner paths keep their rules, and main-side reads still reso
       "extensions/reserved/log.js": "export const tag = () => 'ok';\n",
       // `_locales` reached through a link that stays inside the folder. The i18n
       // bundle is read by MAIN from the root (`serveI18nBundle` ->
-      // `resolveInsideExtension(id, "")` -> src/main/i18n-host.js), so the realpath
+      // `resolveInsideExtension(id, "")` -> src/electron/extensions/internal/registry/i18n-host.js), so the realpath
       // change could have broken localization without breaking one page-served file.
       "extensions/reserved/locales-real/en/messages.json": {
         hello: { message: "Hello" },
@@ -457,7 +463,7 @@ suite("the reserved inner paths keep their rules, and main-side reads still reso
       const warnings = [];
       const log = { warn: (message) => warnings.push(message), log() {}, error() {} };
       const bundle = i18nHost.loadBundle({
-        root,
+        pkg: packageAt(root),
         extensionId: "reserved",
         uiLocaleOverride: "en",
         log,
@@ -467,7 +473,7 @@ suite("the reserved inner paths keep their rules, and main-side reads still reso
         i18nHost.localizeManifest({
           manifest: { name: "__MSG_extName__" },
           rawText: '{"name":"__MSG_extName__"}',
-          root,
+          pkg: packageAt(root),
           extensionId: "reserved",
           uiLocaleOverride: "en",
           log,
@@ -487,11 +493,11 @@ suite("the reserved inner paths keep their rules, and main-side reads still reso
         real(path.join(extensionsDir, "reserved/styles/panel.css")),
         "a stylesheet behind an in-folder link resolves to the real file"
       );
-      assert.strictEqual(i18nHost.cssUsesMessages(cssPath), true, "the marker is seen");
+      assert.strictEqual(i18nHost.cssUsesMessages(packageFor("reserved"), "styles-link/panel.css"), true, "the marker is seen");
       assert.strictEqual(
         i18nHost.localizeCssFile({
           text: fs.readFileSync(cssPath, "utf8"),
-          root,
+          pkg: packageAt(root),
           extensionId: "reserved",
           uiLocaleOverride: "en",
           log,
@@ -511,7 +517,7 @@ suite("the reserved inner paths keep their rules, and main-side reads still reso
       //     reports and what the frame is served must be the same string.
       const linkedManifest = loadManifest("linked-manifest");
       const linkedBundle = i18nHost.loadBundle({
-        root: resolveInsideExtension("linked-manifest", ""),
+        pkg: packageFor("linked-manifest"),
         extensionId: "linked-manifest",
         uiLocaleOverride: "en",
         log,
@@ -540,7 +546,7 @@ suite("a path that does not exist is missing, not refused", { timeout: 60000 }, 
       "extensions/plain/out-link": { link: "../../outside" },
     },
     ({ extensionsDir }) => {
-      // src/main/content-scripts.js reports a manifest path that names no file as
+      // src/electron/extensions/internal/content/content-scripts.js reports a manifest path that names no file as
       // MISSING and a path that escapes as REFUSED. A realpath guard that answered
       // null for every unresolvable path would turn the first, honest message into
       // the second, alarming one.
@@ -580,7 +586,7 @@ suite("the i18n and CSS-localisation reads are contained too: an escaping _local
   // never passed a guard. One link, `victim/_locales -> outside`, therefore served the
   // outside JSON to `rozenite://victim/__rozenite_i18n__` (the reviewer's repro),
   // through the route `serveI18nBundle`/`serveLocalizedCss` -> i18n-host. So the
-  // realpath rule lives INSIDE src/main/i18n-host.js, on every path it derives.
+  // realpath rule lives INSIDE src/electron/extensions/internal/registry/i18n-host.js, on every path it derives.
   // The assertion is "the outside bytes never reach the bundle", not "404": a bundle
   // with no catalog is a legitimate answer (an extension with no `_locales` gets one),
   // and it is what `serveI18nBundle` returns here too.
@@ -618,7 +624,7 @@ suite("the i18n and CSS-localisation reads are contained too: an escaping _local
       const root = resolveInsideExtension("victim", "");
       const { log, warnings } = quiet();
       const bundle = i18nHost.loadBundle({
-        root,
+        pkg: packageAt(root),
         extensionId: "victim",
         uiLocaleOverride: "en",
         log,
@@ -631,7 +637,7 @@ suite("the i18n and CSS-localisation reads are contained too: an escaping _local
         i18nHost.localizeManifest({
           manifest: { name: "__MSG_extName__" },
           rawText: '{"name":"__MSG_extName__"}',
-          root,
+          pkg: packageAt(root),
           extensionId: "victim",
           uiLocaleOverride: "en",
           log,
@@ -641,7 +647,7 @@ suite("the i18n and CSS-localisation reads are contained too: an escaping _local
       );
       const css = i18nHost.localizeCssFile({
         text: fs.readFileSync(resolveExtensionFile("victim", "styles/panel.css"), "utf8"),
-        root,
+        pkg: packageAt(root),
         extensionId: "victim",
         uiLocaleOverride: "en",
         log,
@@ -679,7 +685,7 @@ suite("the i18n and CSS-localisation reads are contained too: an escaping _local
       const root = resolveInsideExtension("by-locale", "");
       const { log, warnings } = quiet();
       const bundle = i18nHost.loadBundle({
-        root,
+        pkg: packageAt(root),
         extensionId: "by-locale",
         uiLocaleOverride: "pt",
         log,
@@ -709,7 +715,7 @@ suite("the i18n and CSS-localisation reads are contained too: an escaping _local
       // name every caller starts from.
       const { log, warnings } = quiet();
       const bundle = i18nHost.loadBundle({
-        root: resolveInsideExtension("fake-manifest", ""),
+        pkg: packageFor("fake-manifest"),
         extensionId: "fake-manifest",
         uiLocaleOverride: "pt",
         log,
@@ -754,7 +760,7 @@ suite("the i18n and CSS-localisation reads are contained too: an escaping _local
     () => {
       const { log, warnings } = quiet();
       const bundle = i18nHost.loadBundle({
-        root: resolveInsideExtension("linked-locale", ""),
+        pkg: packageFor("linked-locale"),
         extensionId: "linked-locale",
         uiLocaleOverride: "en",
         log,
@@ -776,7 +782,7 @@ suite("the i18n and CSS-localisation reads are contained too: an escaping _local
 // ── 7. the bundle-cache signature's stamp reads ──────────────────────────────
 suite("the cache signature stamps the contained path, so a relink cannot keep a stale bundle alive", { timeout: 60000 }, () => {
   // The signature beside the cache is built from `stat` of the SAME contained paths the
-  // bundle reads (statStamp in src/main/i18n-host.js). Stamping the raw join instead
+  // bundle reads (statStamp in src/electron/extensions/internal/registry/i18n-host.js). Stamping the raw join instead
   // survives all 638 tests, because its exact failure was never observed: an escaped
   // input reports the OUTSIDE file's mtime and size, so a swap that keeps both
   // identical — byte-identical content, mtime forged with utimes — keeps the stale
@@ -800,7 +806,7 @@ suite("the cache signature stamps the contained path, so a relink cannot keep a 
       // Forge the invisibility of the swap BEFORE anything is cached: identical bytes
       // (the fixture wrote the same JSON to both), and an mtime set to the same value
       // on both sides — the whole-millisecond granularity the stamp commits to
-      // (src/main/i18n-host.js). The comparison is between the two stats rather than
+      // (src/electron/extensions/internal/registry/i18n-host.js). The comparison is between the two stats rather than
       // against the Date handed to utimes, because what a filesystem stores from a
       // Date is its own business (APFS reads back `…510.000` as `…509.999`); equal
       // inputs must produce equal stamps, and these assertions fail HERE — rather than
@@ -818,7 +824,7 @@ suite("the cache signature stamps the contained path, so a relink cannot keep a 
       const extRoot = resolveInsideExtension("stamper", "");
       const load = (logs) =>
         i18nHost.loadBundle({
-          root: extRoot,
+          pkg: packageAt(extRoot),
           extensionId: "stamper",
           uiLocaleOverride: "en",
           log: logs.log,
@@ -848,7 +854,7 @@ suite("the cache signature stamps the contained path, so a relink cannot keep a 
 
       // The other half of the same rule: while the refusal STANDS, the outside file
       // has no path into the signature at all. Repeated loads hit the cache — the
-      // refusal's loudness is per rebuild, not per access (src/main/i18n-host.js) —
+      // refusal's loudness is per rebuild, not per access (src/electron/extensions/internal/registry/i18n-host.js) —
       // and touching the OUTSIDE target changes nothing the host can see. A raw join
       // would churn and re-report on every touch, from outside the folder.
       const stable = quiet();

@@ -1,5 +1,5 @@
-// `runtime.openOptionsPage()` (src/main/options-host.js) and the one-context request
-// queue (src/main/context-request.js), under bare Node.
+// `runtime.openOptionsPage()` (src/electron/extensions/internal/contexts/options-host.js) and the one-context request
+// queue (src/electron/extensions/internal/contexts/context-request.js), under bare Node.
 //
 // Both exist because of the same honesty problem: a verdict or an answer that only
 // someone else can give. The manifest on disk decides whether an options page
@@ -15,8 +15,8 @@ const {
   NO_PAGE,
   createOptionsHost,
   optionsPageOf,
-} = require("../src/main/options-host");
-const { createRequestQueue } = require("../src/main/context-request");
+} = require("../src/electron/extensions/internal/contexts/options-host");
+const { createRequestQueue } = require("../src/electron/extensions/internal/contexts/context-request");
 
 // ── the manifest is the whole authority ──────────────────────────────────────
 test("an options page is read the way Chrome reads it", () => {
@@ -148,11 +148,11 @@ test("a second open focuses the tracked window instead of stacking a second one"
 test("the Electron-backed options host is never built by this suite", () => {
   const fs = require("node:fs");
   const path = require("node:path");
-  const source = fs.readFileSync(path.join(__dirname, "..", "src", "main", "options-host.js"), "utf8");
+  const source = fs.readFileSync(path.join(__dirname, "..", "src", "electron", "extensions", "internal", "contexts", "options-host.js"), "utf8");
   const attach = source.slice(source.indexOf("const attachOptionsHost"));
   assert.match(attach, /require\("electron"\)/, "the real opener is Electron-backed");
   assert.match(attach, /extensionFramePreferences/, "and gives an options page no more privileges than a panel");
-  assert.match(attach, /resolveExtensionFile/, "with the file server's containment rules");
+  assert.match(attach, /packageFor\(extensionId\)[\s\S]*\.entry\(innerPath\)\.kind === "refused"/, "with the package's containment rules");
   const here = fs.readFileSync(__filename, "utf8").replace(/^\s*\/\/.*$/gm, "");
   assert.doesNotMatch(here, /attachOptionsHost\s*\(/);
   assert.doesNotMatch(here, /getOptionsHost\s*\(/);

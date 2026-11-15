@@ -3,7 +3,7 @@
 //
 // Two halves, because the bug this file exists for had two halves.
 //
-// 1. THE MATRIX. `src/main/delivery-scope.js` decides per message, not per
+// 1. THE MATRIX. `src/electron/extensions/internal/broker/delivery-scope.js` decides per message, not per
 //    subscription, because one CDP capture feeds two Chrome APIs: `completed` and
 //    `error` belong to `chrome.devtools.network` (no permission needed in Chrome)
 //    AND to `chrome.webRequest`, while `request` / `sendHeaders` / `response` /
@@ -11,7 +11,7 @@
 //    "no data without the permission" — it is "no webRequest lifecycle without
 //    the permission". Asserted per grant set x per payload kind, against the real
 //    module, with the kind list itself pinned against what the host can actually
-//    push (src/main/network-service.js), so a kind added there cannot go
+//    push (src/electron/extensions/internal/cdp/network-service.js), so a kind added there cannot go
 //    unclassified here.
 //
 // 2. THE LIVE PUSH. Issue #20: `ipc.js` called `deliveryAllowed` without importing
@@ -22,14 +22,14 @@
 //    test could never have caught that, because the function it tested was fine;
 //    only "a real push reaches a real subscribed frame" catches it. That is the
 //    suite below: the production shell in Electron (tests/extension-frame-harness.js)
-//    with the production CDP bridge pointed at a fake inspected app that keeps
+//    with the production CDP session pointed at a fake inspected app that keeps
 //    reporting real CDP traffic (tests/fake-rn-app.js), and the evidence is the
 //    `chrome.webRequest` / `chrome.devtools.network` events a real `rozenite://`
 //    frame observed.
 //
 // The DENY half of the live path is measured from BOTH sides, because each side
 // alone would be a claim: from the FRAME, a permission-less frame's `chrome.webRequest`
-// listeners are withdrawn by the shim's own gate (src/chrome-shim/permission-gate.js),
+// listeners are withdrawn by the shim's own gate (src/electron/extensions/internal/shim/permission-gate.js),
 // so it cannot observe a delivery even if main sent one; and from MAIN, the run
 // records every host->frame push the delivery-scope filter LET THROUGH, so a pre-
 // completion kind that the entitled frame was sent and this frame was not is the
@@ -47,8 +47,8 @@ const path = require("node:path");
 const {
   WEB_REQUEST_ONLY,
   deliveryAllowed,
-} = require("../src/main/delivery-scope");
-const { DELIVERED } = require("../src/main/network-service");
+} = require("../src/electron/extensions/internal/broker/delivery-scope");
+const { DELIVERED } = require("../src/electron/extensions/internal/cdp/network-service");
 
 const { electronBinary, runHarness, stageExtension, consoleLines } = require("./electron-runner");
 
@@ -60,8 +60,8 @@ const { electronBinary, runHarness, stageExtension, consoleLines } = require("./
 const RECORD_KINDS = [...DELIVERED]; // request | sendHeaders | response | completed | error
 const OTHER_KINDS = ["navigated", "status"];
 // `redirect` is webRequest-only too; network-service carries it inside the
-// `request` delivery's `extra` (src/main/network-service.js:104), and
-// src/chrome-shim/network-bridge.js turns a redirectResponse into
+// `request` delivery's `extra` (src/electron/extensions/internal/cdp/network-service.js:104), and
+// src/electron/extensions/internal/shim/network-bridge.js turns a redirectResponse into
 // onBeforeRedirect — the reason it is on the set even though it is not a top-level
 // kind of its own.
 const ALL_KINDS = [...RECORD_KINDS, ...OTHER_KINDS, "redirect"];
@@ -331,8 +331,8 @@ suite(
       root: path.join(root, "run1"),
       extensionsDir,
       hostPage,
-      // Neither port is chosen here. The fake app binds an ephemeral port and the
-      // bridge dials what it got (tests/extension-frame-harness.js reports it on the
+      // No port is chosen here. The fake app binds an ephemeral port and the
+      // host's session dials what it got (tests/extension-frame-harness.js reports it on the
       // `harness` line); asking the OS for a port here, closing it, and hoping it is
       // still free when the child rebinds is a race this suite has no reason to run.
       // The fake app streams one request lifecycle every 400 ms, so a frame that is
@@ -372,7 +372,7 @@ suite(
         `  granted: ${JSON.stringify(granted)}`,
         `  ungranted: ${JSON.stringify(ungranted)}`,
         `  main sent (kind -> count): ${JSON.stringify(sentTo)}`,
-        `  harness: ${JSON.stringify({ fakeAppPort: harnessLine.fakeAppPort, cdpListenPort: harnessLine.cdpListenPort })}`,
+        `  harness: ${JSON.stringify({ fakeAppPort: harnessLine.fakeAppPort, cdpSession: harnessLine.cdpSession })}`,
         `  console: ${consoleLines(run.observed).slice(-15).join(" | ")}`,
         `  output tail: ${String(run.output).slice(-1500)}`,
       ].join("\n");
@@ -381,12 +381,12 @@ suite(
     //    really served traffic through it. Without this, an empty event list below
     //    would be a passing "no data" test rather than a failing delivery test.
     //
-    //    The two ports the harness reports are part of that premise, in this
-    //    direction: a run that bound Metro's 8081 would be attaching to whatever real
-    //    app a developer happens to be running, and measuring that instead of the fake
-    //    one is not a delivery test. Neither is asserted as a specific value: the suite
-    //    asks for no number, and demanding one would put the parent back in charge of
-    //    choosing it — the race this removed.
+    //    The port the harness reports is part of that premise, in this direction: a
+    //    run that bound Metro's 8081 would be attaching to whatever real app a
+    //    developer happens to be running, and measuring that instead of the fake one is
+    //    not a delivery test. It is not asserted as a specific value: the suite asks for
+    //    no number, and demanding one would put the parent back in charge of choosing
+    //    it — the race this removed.
     assert.ok(
       harnessLine.fakeAppPort > 0 && harnessLine.fakeAppPort !== 8081,
       `the fake app did not take Metro's port:${JSON.stringify({
@@ -394,14 +394,17 @@ suite(
       })}${dump()}`
     );
     assert.ok(
-      harnessLine.cdpListenPort > 0 && harnessLine.cdpListenPort !== 9223,
-      `the bridge did not take the port a real frontend dials:${JSON.stringify({
-        cdpListenPort: harnessLine.cdpListenPort,
-      })}${dump()}`
+      harnessLine.cdpSession && harnessLine.cdpSession.attached,
+      `the host's own CDP session attached to the fake app:${dump()}`
+    );
+    const dialled = run.observed.find((line) => line.kind === "fake-app-attached") || {};
+    assert.ok(
+      dialled.origin,
+      `the session dialled with an Origin, which the inspector proxy requires:${dump()}`
     );
     assert.ok(
       fakeApp.enabled,
-      `the model's lazy Network.enable reached the inspected app over the real bridge:${dump()}`
+      `the model's lazy Network.enable reached the inspected app over the host's session:${dump()}`
     );
     assert.ok(
       fakeApp.announced.length > 0,

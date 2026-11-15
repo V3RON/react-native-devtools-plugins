@@ -3,7 +3,7 @@
 **Extension model**
 
 - No extension lifecycle UI: no install/uninstall/reload or permissions prompt. Manifest
-  parsing + enumeration are the shell's job now (`src/main/extensions.js` scans
+  parsing + enumeration are the shell's job now (`src/electron/extensions/internal/registry/extensions.js` scans
   `extensions/` for devtools pages **and** backgrounds and hosts both — see
   [features/DEVTOOLS-PANELS.md](features/DEVTOOLS-PANELS.md) and
   [features/BACKGROUND-WORKER.md](features/BACKGROUND-WORKER.md)), so the frontend needs no
@@ -11,7 +11,7 @@
   frontend installs an extension; there is no watcher or UI.
 - **Background service workers run now** — as an always-on hidden `BrowserWindow` per
   extension, against the same `chrome.*` shim, with `runtime.onInstalled`/`onStartup` firing
-  and the worker as an ordinary messaging peer (`src/main/background-host.js`,
+  and the worker as an ordinary messaging peer (`src/electron/extensions/internal/contexts/background-host.js`,
   [features/BACKGROUND-WORKER.md](features/BACKGROUND-WORKER.md)). Proven headless in a real
   Electron process, including against the shipped `graphql` and `altair` folders. What this
   is **not**: it is not Chrome's MV3 lifecycle — nothing evicts the worker when idle and
@@ -69,7 +69,7 @@
   `XMLHttpRequest` to the frame's own `rozenite://` origin — the one synchronous read a
   frame makes, deliberately not IPC ([features/STORAGE-AND-I18N.md](features/STORAGE-AND-I18N.md)).
 - `chrome.tabs` answers with **one synthetic tab standing for the inspected RN
-  target** (`src/chrome-shim/tabs.js`, [features/SMALL-SHIMS.md](features/SMALL-SHIMS.md)).
+  target** (`src/electron/extensions/internal/shim/tabs.js`, [features/SMALL-SHIMS.md](features/SMALL-SHIMS.md)).
   `query`/`get`/`update` all return that same tab under the id
   `devtools.inspectedWindow.tabId` reports; its `url`/`title` come from `Target.getTargetInfo`
   while a CDP session is attached, and fall back to Chrome's own `about:blank` + `""` when it
@@ -102,7 +102,7 @@
   extensions call `create` from an automated handler (graphql's `onInstalled` opens a
   marketing URL) and launching the user's real browser because a devtools session started is
   a side effect nobody asked for. Even under `external`, only `http:`/`https:` URLs reach
-  `shell.openExternal` (`src/main/external-open.js`, shared with
+  `shell.openExternal` (`src/electron/extensions/internal/services/external-open.js`, shared with
   `InspectorFrontendHost.openInNewTab`): a `file:`/`smb:`/custom-scheme URL is refused, since
   the OS would launch whatever application is registered for it. `window` filters through the
   same check before it creates a window, plus this shell's own `rozenite://<id>/` pages — so
@@ -128,7 +128,7 @@
 - `chrome.devtools.panels.create` is real and shell-driven
   ([features/DEVTOOLS-PANELS.md](features/DEVTOOLS-PANELS.md)), and so are
   `devtools.inspectedWindow.eval` and `.reload` (CDP `Runtime.evaluate` / `Page.reload`
-  over the shell's CDP bridge — see
+  over the host's CDP session — see
   [features/INSPECTED-WINDOW.md](features/INSPECTED-WINDOW.md) for the fidelity and the
   honest-degradation table). `devtools.network` is real too now (`onRequestFinished`,
   `getHAR`, lazy `getContent`), with two documented divergences: `onNavigated` fires on a
@@ -138,9 +138,10 @@
   `inspectedWindow.getResources` / `getSelectedNode` answer with documented no-data — of which
   only `getResources` is open: `getSelectedNode` is 🚷 (no Elements panel, no DOM), see
   [features/INSPECTED-WINDOW.md](features/INSPECTED-WINDOW.md).
-- `inspectedWindow.eval` only answers when the shell's CDP bridge actually has a session:
-  no Metro, no debuggable app, or `DEVTOOLS_CDP_BRIDGE=off` without an external relay all
-  surface as `exceptionInfo.isError` with the host's reason. Nothing is answered from
+- `inspectedWindow.eval` only answers when the host's CDP session is actually attached:
+  no Metro, no debuggable app, a frontend URL without `ws=`, or a target that does not report
+  `supportsMultipleDebuggers` (below) all surface as `exceptionInfo.isError` with the host's
+  reason (`status().reason`). Nothing is answered from
   cache or invented. `inspectedWindow.reload` has no callback in Chrome's API, so the
   same failure shows up as a console warning in the extension frame.
 
@@ -149,29 +150,34 @@
 - Depends on a **private patched RN DevTools fork** served from a Metro dev server at a
   hardcoded URL/port; nothing is packaged. Stock RN DevTools + this shell = no extension
   support.
-- The frontend's CDP endpoint is fixed at `?ws=localhost:<port>` (default 9223) and the
-  bridge keeps **exactly one** upstream debugger session: one RN app target at a time, no
+- The frontend dials Metro's inspector proxy directly (the `?ws=` the development shell takes
+  from Metro's `/json/list`, `src/electron/shell/frontend-target.js`), and the host opens
+  **one** second session to that same target
+  (`src/electron/extensions/internal/cdp/cdp-session.js`): one RN app target at a time, no
   multi-target/device multiplexing (`src/tools/fake-cdp.js` likewise proxies exactly one
   Chrome tab). Target *selection* is filterable (`DEVTOOLS_APP_FILTER` /
   `DEVTOOLS_DEVICE_FILTER`), multiplexing is not.
-  Note that `src/tools/fake-cdp.js` is a plain proxy: it does **not** inherit the F3 access
-  rules below (dev-only tool; a follow-up ticket will cover it).
-- The CDP socket has **one owner**, and a second client is *refused* rather than taking
-  over (`close 4001` + a warning in the shell's terminal). That is a divergence from
-  Chrome, where a second DevTools page evicts the first: here eviction was the attack
-  ([SECURITY-PLATFORM.md](SECURITY-PLATFORM.md) F3), so takeover is a visible refusal.
-  A frontend **reload** still reattaches — the old socket's close frees the seat, and an
-  owner that stops answering pings loses it after the bridge's liveness probe times out
-  (~1 s). There is no shared session and no way to ask politely for the seat.
-- That socket is bound to loopback only and accepts the frontend's own `Origin` (plus
-  `DEVTOOLS_CDP_ALLOWED_ORIGINS`) or no `Origin` at all from a local peer. Consequences:
-  a non-browser tool on this machine connects freely, a web page on any other origin
-  cannot, and serving the frontend from another host needs an explicit
-  `DEVTOOLS_CDP_ALLOWED_ORIGINS` (or `DEVTOOLS_CDP_HOST` to bind elsewhere at all).
+  Note that `src/tools/fake-cdp.js` is a plain proxy listening on `:9223` with no access
+  rules (dev-only tool; a follow-up ticket will cover it), and the host's session does not
+  attach to it, because it does not answer like Metro's `/json/list`.
+- **The host's session needs `supportsMultipleDebuggers`.** Before every dial the host reads
+  `<dev server>/json/list` and connects only if the entry for its `ws=` reports
+  `reactNative.capabilities.supportsMultipleDebuggers === true`, because on a target without
+  it the inspector proxy evicts the previous debugger, which would disconnect the frontend.
+  Upstream dev-middleware forces that capability to `false` unless its
+  `enableStandaloneFuseboxShell` experiment is on, so against a dev server without the
+  experiment there is **no host session**: `inspectedWindow.eval` / `reload`,
+  `devtools.network`, `webRequest`, content scripts and `chrome.tabs` target info fail or
+  report no data with the reason. Panels, storage and messaging keep working. Not yet
+  checked against a device from this checkout.
+- The host's session sends `Origin: <frontend URL origin>` (the dev server's), which is what
+  the inspector proxy accepts. The shell opens no listening CDP socket of its own any more;
+  who may reach the app's debugger is the inspector proxy's rule, not this shell's
+  ([SECURITY-PLATFORM.md](SECURITY-PLATFORM.md) F3, resolved by removing the bridge).
 - Because the frontend URL carries `?ws=`, the frontend build talks to the socket itself
   and `InspectorFrontendHost.sendMessageToBackend` is never called — that Chrome escape
-  hatch is structurally unavailable here, and the host reaches the backend on the socket
-  instead ([features/DISPATCH-CHANNEL.md](features/DISPATCH-CHANNEL.md)).
+  hatch is structurally unavailable here, and the host reaches the backend over its own
+  session instead ([features/DISPATCH-CHANNEL.md](features/DISPATCH-CHANNEL.md)).
 
 **Security & robustness**
 
@@ -182,14 +188,18 @@
   production preload — page-world `require` / `process` / `Buffer` / `ipcRenderer` are
   `undefined`, messaging and Ports still round-trip, and `chrome.*` keeps its shape
   (`tests/extension-frame-electron.test.js`). Preferences live in one place,
-  `src/main/frame-security.js`, with the measurements behind each choice.
+  `src/electron/extensions/internal/contexts/frame-security.js`, with the measurements behind each choice.
+- **`sandbox: true`, done.** A sandboxed preload can only `require` `electron` (and
+  `events`/`timers`/`url`), so both preloads are bundled into one file each
+  (`scripts/bundle-preload.js`, output in gitignored `dist/` folders; `npm start` and the test
+  harnesses rebuild them, `npm run build:preload` builds by hand). Measured by the Electron
+  suites on Electron 38: the session preload still runs in `rozenite://` iframes, and
+  `chrome.*`, messaging, workers and options pages work.
+- Extension channels are installed per WebContents (`webContents.ipc`), never on `ipcMain`:
+  only the attached frontend window and the host's background and options windows have
+  them, so any other WebContents the session preload runs in (a second window, a
+  `chrome.tabs` "window"-policy window) gets "no handler" for every extension channel.
 - Still open, deliberately documented rather than fixed:
-  - **`sandbox: false`.** A sandboxed preload can only `require` Electron's built-in
-    subset, not this repo's preload modules — enabling it means shipping one bundled,
-    self-contained preload file, i.e. the build step this PoC deliberately does not have.
-    Isolation today therefore rests on context isolation plus the fact that the preload
-    exposes only named, validated channels. Frame records show whether a frame is in a
-    separate renderer process; while sandbox is off, that is all the isolation that exists.
   - **`nodeIntegrationInSubFrames: true` stays** — measured: with it off the extension-frame
     preload does not run at all, so no `chrome.*` exists. It is load-bearing, not leftover.
   - Extension frames share the frontend's `WebContents`, so they share its one
@@ -197,11 +207,12 @@
     that would let the two frame classes have different policies. An extension's background
     context already HAS its own `WebContents` (a hidden window) and is given the same policy
     anyway: a worker must not reach more than a panel can
-    (`src/main/frame-security.js` records why that is a decision).
-- **Hidden worker windows are no better sandboxed than panels.** `sandbox: false` applies to
-  them too, so "one hidden window per extension" buys lifecycle separation (a frontend reload
-  does not kill the worker) and a separate renderer process — it does **not** buy a sandbox, a
-  separate partition, or isolation the frontend-hosted iframes lacked. Nothing in the worker
+    (`src/electron/extensions/internal/contexts/frame-security.js` records why that is a decision).
+- **Hidden worker windows are sandboxed exactly like panels, no more.** They get the same
+  policy (`sandbox: true` included), so "one hidden window per extension" buys lifecycle
+  separation (a frontend reload does not kill the worker) and a separate renderer process — it
+  does **not** buy a separate partition, a separate origin, or isolation the frontend-hosted
+  iframes lacked. Nothing in the worker
   context is privileged, but nothing is more contained either.
 - **The `rozenite://` scheme has no per-extension origin isolation, and that is measured, not
   assumed.** The traversal guard stops a path from escaping its own folder inside one request,
@@ -214,13 +225,14 @@
   the scheme (per-extension privileged origins, or an origin check in the handler), which this
   shell does not have. Asserted in `tests/background-worker-electron.test.js` so the gap cannot
   quietly be read as a guard.
-- `sandbox: false` also means a **renderer compromise is a Node compromise**: the guards
-  here limit what an extension page can *ask* for, not what a compromised renderer can do.
+- With `sandbox: true`, a **renderer compromise is no longer a Node compromise**: it also needs
+  an OS sandbox escape. The IPC guards still limit only what an extension page can *ask*
+  for, through the channels its WebContents has.
 - **Permissions now gate capability.** An extension calling an API whose permission it did
   not declare gets a failing call (`runtime.lastError` + rejected promise) and, for
-  `webRequest`, no deliveries at all — enforced twice, in main (`src/main/delivery-scope.js`
+  `webRequest`, no deliveries at all — enforced twice, in main (`src/electron/extensions/internal/broker/delivery-scope.js`
   decides from the manifest **on disk**, so a frame cannot talk itself into data) and in the
-  shim (`src/chrome-shim/permission-gate.js`). Both halves are measured, in one live run of
+  shim (`src/electron/extensions/internal/shim/permission-gate.js`). Both halves are measured, in one live run of
   the production shell with a CDP session (`tests/delivery-scope.test.js`), and each is
   measured by the observation that can actually see it: an entitled panel frame receives
   every `chrome.webRequest` step and `devtools.network`'s finished event; for a frame with
@@ -289,15 +301,29 @@
   `sidePanel` round-trips its configuration, and **`open` rejects** 🚷 rather than resolving,
   because its promise means a panel came up and none can
   ([features/SMALL-SHIMS.md](features/SMALL-SHIMS.md)).
-- **A content script's app→host payloads are also relayed to the DevTools frontend.** The host
-  does not open a second debugger connection — it multiplexes onto the frontend's CDP session by
-  message id (`src/main/cdp-bridge.js`) — and the backend dispatches `Runtime.bindingCalled` to
-  every session on that connection, so every envelope an injected script sends is pushed to the
-  frontend too, base64 blobs included. It is inert there: the frontend's React-DevTools bindings
-  each check the binding NAME before touching a payload (`__FUSEBOX_REACT_DEVTOOLS_DISPATCHER__`,
-  and two more that only install when their panel is open), and the host ignores any name but its
-  own. So this is bandwidth, not corruption — noted because the bridge's own rule for host
-  *replies* is "never forward them", and notifications have no message id to apply that rule to.
+- **Content-script payloads no longer reach the DevTools frontend (fixed).** While the host
+  multiplexed onto the frontend's CDP session by message id (the bridge, since removed), the
+  backend dispatched `Runtime.bindingCalled` to that one session, so every envelope an injected
+  script sent was pushed to the frontend too. It was inert there (the frontend's bindings check
+  the binding name), but it was bandwidth. The host now has its own session
+  (`src/electron/extensions/internal/cdp/cdp-session.js`), and the backend delivers
+  `Runtime.bindingCalled` only to sessions that added that binding, so the host's binding
+  stays in the host's session.
+- **`chrome.debugger` forwards every command, including the ones that act on the whole app.**
+  Each attached extension has a session of its own, so what it enables and hears stays its
+  own. But `Debugger.pause` stops the app under the frontend too, and Hermes has one sampling
+  profiler, so an extension's `Profiler.start`/`stop` can collide with a profile the
+  Performance panel is recording. Nothing marks an attached extension the way Chrome's
+  infobar does. React Native's backend decides what it supports. 0.88 sends no
+  `Network.webSocket*` events unless `fuseboxWebSocketEventsEnabled` is on, and ignores
+  `awaitPromise` ([features/DEBUGGER.md](features/DEBUGGER.md)).
+- **A `.crx` is verified for integrity, not for origin.** The CRX3 signatures are checked
+  as Chromium's verifier checks them (every proof verifies, one key matches the signed id),
+  so a changed file is refused. The Web Store's own signature is not checked, so a `.crx`
+  proves who signed it, not that the Web Store published it. CRX2 and ZIP64 archives are
+  refused. A `.crx` replaced while it is being read can mix the old index with new bytes
+  until its next mtime check; whole-entry reads catch that by CRC, a byte range cannot.
+  A range late in a large deflated entry inflates everything before it on each request.
 - **Per-extension CSP.** Every `rozenite://` response carries that extension's
   `content_security_policy`; an extension declaring none gets Chrome's MV3 default
   (`script-src 'self'; object-src 'self'`, plus `wasm-unsafe-eval` when it has a service
@@ -313,7 +339,8 @@ network path has never been walked against a device from this checkout, and the 
 far from a product: no install/reload UI, content scripts that inject only when a developer
 opts an extension in by hand (that path has now been walked on a device), no MV3 worker
 lifecycle,
-sandbox still off, deep coupling to an unmerged frontend fork.
+no host CDP session against a dev server without `supportsMultipleDebuggers`, deep coupling to
+an unmerged frontend fork.
 
 **Read "far from a product" against the pruned list, not against Chrome.** Some of what looks
 missing here is missing because React Native DevTools has no Elements panel, no DOM, no page,

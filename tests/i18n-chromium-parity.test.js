@@ -15,7 +15,7 @@ const assert = require("node:assert");
 const fs = require("node:fs");
 const path = require("node:path");
 
-const i18n = require("../src/shared/i18n");
+const i18n = require("../src/electron/extensions/internal/registry/i18n");
 
 const REFERENCE = path.join(__dirname, "..", "docs", "evidence", "i18n", "chromium-reference");
 const cases = require(path.join(REFERENCE, "cases.js"));

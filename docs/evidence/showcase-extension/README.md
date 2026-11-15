@@ -116,7 +116,7 @@ same calls succeed directly against Chromium, so that run is not used as evidenc
   The showcase uses only that; the shell now provides it (theme PR) and the card observes a change.
 - **`runtime.sendMessage` reply loss in the shell (visible in the `msg-bg` card, and intermittently
   `msg-dev`: with more extension pages open, which silent peer concludes last varies by run).**
-  `src/main/message-router.js` (`resolveDelivery`) assigns `lastResponse` even for an empty
+  `src/electron/extensions/internal/contexts/message-router.js` (`resolveDelivery`) assigns `lastResponse` even for an empty
   answer, so a silent peer that concludes after the real responder overwrites its reply with
   `undefined`. Chrome keeps the first real response. The cross-frame storage card therefore
   reports what each context heard through storage, not through a reply. The handlers answer synchronously like a

@@ -1,7 +1,7 @@
 // A fake inspected React Native app, for the runs that need the network delivery
 // path to carry REAL CDP traffic (tests/delivery-scope.test.js).
 //
-// It is the same shape tests/network-end-to-end.test.js drives the bridge with,
+// It is the same shape tests/network-end-to-end.test.js drives the session with,
 // run inside the harness's Electron main process instead of a Node test process:
 // Metro's `/json/list`, an `/inspector/debug` debugger socket, and the
 // `Network.*` notifications an RN app emits for one XHR
@@ -19,8 +19,8 @@
 //   - it never invents a body: `Network.getResponseBody` answers for requests it
 //     really announced and refuses anything else with the backend's own wording.
 //
-// Nothing here is production code — it is the peer the production CDP bridge
-// (src/main/cdp-bridge.js) talks to, and it binds 127.0.0.1 only.
+// Nothing here is production code — it is the peer the extension host's CDP session
+// (src/electron/extensions/internal/cdp/cdp-session.js) talks to, and it binds 127.0.0.1 only.
 //
 // This file is also the single home of the CDP lifecycle SHAPE
 // (`cdpRequestLifecycle` below), which tests/network-end-to-end.test.js builds its
@@ -138,7 +138,7 @@ const cdpRequestLifecycle = ({
  * @param {object} options
  * @param {number} [options.port]           port to serve Metro's endpoints on;
  *        0 (the default) lets the OS pick one, and the chosen port is reported back
- *        on the resolved object so the caller can point the bridge at it
+ *        on the resolved object so the caller can point the session at it
  * @param {number} [options.intervalMs]     how often one request lifecycle is emitted
  * @param {(event: object) => void} [options.note] records what the app observed,
  *        in whatever form the caller's harness reports observations
@@ -171,6 +171,12 @@ const startFakeRNApp = ({ port = 0, intervalMs = 500, note = () => {} }) => {
           // The port actually bound, which is the only form that is correct when
           // the caller passed 0 and let the OS choose.
           webSocketDebuggerUrl: `ws://127.0.0.1:${server.address().port}/inspector/debug?device=1&page=1`,
+          // What the extension host's session checks before it dials (cdp-session.js):
+          // a second debugger must not evict the frontend (InspectorProxy.js:277).
+          reactNative: {
+            logicalDeviceId: "1",
+            capabilities: { supportsMultipleDebuggers: true },
+          },
         },
       ])
     );
@@ -213,10 +219,23 @@ const startFakeRNApp = ({ port = 0, intervalMs = 500, note = () => {} }) => {
     note({ kind: "fake-app-lifecycle", requestId, index });
   };
 
-  const wss = new WebSocket.Server({ server, path: "/inspector/debug" });
-  wss.on("connection", (socket) => {
+  // The proxy's own Origin rule (InspectorProxy.js verifyClient): the dev server's
+  // origin or a loopback hostname, and nothing without one.
+  const originAllowed = (origin) => {
+    try {
+      return ["localhost", "127.0.0.1", "[::1]"].includes(new URL(origin).hostname);
+    } catch {
+      return false;
+    }
+  };
+  const wss = new WebSocket.Server({
+    server,
+    path: "/inspector/debug",
+    verifyClient: ({ origin }) => originAllowed(origin),
+  });
+  wss.on("connection", (socket, request) => {
     sockets.add(socket);
-    note({ kind: "fake-app-attached" });
+    note({ kind: "fake-app-attached", origin: request.headers.origin || null });
     socket.on("message", (raw) => {
       let message;
       try {
@@ -268,7 +287,7 @@ const startFakeRNApp = ({ port = 0, intervalMs = 500, note = () => {} }) => {
     server.listen(port, "127.0.0.1", () =>
       resolve({
         // The port actually bound. A caller that passed 0 has no other way to
-        // learn it, and the bridge has to dial exactly this one.
+        // learn it, and the session has to dial exactly this one.
         port: server.address().port,
         stats: () => ({
           commands: [...commands],

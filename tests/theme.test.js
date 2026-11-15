@@ -6,20 +6,20 @@
 const test = require("node:test");
 const assert = require("node:assert");
 
-const { createDevtools } = require("../src/chrome-shim/devtools");
+const { createDevtools } = require("../src/electron/extensions/internal/shim/devtools");
 const {
   createChromeNamespace,
   createExtensionStorage,
   createMemoryBackend,
   createNetworkBridge,
-} = require("../src/chrome-shim");
+} = require("../src/electron/extensions/internal/shim");
 const {
   createThemeHost,
   createThemeReportHandler,
-} = require("../src/main/theme-host");
-const { isFrontendFrame } = require("../src/main/frontend-frame");
-const { createContextRegistry } = require("../src/main/context-registry");
-const { takeThemeHint, stripThemeHintFromUrl, THEME_PARAM } = require("../src/shared/theme");
+} = require("../src/electron/extensions/internal/frontend/theme-host");
+const { isFrontendFrame } = require("../src/electron/extensions/internal/frontend/frontend-frame");
+const { createContextRegistry } = require("../src/electron/extensions/internal/contexts/context-registry");
+const { takeThemeHint, stripThemeHintFromUrl, THEME_PARAM } = require("../src/electron/extensions/internal/frontend/theme");
 
 const makeShim = () => createDevtools({ extensionId: "my-ext" });
 

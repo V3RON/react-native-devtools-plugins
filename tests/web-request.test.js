@@ -1,4 +1,4 @@
-// chrome.webRequest pieces (src/chrome-shim/web-request.js): the CDP -> webRequest
+// chrome.webRequest pieces (src/electron/extensions/internal/shim/web-request.js): the CDP -> webRequest
 // shape, the ResourceType vocabulary, and Chrome's URL-filter matching.
 // Run: npm test
 const test = require("node:test");
@@ -15,7 +15,7 @@ const {
   urlMatchesPattern,
   urlMatchesAny,
   listenerMatches,
-} = require("../src/chrome-shim/web-request");
+} = require("../src/electron/extensions/internal/shim/web-request");
 
 const record = (over = {}) => ({
   requestId: "1",

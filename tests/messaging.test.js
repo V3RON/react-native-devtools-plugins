@@ -1,13 +1,13 @@
-// Runtime messaging tests: router (src/main/message-router.js) + frame-side
-// client (src/chrome-shim/messaging.js) wired together in-process, verifying
+// Runtime messaging tests: router (src/electron/extensions/internal/contexts/message-router.js) + frame-side
+// client (src/electron/extensions/internal/shim/messaging.js) wired together in-process, verifying
 // the Chrome-parity contract rules from docs/features/RUNTIME-MESSAGING.md.
 // Run: npm test
 const test = require("node:test");
 const assert = require("node:assert");
 
-const { createMessageRouter } = require("../src/main/message-router");
-const { createEvent } = require("../src/chrome-shim/event");
-const { createMessagingClient } = require("../src/chrome-shim/messaging");
+const { createMessageRouter } = require("../src/electron/extensions/internal/contexts/message-router");
+const { createEvent } = require("../src/electron/extensions/internal/shim/event");
+const { createMessagingClient } = require("../src/electron/extensions/internal/shim/messaging");
 
 // Build a world: one router + N frames; frame "delivery" calls the client's
 // handleDelivery synchronously (Electron IPC also preserves order).
@@ -51,7 +51,7 @@ const tick = () => new Promise((r) => setImmediate(r));
 
 // The router cannot tell a sender "no peers" from "peers answered nothing" — both come
 // back `undefined` — so a sender that needs the difference asks first. The app-side
-// sender (src/main/content-bridge.js, an injected content script's sendMessage) does.
+// sender (src/electron/extensions/internal/content/content-bridge.js, an injected content script's sendMessage) does.
 test("router.hasPeers: false for a lone frame, true once a peer of one extension exists", async () => {
   const { router, addFrame } = makeWorld();
   addFrame("1:1", "ext-a");
@@ -219,4 +219,26 @@ test("frame dying mid-send settles the request; dying port member gets onDisconn
   const gone = new Promise((resolve) => port.onDisconnect.addListener(() => resolve(port.lastError)));
   router.unregisterFrame("1:3");
   assert.strictEqual((await gone).message, "Port disconnected");
+});
+
+// A worker that is already up answers before a panel that is still booting, and that
+// panel — with no onMessage listener — concludes its leg with `undefined`. The empty
+// leg landing last must not erase the answer (found when background contexts started
+// before the frontend page: tests/storage-electron.test.js).
+test("an empty leg that settles after a real answer does not replace it", async () => {
+  const router = createMessageRouter();
+  const register = (key, send) =>
+    router.registerFrame({ key, extensionId: "ext", url: `rozenite://ext/${key}`, send });
+  const legs = {};
+  register("panel", () => {});
+  register("worker", ({ payload }) => {
+    legs.worker = payload.requestId;
+  });
+  register("panel2", ({ payload }) => {
+    legs.panel2 = payload.requestId;
+  });
+  const reply = router.sendMessage({ fromKey: "panel", message: "ping" });
+  router.resolveDelivery({ fromKey: "worker", requestId: legs.worker, response: "pong" });
+  router.resolveDelivery({ fromKey: "panel2", requestId: legs.panel2, response: undefined });
+  assert.strictEqual(await reply, "pong");
 });

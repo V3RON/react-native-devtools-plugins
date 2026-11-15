@@ -16,7 +16,7 @@ npm run app:install         # the Expo app (app/)
 # 1. terminal A — Metro for the app, with the patched frontend enabled
 npm run app:start           # = WITH_ROZENITE=true expo start (port 8081)
 
-# 2. npm start — the shell attaches to Metro's debugger itself (no separate relay needed)
+# 2. npm start — the shell picks the app from Metro's /json/list itself
 npm start                   # opens the DevTools window
 ```
 
@@ -39,37 +39,39 @@ Notes:
   sentence.
 - `app/` needs a *debuggable* connection to Metro (dev build; Dev Menu →
   "Connect to debugger" if the app doesn't show up in Metro's `/json/list`).
-- The shell runs the CDP bridge in-process (`src/main/cdp-bridge.js`): it discovers the
-  app through Metro's `/json/list` and answers on the frontend's `ws` port. Knobs:
+- The shell picks the app from Metro's `/json/list` (`src/electron/shell/frontend-target.js`:
+  first React Native target, polled until one shows up) and loads the frontend with that
+  target's `?ws=`, so the frontend dials Metro's inspector proxy directly. Knobs:
   `DEVTOOLS_METRO_HOST` / `DEVTOOLS_METRO_PORT`, `DEVTOOLS_APP_FILTER` /
-  `DEVTOOLS_DEVICE_FILTER`, `DEVTOOLS_CDP_PORT`.
-  That port is the inspected app's debugger session, so it is bound to loopback and
-  accepts only the frontend's own `Origin` (or no `Origin` at all from a local peer —
-  that's how `npm run rn-cdp` and the tests connect). Serving the frontend from another
-  host: `DEVTOOLS_CDP_ALLOWED_ORIGINS=http://host:port`. Debugging a device from another
-  machine: `DEVTOOLS_CDP_HOST=<address>` (`--listen-host` for `npm run rn-cdp`) plus that
-  allowlist. One frontend owns the session at a time; a second one is refused, not swapped in.
-  Read the address knob for what it is: the allowlist keeps *browser pages* out, because a
-  browser sends an `Origin` a page cannot forge. Over a raw socket there is no `Origin` at all,
-  and nothing authenticates one — any peer that can reach the port may claim any origin or
-  none. So binding a non-loopback address does not narrow the exposure to "just my frontend":
-  it puts the inspected app's debugger session on that network, for whoever can route to it.
-  That is the operator's call, which is why it is never the default.
+  `DEVTOOLS_DEVICE_FILTER`; a `DEVTOOLS_FRONTEND_URL` that already names a `ws=` is loaded as
+  it is. The extension host opens its own second CDP session to the same target
+  (`src/electron/extensions/internal/cdp/cdp-session.js`), sending the dev server's `Origin`. It
+  dials only when Metro's `/json/list` reports
+  `reactNative.capabilities.supportsMultipleDebuggers: true` for that target, because a second
+  debugger on a target without it would evict the frontend. Without it, CDP-backed extension
+  APIs (`inspectedWindow.eval`, `devtools.network`, `webRequest`, content scripts) fail with
+  the reason; panels, storage and messaging still work. Upstream dev-middleware reports `false`
+  unless its `enableStandaloneFuseboxShell` experiment is on
+  ([docs/LIMITATIONS.md](docs/LIMITATIONS.md)). The shell opens no listening socket for CDP.
+- Every renderer runs sandboxed, so each preload is one bundled file
+  (`scripts/bundle-preload.js`, output in gitignored `dist/` folders). `npm start` rebuilds
+  both bundles at startup; `npm run build:preload` builds them by hand.
 - `chrome.i18n` follows Electron's UI locale (`npm start -- --lang=pt-BR`, or the OS language);
   `DEVTOOLS_UI_LOCALE=ar` overrides it for extensions only. The sample extension ships
   `_locales` for en, pt_BR, de and ar ([docs/features/STORAGE-AND-I18N.md](docs/features/STORAGE-AND-I18N.md)).
-- Want the relay outside the shell (or a Chrome tab as the target)? Set
-  `DEVTOOLS_CDP_BRIDGE=off` and run `npm run rn-cdp` (RN app) or `npm run fake-cdp`
-  (Chrome tab) on that port. The shell's frontend URL is `DEVTOOLS_FRONTEND_URL`
-  (default `http://127.0.0.1:8081/rozenite/rn_fusebox.html?ws=localhost:9223`).
+- Want a Chrome tab as the target? Run `npm run fake-cdp` and point the frontend at it:
+  `DEVTOOLS_FRONTEND_URL='http://127.0.0.1:8081/rozenite/rn_fusebox.html?ws=localhost:9223'`.
+  The shell's frontend URL defaults to `http://127.0.0.1:8081/rozenite/rn_fusebox.html` (no
+  `ws=`, so the shell picks the target as above).
 
 ## What's in the box
 
 - `app/` — Expo test app (SDK 57, blank TS template + Rozenite wiring + REST/GraphQL
   buttons). Its Metro server also serves the patched RN DevTools frontend ("rozenite")
   the Electron shell loads; the frontend itself is not part of this repo.
-- "Installed" extensions are unpacked extension folders in `extensions/`, served under
-  the custom `rozenite://<extension-id>/...` protocol. The shell scans the folder itself —
+- "Installed" extensions are unpacked extension folders in `extensions/`, or signed `.crx`
+  files dropped there (read in place, never unpacked; the id is Chrome's, from the signing
+  key), served under the custom `rozenite://<extension-id>/...` protocol. The shell scans the folder itself —
   no frontend-fork knowledge required:
   - a manifest with `devtools_page` gets a hidden devtools page and its `panels.create`
     calls become real tabs, and `Panel.onShown(window)` / `onHidden` fire as the tab is
@@ -90,12 +92,10 @@ Notes:
     (extensions/showcase/README.md)
 - `src/tools/fake-cdp.js` — standalone CDP proxy that points the frontend at a real Chrome tab
   instead of an RN app (`npm run fake-cdp`, needs Chrome with `--remote-debugging-port=9222`;
-  run the shell with `DEVTOOLS_CDP_BRIDGE=off` so the port is free).
-- `src/tools/rn-cdp.js` — the RN sibling, now a CLI over the shell's own
-  `src/main/cdp-bridge.js`. Only needed to run the relay outside the shell
-  (`DEVTOOLS_CDP_BRIDGE=off npm start` + `npm run rn-cdp`); `--metro-port`, `--app`,
-  `--device` filters. Against `../expo56` the same recipe applies (`WITH_ROZENITE=true
-  npx expo start` there, then `DEVTOOLS_METRO_PORT=<port> npm start` here).
+  it listens on `:9223`, so the frontend URL needs `?ws=localhost:9223`). It feeds the frontend
+  only: the host's own session does not attach, because the tool does not answer like Metro's
+  `/json/list`. Against `../expo56`: `WITH_ROZENITE=true npx expo start` there, then
+  `DEVTOOLS_METRO_PORT=<port> npm start` here.
 
 ## Repository layout
 
@@ -106,7 +106,7 @@ src/
 ├── chrome-shim pure chrome.* logic (storage areas, network bridge; deps injected)
 ├── main/       Electron main process (window, config, extension-server, IPC, state)
 ├── preload/    frontend-host (InspectorFrontendHost) / extension-frame (chrome.* install)
-└── tools/      dev tools (fake-cdp, rn-cdp)
+└── tools/      dev tools (fake-cdp)
 extensions/     "installed extensions" — unpacked extension folders
 docs/           documentation — start at docs/README.md or docs/STRUCTURE.md
 ```

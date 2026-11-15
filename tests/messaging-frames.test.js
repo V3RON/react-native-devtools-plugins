@@ -11,9 +11,9 @@ const assert = require("node:assert");
 const fs = require("node:fs");
 const path = require("node:path");
 
-const { createMessageRouter } = require("../src/main/message-router");
-const { createEvent } = require("../src/chrome-shim/event");
-const { createMessagingClient } = require("../src/chrome-shim/messaging");
+const { createMessageRouter } = require("../src/electron/extensions/internal/contexts/message-router");
+const { createEvent } = require("../src/electron/extensions/internal/shim/event");
+const { createMessagingClient } = require("../src/electron/extensions/internal/shim/messaging");
 
 const REPO = path.join(__dirname, "..");
 
@@ -124,7 +124,7 @@ test("main addresses frames through the registered principal, not a tuple of ids
   // extension frame every runtime/network delivery was dropped and nothing threw.
   // WebFrameMain.send addresses the same object the principal check verified.
   const source = fs
-    .readFileSync(path.join(REPO, "src", "main", "ipc.js"), "utf8")
+    .readFileSync(path.join(REPO, "src", "electron", "extensions", "internal", "broker", "ipc.js"), "utf8")
     .split("\n")
     .filter((line) => !/^\s*(\/\/|\*|\/\*)/.test(line))
     .join("\n");

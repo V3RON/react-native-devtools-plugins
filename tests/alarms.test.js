@@ -1,4 +1,4 @@
-// chrome.alarms on FAKE timers (src/chrome-shim/alarms.js) — GitHub issue #4.
+// chrome.alarms on FAKE timers (src/electron/extensions/internal/shim/alarms.js) — GitHub issue #4.
 //
 // Nothing here waits, and nothing here touches a real clock: `setTimer`/`clearTimer`
 // are injected, so a "tick" is a call this file makes. That is also the point — the
@@ -8,7 +8,7 @@
 const test = require("node:test");
 const assert = require("node:assert");
 
-const { createAlarms, scheduleFor, MIN_DELAY_MS } = require("../src/chrome-shim/alarms");
+const { createAlarms, scheduleFor, MIN_DELAY_MS } = require("../src/electron/extensions/internal/shim/alarms");
 
 /** A clock the test drives by hand. */
 const fakeClock = (start = 1_000_000) => {
@@ -268,9 +268,9 @@ test("an unusable clockScale falls back to real time rather than firing instantl
 });
 
 test("chrome.alarms is gated on the declared alarms permission", async () => {
-  const { createChromeNamespace } = require("../src/chrome-shim");
-  const { createExtensionStorage, createMemoryBackend } = require("../src/chrome-shim/storage");
-  const { createGrantGate } = require("../src/shared/permissions");
+  const { createChromeNamespace } = require("../src/electron/extensions/internal/shim");
+  const { createExtensionStorage, createMemoryBackend } = require("../src/electron/extensions/internal/shim/storage");
+  const { createGrantGate } = require("../src/electron/extensions/internal/broker/permissions");
   const gate = createGrantGate(() => ({ alarms: false }));
   const chrome = createChromeNamespace({
     extensionId: "alarm.local",

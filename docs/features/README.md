@@ -10,10 +10,10 @@ needed. Legend and tiers: [../README.md](../README.md). Last reviewed: 2026-10-1
 | [Extension management & manifest support](EXTENSION-MANAGEMENT.md) | 🟨 scan (pages + backgrounds) + manifest parse + per-extension CSP + permission enforcement + install/version record; no lifecycle UI | 1 | — |
 | [DevTools panels](DEVTOOLS-PANELS.md) (`chrome.devtools.panels`) | 🟨 create + theme + `Panel.onShown/onHidden` work; `sources`/`performance`/`network.getHAR` implementable; `panels.elements.*` 🚷 no anchor | 1 | — |
 | [DevTools network](DEVTOOLS-NETWORK.md) (`chrome.devtools.network`) | 🟨 real CDP model (`Network.*`), unverified on device; `onNavigated` diverges | 1 | RN network inspection |
-| [Inspected window](INSPECTED-WINDOW.md) (`chrome.devtools.inspectedWindow`) | 🟨 `eval` + `reload` real via the CDP bridge; `getResources` open, `getSelectedNode` 🚷 no anchor | 1 | — |
+| [Inspected window](INSPECTED-WINDOW.md) (`chrome.devtools.inspectedWindow`) | 🟨 `eval` + `reload` real over the host's CDP session; `getResources` open, `getSelectedNode` 🚷 no anchor | 1 | — |
 | [Runtime messaging](RUNTIME-MESSAGING.md) (`chrome.runtime`, Ports, event contract) | 🟨 surface + sendMessage + Ports + background peer + `onInstalled`/`onStartup` real | 1 | — |
 | [Storage & i18n](STORAGE-AND-I18N.md) (`chrome.storage`, `chrome.i18n`) | 🟨 storage real for local/sync/session, host-owned per extension with cross-context `onChanged`; managed missing; **i18n real** (sync `getMessage`, `__MSG_` manifest/CSS; `detectLanguage` stub) | 1 | — |
-| [Host→frontend dispatch channel](DISPATCH-CHANNEL.md) (`InspectorFrontendAPI` / `events`) | 🟨 channel live (context-menu round-trip); frontend→backend messaging is structurally unused — the CDP bridge owns the socket | 1 (infrastructure) | — |
+| [Host→frontend dispatch channel](DISPATCH-CHANNEL.md) (`InspectorFrontendAPI` / `events`) | 🟨 channel live (context-menu round-trip); frontend→backend messaging is structurally unused — the host opens its own CDP session | 1 (infrastructure) | — |
 
 ## Tier 2 — real extensions ask for these
 
@@ -28,6 +28,7 @@ needed. Legend and tiers: [../README.md](../README.md). Last reviewed: 2026-10-1
 | [`chrome.alarms`](SMALL-SHIMS.md) → timers | 🟨 real timers + Chrome's argument rules + `onAlarm`; alarms do not outlive the context (no persistence, always-on worker) | 2 | — |
 | [`chrome.downloads`](SMALL-SHIMS.md) → save dialog | 🟨 real saves over the shell's one export path: ids/states/`totalBytes` from main, `onChanged` from what really happened, `onDeterminingFilename` with Chrome's contract; `show`/`showDefaultFolder` inert | 2 | — |
 | [`chrome.action`/`commands`/`contextMenus`/`sidePanel`](SMALL-SHIMS.md) — accept-and-grant shells | 🟨 all four exist with Chrome's shape so a worker naming them loads; `action` renders nothing, `commands.getAll` reads the manifest, `contextMenus` keeps a registry, `sidePanel` round-trips options; of the events with no trigger, only `commands.onCommand` is producible here | 2 | shortcut routing via the Electron app menu (`commands.onCommand`); the rest is 🚷 no toolbar/menu/drawer |
+| [`chrome.debugger`](DEBUGGER.md) → the extension's own CDP session | 🟨 real: attach/detach/sendCommand/getTargets/onEvent/onDetach; commands forwarded unchanged, the app decides what it supports; RN reports no WebSocket events unless `fuseboxWebSocketEventsEnabled` is on | 2 | — (a target with `supportsMultipleDebuggers`) |
 | [Manifest `options_ui`](SMALL-SHIMS.md) → separate window | 🟨 real window over `rozenite://<id>/<page>` with the same frame policy as any extension page; a manifest with none is refused by name | 2 | — |
 | [`panels.elements.createSidebarPane` + context menu](DEVTOOLS-PANELS.md) | 🚷 **no anchor** — no Elements panel, no selected node | — | inert shape only, forever |
 | [`panels.sources` / `panels.performance` / `panels.network.getHAR`](DEVTOOLS-PANELS.md) | ❌ | 2 | — (RN DevTools has both panels; `getHAR` reuses the model that already exists) |
@@ -69,10 +70,10 @@ Both are in [../ROADMAP.md](../ROADMAP.md#what-we-can-actually-implement-the-pru
 ## Dependency sketch
 
 ```
-cdp-bridge (src/main/cdp-bridge.js) ──┬── inspected-window.eval ──► content-scripts
-                                      │   (panels.elements 🚷: no anchor)
-                                      ├── devtools-network ── webRequest
-                                      └── device discovery (later)
+cdp-session (src/electron/extensions/internal/cdp/cdp-session.js) ──┬── inspected-window.eval ──► content-scripts
+  (the host's own session to Metro's proxy, │   (panels.elements 🚷: no anchor)
+   next to the frontend's)                  ├── devtools-network ── webRequest
+                                            └── device discovery (later)
 dispatch-channel ──┬── devtools-panels (events, theme, context menus)
                    └── save/downloads
 extension-management ──► background-worker (live) ──► alarms, tabs, notifications

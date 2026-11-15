@@ -1,13 +1,13 @@
 # `chrome.*` gap analysis
 
-Extension-API surface in real Chrome vs. this shim (`src/chrome-shim` + injected
+Extension-API surface in real Chrome vs. this shim (`src/electron/extensions/internal/shim` + injected
 scripts). Status legend: [../README.md](../README.md) + [README.md](README.md).
 Per-namespace plans live in [../features/README.md](../features/README.md).
 
 ## A. DevTools-only namespaces (must be complete — nothing works otherwise)
 
 - **`devtools.panels`** — `create` 🟨 shell-driven (`chrome.devtools.*` is implemented in
-  `src/chrome-shim/devtools.js`, not by a frontend-injected script); `themeName` /
+  `src/electron/extensions/internal/shim/devtools.js`, not by a frontend-injected script); `themeName` /
   `setThemeChangeHandler` ✅ in devtools/panel frames (the frontend's real theme, `"default"` | `"dark"`,
   correct from the first script; background contexts learn it async, see the Theme section
   of the panels doc); `Panel.onShown(window)`/`onHidden` ✅ real (host-routed to the creating
@@ -27,7 +27,7 @@ Per-namespace plans live in [../features/README.md](../features/README.md).
   [features/DEVTOOLS-NETWORK.md](../features/DEVTOOLS-NETWORK.md).
 - **`devtools.inspectedWindow`** — 🟨 `eval` and `reload` are **real**: CDP
   `Runtime.evaluate` (`returnByValue`, `awaitPromise`) and `Page.reload` over the
-  shell's CDP bridge, answering Chrome's `[value, exceptionInfo]` pair. `frameURL` /
+  host's CDP session, answering Chrome's `[value, exceptionInfo]` pair. `frameURL` /
   `useContentScriptContext` accepted-and-ignored; `getResources` inert (open, implementable) and
   `getSelectedNode` 🚷 (its anchor is the Elements panel, which RN DevTools has no notion of) → [features/INSPECTED-WINDOW.md](../features/INSPECTED-WINDOW.md). (Against a
   real Hermes backend this is asserted by the sample panel, not yet run on a device.)
@@ -45,8 +45,9 @@ Per-namespace plans live in [../features/README.md](../features/README.md).
 | `webRequest` | 9 events + blocking responses, filters, `ResourceType` | 🟨 observe-only: 7 of 9 events from the CDP `Network.*` model with real `ResourceType` and Chrome's match-pattern/glob filters; the other two are registrable but have no CDP counterpart; blocking is infeasible (no CDP `Fetch` in RN backends) and is reported, not pretended → [WEBREQUEST.md](../features/WEBREQUEST.md) |
 | `tabs` | huge surface | 🟨 one synthetic tab = the inspected app target, under the id `devtools.inspectedWindow.tabId` reports; `query`/`get`/`getCurrent`/`update`/`create`/`remove` are real over that one tab, `create` adds an `openedVia` field and opens nothing unless the host is configured to. `sendMessage` is open (its receiver is an opted-in content script). `captureVisibleTab` and the `onUpdated`/`onActivated`/… family are 🚷 — no tab strip or window model to produce them → [SMALL-SHIMS.md](../features/SMALL-SHIMS.md) |
 | `action`, `notifications`, `alarms`, `downloads`, `contextMenus`, `commands`, `sidePanel`, `windows` | browser UI / lifecycle | Tier-2 subset: notifications→Electron `Notification`, alarms→timers, downloads→the shell's save path, `commands.getAll`→the manifest, `contextMenus`→a registry with no menu, `sidePanel`→options that round-trip. The events with no trigger are 🚷 (no toolbar, menu, drawer, or shortcut routing), **except** `commands.onCommand`, which the Electron app menu can produce; `chrome.windows` real behavior is 🚷, its inert shell is open → [SMALL-SHIMS.md](../features/SMALL-SHIMS.md) |
+| `debugger` | `attach`/`detach`/`sendCommand`/`getTargets`, `onEvent`/`onDetach`, Debuggee `tabId`/`extensionId`/`targetId` + `sessionId` | ✅ real over a CDP session of the extension's own to the inspected app, gated on `debugger`; commands forwarded unchanged and answered by the app (React Native refuses what it lacks with `-32601`), backend errors as Chrome's JSON lastError, `onDetach("target_closed")` when the app drops it; `extensionId` debuggees refused → [DEBUGGER.md](../features/DEBUGGER.md) |
 | `scripting` | `executeScript`, `insertCSS/removeCSS`, `registerContentScripts` & co., `ExecutionWorld` | 🟨 `executeScript` is real for the one target: `func` (+ JSON `args`) or `files` evaluated with CDP `Runtime.evaluate`, one `{frameId: 0, result}`; needs the `scripting` permission **and** the `DEVTOOLS_CONTENT_SCRIPTS` opt-in; `MAIN` = the app's global context, `ISOLATED` files run as a content script (own `chrome.runtime`, mesh seat) but are not isolated and resolve `null`; CSS and dynamic registration reject with a reason → [CONTENT-SCRIPTS.md](../features/CONTENT-SCRIPTS.md#chromescriptingexecutescript) |
-| `cookies`, `history`, `bookmarks`, `webNavigation`, `declarativeNetRequest`, `identity`, `gcm`, `offscreen`, `system.*`, `power`, `idle`, `sessions`, `topSites`, `readingList`, `search`, `omnibox`, `proxy`, `privacy`, `debugger`, `management`, `tabCapture`, `pageCapture`, `desktopCapture`, `loginState`, `enterprise.*`, ChromeOS-only | 🚫 | [TIER3-OMITTED.md](../features/TIER3-OMITTED.md) |
+| `cookies`, `history`, `bookmarks`, `webNavigation`, `declarativeNetRequest`, `identity`, `gcm`, `offscreen`, `system.*`, `power`, `idle`, `sessions`, `topSites`, `readingList`, `search`, `omnibox`, `proxy`, `privacy`, `management`, `tabCapture`, `pageCapture`, `desktopCapture`, `loginState`, `enterprise.*`, ChromeOS-only | 🚫 | [TIER3-OMITTED.md](../features/TIER3-OMITTED.md) |
 
 ## C. Cross-cutting contract details
 
@@ -57,10 +58,10 @@ every namespace added from here on:
 1. **Promise + callback dual style everywhere** ✅ done in `storage`, `runtime`, the network
    APIs and every Tier-2 namespace added since (`tabs`, `permissions`, `notifications`,
    `alarms`, `downloads`, `commands`, `contextMenus`, `sidePanel`), all through the one
-   helper in `src/chrome-shim/async-style.js`.
+   helper in `src/electron/extensions/internal/shim/async-style.js`.
 2. **`chrome.runtime.lastError` semantics** ✅ set (and only set) inside error callbacks;
    extensions branch on it.
-3. **Real Event objects** ✅ `src/chrome-shim/event.js`: `addListener` dedupe,
+3. **Real Event objects** ✅ `src/electron/extensions/internal/shim/event.js`: `addListener` dedupe,
    `removeListener` identity semantics, `hasListener`, `hasListeners` — shared by storage,
    runtime and both network namespaces.
 4. **Port messaging with structured cloning** (`runtime.connect`) — Redux DevTools and

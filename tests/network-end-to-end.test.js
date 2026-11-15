@@ -1,12 +1,12 @@
 // End-to-end network model: a fake RN app that speaks CDP over a real WebSocket,
-// the real CDP bridge (src/main/cdp-bridge.js), the real main-process service
-// (src/main/network-service.js) and the real frame-side shim
-// (src/chrome-shim/network-bridge.js) wired together the way
-// src/main/ipc.js + src/preload/extension-frame.js wire them in the app.
+// the host's real CDP session (src/electron/extensions/internal/cdp/cdp-session.js), the real main-process service
+// (src/electron/extensions/internal/cdp/network-service.js) and the real frame-side shim
+// (src/electron/extensions/internal/shim/network-bridge.js) wired together the way
+// src/electron/extensions/internal/broker/ipc.js + src/electron/extensions/internal/preload/extension-frame.js wire them in the app.
 //
 // This is the layer unit tests cannot prove: the notifications travel a real
 // socket, the `Network.enable` an extension's first listener triggers is a real
-// CDP command with a host-allocated id, and a response body comes back through
+// CDP command on the host's own session, and a response body comes back through
 // `Network.getResponseBody` instead of from a constant.
 // Run: npm test
 const test = require("node:test");
@@ -14,11 +14,11 @@ const assert = require("node:assert");
 const http = require("http");
 const WebSocket = require("ws");
 
-const { createCdpBridge, HOST_ID_BASE } = require("../src/main/cdp-bridge");
-const { createNetworkService } = require("../src/main/network-service");
-const { createNetworkBridge } = require("../src/chrome-shim/network-bridge");
-const { createChromeNamespace } = require("../src/chrome-shim");
-const { createMemoryBackend, createExtensionStorage } = require("../src/chrome-shim/storage");
+const { createCdpSession } = require("../src/electron/extensions/internal/cdp/cdp-session");
+const { createNetworkService } = require("../src/electron/extensions/internal/cdp/network-service");
+const { createNetworkBridge } = require("../src/electron/extensions/internal/shim/network-bridge");
+const { createChromeNamespace } = require("../src/electron/extensions/internal/shim");
+const { createMemoryBackend, createExtensionStorage } = require("../src/electron/extensions/internal/shim/storage");
 const { cdpRequestLifecycle } = require("./fake-rn-app");
 
 // ── fake RN app: /json/list plus one /inspector/debug socket ─────────────────
@@ -76,6 +76,7 @@ function createFakeApp() {
           appId: "devtools-poc",
           deviceName: "iPhone 17 Pro",
           webSocketDebuggerUrl: `ws://127.0.0.1:${server.address().port}/inspector/debug?device=1&page=1`,
+          reactNative: { logicalDeviceId: "1", capabilities: { supportsMultipleDebuggers: true } },
         },
       ])
     );
@@ -126,22 +127,18 @@ function createFakeApp() {
       }),
     commands: (method) => commands.filter((m) => !method || m.method === method),
     refuse: (method, message) => refusals.set(method, message),
+    /** drop every debugger socket, the way a proxy restart or a device blip does */
+    drop: () => {
+      for (const socket of sockets) socket.terminate();
+    },
+    /** how many debugger sockets are open */
+    connected: () => sockets.size,
     /** push a CDP notification to every connected debugger client */
     push: (message) => {
       for (const socket of sockets) socket.send(JSON.stringify(message));
     },
   };
 }
-
-const freePort = () =>
-  new Promise((resolve, reject) => {
-    const probe = new WebSocket.Server({ port: 0, host: "127.0.0.1" });
-    probe.once("listening", () => {
-      const { port } = probe.address();
-      probe.close(() => resolve(port));
-    });
-    probe.once("error", reject);
-  });
 
 const waitFor = async (predicate, { timeoutMs = 4000, intervalMs = 5 } = {}) => {
   const deadline = Date.now() + timeoutMs;
@@ -158,7 +155,7 @@ const settle = (ms = 20) => new Promise((resolve) => setTimeout(resolve, ms));
  * The whole stack with one extension frame attached: fake app ⇄ real bridge ⇄
  * real service ⇄ real shim. `hostToFrame` is the push channel
  * (webContents.send in the app) and the four `invoke*` functions are the
- * ipcMain.handle calls of src/main/ipc.js.
+ * ipcMain.handle calls of src/electron/extensions/internal/broker/ipc.js.
  */
 async function makeWorld(t, { app = () => {} } = {}) {
   const fakeApp = createFakeApp();
@@ -166,21 +163,20 @@ async function makeWorld(t, { app = () => {} } = {}) {
   app(fakeApp);
 
   const logs = [];
-  const bridgeUnderTest = createCdpBridge({
-    metroHost: "127.0.0.1",
-    metroPort: appPort,
-    listenHost: "127.0.0.1",
-    listenPort: await freePort(),
-    pollIntervalMs: 20,
+  const sessionUnderTest = createCdpSession({
+    reconnectMinMs: 20,
     requestTimeoutMs: 2000,
     log: (level, message) => logs.push(`${level}: ${message}`),
   });
-  await bridgeUnderTest.start();
+  const frontendUrl = new URL(`http://127.0.0.1:${appPort}/rozenite/rn_fusebox.html`);
+  frontendUrl.searchParams.set("ws", `127.0.0.1:${appPort}/inspector/debug?device=1&page=1`);
+  await sessionUnderTest.open(frontendUrl.href);
 
   const service = createNetworkService({
-    sendCommand: (method, params, opts) => bridgeUnderTest.sendCommand(method, params, opts),
-    onEvent: (method, handler) => bridgeUnderTest.onEvent(method, handler),
-    bridgeStatus: () => bridgeUnderTest.status(),
+    sendCommand: (method, params, opts) => sessionUnderTest.sendCommand(method, params, opts),
+    onEvent: (method, handler) => sessionUnderTest.onEvent(method, handler),
+    onAttach: (handler) => sessionUnderTest.onAttach(handler),
+    sessionStatus: () => sessionUnderTest.status(),
     log: (level, message) => logs.push(`${level}: ${message}`),
   });
 
@@ -207,13 +203,13 @@ async function makeWorld(t, { app = () => {} } = {}) {
 
   t.after(async () => {
     service.dispose();
-    await bridgeUnderTest.stop();
+    await sessionUnderTest.close();
     await fakeApp.close();
   });
 
   return {
     app: fakeApp,
-    bridge: bridgeUnderTest,
+    session: sessionUnderTest,
     service,
     shim,
     chrome,
@@ -222,7 +218,7 @@ async function makeWorld(t, { app = () => {} } = {}) {
     /** every network payload the host has pushed to this frame */
     networkSteps: () =>
       deliveries.map((d) => d.payload || d).filter((p) => p.kind !== "status" && p.kind !== "navigated"),
-    attached: () => waitFor(() => bridgeUnderTest.isAttached()),
+    attached: () => waitFor(() => sessionUnderTest.isAttached()),
     observing: () => waitFor(() => service.getStatus().available),
   };
 }
@@ -245,7 +241,6 @@ test("one live CDP session feeds webRequest, devtools.network and HAR with real 
   await world.observing();
   const enables = world.app.commands("Network.enable");
   assert.strictEqual(enables.length, 1, "an extension's first listener is what asks the app for the domain");
-  assert.ok(enables[0].id >= HOST_ID_BASE, "the host allocates its own ids on the shared socket");
 
   for (const notification of graphqlExchange()) world.app.push(notification);
   await waitFor(() => finished.length > 0);
@@ -512,6 +507,26 @@ test("an app reload re-arms Network.enable exactly once and captures again", asy
   await waitFor(() => world.app.commands("Network.enable").length > 1);
   assert.strictEqual(world.app.commands("Network.enable").length, 2, "exactly one re-arm");
   await world.observing();
+
+  const finished = [];
+  world.chrome.devtools.network.onRequestFinished.addListener((request) => finished.push(request));
+  for (const notification of graphqlExchange()) world.app.push(notification);
+  await waitFor(() => finished.length > 0);
+  assert.strictEqual(finished[0].response.status, 200);
+});
+
+test("a new debugger session re-arms Network.enable: the domain is enabled per session", async (t) => {
+  const world = await makeWorld(t);
+  await world.attached();
+  world.chrome.webRequest.onBeforeRequest.addListener(() => {}, { urls: ["<all_urls>"] });
+  await world.observing();
+  assert.strictEqual(world.app.commands("Network.enable").length, 1);
+
+  // The socket goes away and the session re-dials. The new session never sees an
+  // executionContextsCleared for the old one, so only onAttach can say "enable again".
+  world.app.drop();
+  await waitFor(() => world.app.commands("Network.enable").length === 2);
+  await waitFor(() => world.app.connected() === 1);
 
   const finished = [];
   world.chrome.devtools.network.onRequestFinished.addListener((request) => finished.push(request));

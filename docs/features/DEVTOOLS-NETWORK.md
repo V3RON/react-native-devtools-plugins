@@ -4,7 +4,7 @@
 | --- | --- |
 | **Status** | 🟨 real CDP-backed model (`Network.*`), unverified on a device — `onNavigated` diverges, HAR gaps stay unknowns |
 | **Tier** | 1 |
-| **Blocked by** | RN network inspection (the CDP transport exists: [src/main/cdp-bridge.js](../../src/main/cdp-bridge.js)) |
+| **Blocked by** | RN network inspection (the CDP transport exists: the host's own session, [src/electron/extensions/internal/cdp/cdp-session.js](../../src/electron/extensions/internal/cdp/cdp-session.js), which needs a target reporting `supportsMultipleDebuggers`) |
 
 The remaining open work here is one thing: **the device run** from this checkout
 ([../ROADMAP.md](../ROADMAP.md#what-we-can-actually-implement-the-pruned-list), item 1). What
@@ -29,22 +29,22 @@ The model is real and the fake data is gone. One capture, in main, feeding both 
 and [WEBREQUEST.md](WEBREQUEST.md):
 
 ```
-RN app ⇄ cdp-bridge ──onEvent("*")──► network-model.js ──► network-service.js ──IPC──► network-bridge.js
-                    └──sendCommand("Network.enable" / "Network.getResponseBody")            ├─ chrome.devtools.network
-                                                                                            └─ chrome.webRequest
+RN app ⇄ Metro proxy ⇄ cdp-session ──onEvent("*")──► network-model.js ──► network-service.js ──IPC──► network-bridge.js
+   (the frontend has its    └──sendCommand("Network.enable" / "Network.getResponseBody")             ├─ chrome.devtools.network
+    own session, untouched)                                                                          └─ chrome.webRequest
 ```
 
-- [src/main/network-model.js](../../src/main/network-model.js) accumulates one record per
+- [src/electron/extensions/internal/cdp/network-model.js](../../src/electron/extensions/internal/cdp/network-model.js) accumulates one record per
   CDP `requestId` from `requestWillBeSent`, `requestWillBeSentExtraInfo`,
   `responseReceived`, `dataReceived`, `loadingFinished`, `loadingFailed` — plus the
   HAR 1.2 mapping (`buildHar`, `toHarEntry`) and the lazy `Network.getResponseBody`
   lookup that honours the backend's `base64Encoded` flag.
-- [src/main/network-service.js](../../src/main/network-service.js) fans one message per
+- [src/electron/extensions/internal/cdp/network-service.js](../../src/electron/extensions/internal/cdp/network-service.js) fans one message per
   lifecycle step out to the frames that asked for network data, and serves
   `getHar` / `getStatus` / `getBody` over async IPC
   (`NETWORK_SUBSCRIBE` / `NETWORK_GET_HAR` / `NETWORK_GET_STATUS` / `NETWORK_GET_BODY` /
-  `NETWORK_DELIVER` in [src/shared/ipc.js](../../src/shared/ipc.js)).
-- [src/chrome-shim/network-bridge.js](../../src/chrome-shim/network-bridge.js) builds the
+  `NETWORK_DELIVER` in [src/electron/extensions/internal/broker/channels.js](../../src/electron/extensions/internal/broker/channels.js)).
+- [src/electron/extensions/internal/shim/network-bridge.js](../../src/electron/extensions/internal/shim/network-bridge.js) builds the
   Chrome objects: `Request` with lazy `getContent`/`getRequestContent`, `getHAR` (promise
   **and** callback), real Event objects, and webRequest's filters. The shim decides which
   Chrome event each lifecycle step becomes; it never invents a value.
@@ -70,9 +70,9 @@ entries too.
 - **Bounded**: a 500-record ring buffer. Eviction only ever drops the oldest *settled*
   record, so an in-flight request can never be lost mid-flight; an evicted record's body
   then honestly reports itself as unknown.
-- **Re-armed**: a bundle reload (`Runtime.executionContextsCleared`) or a host-count
-  change (`Network.disable`, `HostAgent.cpp:435`) means the old session's enable is gone,
-  so the model re-enables. A refused enable backs off for 10s rather than hammering.
+- **Re-armed**: a bundle reload (`Runtime.executionContextsCleared`), a host-count
+  change (`Network.disable`, `HostAgent.cpp:435`) or a new host session after a re-dial
+  (`onAttach`) means the old enable is gone, so the model re-enables. A refused enable backs off for 10s rather than hammering.
 
 ### Visible degradation
 
@@ -130,17 +130,19 @@ calling it real, on a device:
    the domain compiled out and the extension will correctly report "no network data".
 3. Confirm the multi-host refusal never triggers for a single-host app.
 
-**Read before designing further on top of the bridge** (details in
+**Read before designing further on top of the host's session** (details in
 [INSPECTED-WINDOW.md](INSPECTED-WINDOW.md#open-risk-for-the-next-layer-devtoolsnetwork)):
 
 - `Network.enable` is refused with an **error** when the app has more than one registered
   RN host (`HostAgent.cpp:150`), and `emitSystemStateChanged` emits a `Network.disable`
   notification when that count changes. That count is about *hosts in the app*, not
-  debugger sessions — so the bridge is not the trigger, but a multi-root app could be.
+  debugger sessions — so the host's second session is not the trigger, but a multi-root app
+  could be.
 - `NetworkHandler` (`network/NetworkHandler.cpp:40`) supports several enabled agents and
-  broadcasts to all of them, so a second `Network.enable` caller does not starve the
-  frontend's own Network panel — it just doubles the event traffic on one socket. This is
-  why `Network.enable` here is lazy: the frontend and Rozenite's middleware ask for it too.
+  broadcasts to all of them, so the host's `Network.enable` on its own session does not
+  starve the frontend's own Network panel — each enabled session gets its own copy of the
+  events. This is why `Network.enable` here is lazy: the frontend and Rozenite's middleware
+  ask for it too.
 - Network inspection is gated by `InspectorFlags::getNetworkInspectionEnabled()` =
   `enableBridgelessArchitecture() && fuseboxNetworkInspectionEnabled()`, and Metro's
   `enableNetworkInspector` experiment (which adds `unstable_enableNetworkPanel=true` to

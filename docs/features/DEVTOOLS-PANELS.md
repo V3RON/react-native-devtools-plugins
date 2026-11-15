@@ -27,15 +27,15 @@
 
 ## How it works here today — shell-driven, no fork knowledge
 
-1. **Scan**: `src/main/extensions.js` enumerates `extensions/` folders and parses each
+1. **Scan**: `src/electron/extensions/internal/registry/extensions.js` enumerates `extensions/` folders and parses each
    `manifest.json`; every folder with a `devtools_page` is "installed".
-2. **Boot**: `src/main/panel-host.js` evaluates `src/frontend/panel-bridge.js` into the
+2. **Boot**: `src/electron/extensions/internal/frontend/panel-host.js` evaluates `src/electron/extensions/internal/frontend/panel-bridge.js` into the
    frontend's main world on every page load (waiting for `.main-tabbed-pane`, the same
    readiness signal Rozenite's `host.js` uses). The bridge dynamically imports the
    frontend's own `ui/legacy/legacy.js` — the very module instance the app already
    loaded — and spawns one hidden `rozenite://<id>/<devtools_page>` iframe per extension.
 3. **Shim**: the extension-frame preload arms those frames with `chrome.*`, including
-   `chrome.devtools.*` (`src/chrome-shim/devtools.js`) — installed for **every**
+   `chrome.devtools.*` (`src/electron/extensions/internal/shim/devtools.js`) — installed for **every**
    extension frame, matching Chrome where devtools APIs reach panel pages too.
 4. **Panels**: `chrome.devtools.panels.create` → `EXT_PANEL_CREATE` IPC (identity taken
    from the calling frame, never from payload) → the panel host asks the bridge to
@@ -57,7 +57,7 @@ channel (fork-provided devtools script) remains, unused by the stock frontend.
 
 1. **Detect.** The bridge hooks `wasShown`/`willHide` on the panel's `SimpleView` (the
    widget lifecycle, so tab clicks, keyboard navigation, the overflow menu and `showPanel`
-   all count) and reports through `window.__SHELL_HOST__.reportPanelVisible(panelId, shown)`
+   all count) and reports through `window.__RN_DEVTOOLS_EXTENSIONS__.reportPanelVisible(panelId, shown)`
    (exposed by the frontend preload next to `reportTheme`) → `EXT_PANEL_VISIBILITY` IPC.
    The view is `setHideOnDetach()`, as the frontend's own `ExtensionView` does, so the panel
    page **stays alive** across hide/show like Chrome's (its document, scroll position and JS
@@ -69,7 +69,7 @@ channel (fork-provided devtools script) remains, unused by the stock frontend.
    A reloaded devtools page re-creates its panels, dedupe keeps the tab, and the new frame
    takes the seat over — but **only a frame of the same extension may**, and the panel id is
    injective across extensions (`ext.<len>.<extensionId>.<path>`, `panelIdFor` in
-   `src/shared/protocol.js`), so one extension can neither take over nor collide with
+   `src/electron/extensions/internal/scheme/protocol.js`), so one extension can neither take over nor collide with
    another's panel. `panels.create` also refuses a `pagePath` that is not an existing file of
    the calling extension. A frontend reload clears the "shown" set; replayed panels start
    hidden.
@@ -80,7 +80,7 @@ channel (fork-provided devtools script) remains, unused by the stock frontend.
    Devtools page and panel page are both `rozenite://<id>`, so the window is fully scriptable
    (the sample extension writes into the panel's DOM through it). `window.parent.frames`
    cannot be used: the panel frame sits in a shadow tree. The frontend window denies **every**
-   `window.open` (`src/main/window-open-policy.js`; nothing here needs one — `openInNewTab`
+   `window.open` (`src/electron/shell/window-open-policy.js`; nothing here needs one — `openInNewTab`
    goes through the host), so a name that matches no frame — or another extension's panel,
    which is cross-origin — gives `null`/an opaque proxy instead of spawning a window.
    - The **first** show is reported once the panel iframe has **loaded** (or after a 1.5 s
@@ -94,7 +94,7 @@ channel (fork-provided devtools script) remains, unused by the stock frontend.
 
 ### `showPanel` (host -> frontend)
 
-`panelHost.showPanel(panelId)` (`src/main/panel-host.js`) selects a hosted panel's tab over the
+`panelHost.showPanel(panelId)` (`src/electron/extensions/internal/frontend/panel-host.js`) selects a hosted panel's tab over the
 dispatch channel: `dispatchToFrontend("showPanel", [panelId])` → `InspectorFrontendAPI.showPanel`
 → the frontend's own `InspectorView` listener → `ViewManager.showView`. The id is checked
 against the live registry (the frontend is only asked to show views this shell created),
@@ -116,10 +116,10 @@ bridge asks *it*, not the OS:
    (setting switched, or the system theme flipped while the setting is "System preference").
    This is best effort and bounded (try/catch, 2 s cap): if the module moved or the IPC
    hangs, panels are still created and the theme stays `"default"`.
-2. The report is one async IPC, `THEME_REPORT` (`window.__SHELL_HOST__.reportTheme`,
+2. The report is one async IPC, `THEME_REPORT` (`window.__RN_DEVTOOLS_EXTENSIONS__.reportTheme`,
    exposed by the frontend preload). Main accepts it only from the frontend window's own
    main frame (`isFrontendFrame`, decided by frame — never from an extension iframe),
-   checks the frame before it reads the payload, and `src/main/theme-host.js` refuses
+   checks the frame before it reads the payload, and `src/electron/extensions/internal/frontend/theme-host.js` refuses
    anything but the two names.
 3. A real change is broadcast to **every** registered extension context (devtools pages,
    panel pages, background contexts) as a `RUNTIME_DELIVER` `{kind: "theme"}` push through
@@ -132,7 +132,7 @@ bridge asks *it*, not the OS:
    page scripts, validates the hint against the two names, sets `themeName` from it
    synchronously and removes it from the address with `history.replaceState` — the
    extension's own query string (encoding, order, repeats) and hash are kept byte for byte
-   (`src/shared/theme.js`). Frames without a hint (background contexts, options pages) and
+   (`src/electron/extensions/internal/frontend/theme.js`). Frames without a hint (background contexts, options pages) and
    all frames, as a fallback, take the theme from their `RUNTIME_REGISTER` reply, which wins
    over the hint if they disagree. The bridge omits the hint when it could not read the theme
    (a guessed "default" would boot a dark frontend's frames wrong).

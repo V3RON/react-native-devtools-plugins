@@ -1,5 +1,5 @@
 // chrome.devtools.network + chrome.webRequest as extension frames see them
-// (src/chrome-shim/network-bridge.js): host deliveries fan out to both APIs,
+// (src/electron/extensions/internal/shim/network-bridge.js): host deliveries fan out to both APIs,
 // Chrome's Event/listener semantics hold, bodies are fetched lazily with the
 // backend's base64 flag, and every unavailable path stays visibly unavailable.
 //
@@ -10,9 +10,9 @@
 const test = require("node:test");
 const assert = require("node:assert");
 
-const { createNetworkBridge } = require("../src/chrome-shim/network-bridge");
-const { createChromeNamespace } = require("../src/chrome-shim");
-const { createMemoryBackend, createExtensionStorage } = require("../src/chrome-shim/storage");
+const { createNetworkBridge } = require("../src/electron/extensions/internal/shim/network-bridge");
+const { createChromeNamespace } = require("../src/electron/extensions/internal/shim");
+const { createMemoryBackend, createExtensionStorage } = require("../src/electron/extensions/internal/shim/storage");
 
 const tick = () => new Promise((resolve) => setTimeout(resolve, 5));
 
@@ -414,7 +414,7 @@ test("getHAR subscribes lazily: the first read is what asks the host for data", 
 });
 
 test("panels.network.getHAR is the same HAR, and the empty answer is still valid", async () => {
-  const { createDevtools } = require("../src/chrome-shim/devtools");
+  const { createDevtools } = require("../src/electron/extensions/internal/shim/devtools");
   const { bridge } = makeBridge();
   const { namespace } = createDevtools({
     extensionId: "graphql",

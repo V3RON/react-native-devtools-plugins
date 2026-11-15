@@ -1,0 +1,55 @@
+// The development shell's Electron entry point: bootstrap and lifecycle wiring only.
+//
+// It stands in for upstream's @react-native/debugger-shell (index.flow.js +
+// MainInstanceEntryPoint.js) and reaches the extension host through its public API
+// only (src/electron/extensions/index.js), at the same call sites the spec gives
+// upstream (docs/SPEC-DEBUGGER-SHELL-EXTENSIONS.md §5.2). Everything else here — the
+// InspectorFrontendHost replacement, its IPC, the env config — is this repository's
+// development shell and is not ported.
+const { app, BrowserWindow } = require("electron");
+
+// Both preloads run sandboxed, so each is one bundled file. A development run rebuilds
+// them from source first; `npm run build:preload` does the same by hand.
+if (!app.isPackaged) {
+  require("../../../scripts/bundle-preload").buildPreloads();
+}
+
+const { registerExtensionSchemes, createExtensionHost } = require("../extensions");
+const config = require("./config");
+const { createWindow } = require("./window");
+const { registerShellIpcHandlers } = require("./ipc");
+const { resolveFrontendURL } = require("./frontend-target");
+
+// Before 'ready': the scheme's privileges can only be registered now.
+registerExtensionSchemes();
+
+let extensionHost = null;
+
+app.whenReady().then(async () => {
+  registerShellIpcHandlers();
+  extensionHost = createExtensionHost(config.extensionHostConfig());
+  // Upstream gets this from dev-middleware's --frontendUrl; this shell picks the target.
+  const frontendURL = await resolveFrontendURL(config);
+  createWindow(extensionHost, frontendURL);
+
+  app.on("activate", () => {
+    if (BrowserWindow.getAllWindows().length === 0) {
+      createWindow(extensionHost, frontendURL);
+    }
+  });
+});
+
+// Background contexts are hidden windows of the attached frontend window and close
+// with it (the extension host detaches on the window's `closed`), so the last visible
+// window closing is the last window closing.
+app.on("window-all-closed", () => {
+  if (process.platform !== "darwin") {
+    app.quit();
+  }
+});
+
+app.on("will-quit", () => {
+  if (extensionHost) {
+    extensionHost.dispose().catch(() => {});
+  }
+});

@@ -1,4 +1,4 @@
-// The host half of `chrome.tabs.sendMessage` (src/main/tab-send.js), where the two
+// The host half of `chrome.tabs.sendMessage` (src/electron/extensions/internal/services/tab-send.js), where the two
 // properties that matter live: the receiver is chosen from the CALLER's identity, and a
 // context that reached nothing is a failure rather than an empty success
 // (docs/features/CONTENT-SCRIPTS.md, GitHub issue #5).
@@ -9,8 +9,8 @@
 const test = require("node:test");
 const assert = require("node:assert");
 
-const { deliverTabMessage, extensionIdOfFrame } = require("../src/main/tab-send");
-const { createMessageRouter } = require("../src/main/message-router");
+const { deliverTabMessage, extensionIdOfFrame } = require("../src/electron/extensions/internal/services/tab-send");
+const { createMessageRouter } = require("../src/electron/extensions/internal/contexts/message-router");
 
 const CALLER_URL = "rozenite://ext-a/panel.html";
 const APP_KEY = "rozenite-app:ext-a";

@@ -222,7 +222,7 @@ suite(
       contextIsolation: true,
       webSecurity: true,
       allowRunningInsecureContent: false,
-      sandbox: false,
+      sandbox: true,
     });
 
     // ── no Node / Electron surface in the page world ───────────────────────
@@ -393,8 +393,8 @@ suite(
 );
 
 test("the harness records the frame tree so isolation claims stay measurable", () => {
-  // Not a guarantee — a record. While sandbox is false the extension frame is a
-  // separate renderer process but not a sandboxed one, and this test exists so
+  // Not a guarantee — a record. The extension frame's renderer is sandboxed
+  // (FRAME_POLICY), and whether it is a separate process is what this records, so
   // the docs cannot quietly start describing more than that.
   const source = fs.readFileSync(HARNESS, "utf8");
   assert.match(source, /framesInSubtree/);

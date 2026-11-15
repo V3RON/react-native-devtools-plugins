@@ -55,14 +55,15 @@ Altair, Lighthouse, Wiztree…) actually rely on, in rough order of importance:
 - A mechanism (repurposed `setInjectedScriptForOrigin` + per-origin re-injection) for the
   frontend to inject its devtools-API implementation into extension frames.
 - A CDP man-in-the-middle (`src/tools/fake-cdp.js`) to test the stack against web targets.
-- The shell holds the RN debugger session itself (`src/main/cdp-bridge.js`: Metro target
-  discovery, re-attach, host commands multiplexed by message id onto the frontend's
-  session), which makes `chrome.devtools.inspectedWindow.eval` return real values from a
-  running app — the first working bridge to the target.
+- The extension host opens its own CDP session to the app, next to the frontend's
+  (`src/electron/extensions/internal/cdp/cdp-session.js`: a second debugger on the same
+  Metro inspector-proxy target, gated on `supportsMultipleDebuggers`, re-dialled with
+  back-off), which makes `chrome.devtools.inspectedWindow.eval` return real values from a
+  running app.
 - An extension's `background.js` **runs**. Each extension that declares a background gets an
   always-on hidden window against the same shim, with `runtime.onInstalled`/`onStartup` firing
   and the worker as an ordinary messaging peer — which is the context GraphQL's and Altair's
-  real logic lives in (`src/main/background-host.js`,
+  real logic lives in (`src/electron/extensions/internal/contexts/background-host.js`,
   [features/BACKGROUND-WORKER.md](features/BACKGROUND-WORKER.md)).
 
 See [LIMITATIONS.md](LIMITATIONS.md) for what this prototype is *not*.

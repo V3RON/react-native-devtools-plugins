@@ -2,9 +2,9 @@
 
 | | |
 | --- | --- |
-| **Status** | 🟨 partial — `eval` and `reload` are real (CDP `Runtime.evaluate` / `Page.reload` over the shell's own bridge); `getSelectedNode` is 🚷 (no Elements panel, no DOM), `getResources` / `getResourceContent` are implementable and not built |
+| **Status** | 🟨 partial — `eval` and `reload` are real (CDP `Runtime.evaluate` / `Page.reload` over the host's own CDP session); `getSelectedNode` is 🚷 (no Elements panel, no DOM), `getResources` / `getResourceContent` are implementable and not built |
 | **Tier** | 1 |
-| **Blocked by** | — (needs the CDP bridge, now in the shell: [src/main/cdp-bridge.js](../../src/main/cdp-bridge.js)) |
+| **Blocked by** | — (needs host-side CDP, now the host's own session: [src/electron/extensions/internal/cdp/cdp-session.js](../../src/electron/extensions/internal/cdp/cdp-session.js)); at run time, a target that reports `supportsMultipleDebuggers` ([LIMITATIONS.md](../LIMITATIONS.md)) |
 
 ## Chrome surface
 
@@ -25,16 +25,20 @@ panel/devtools frame  chrome.devtools.inspectedWindow.eval(expr, options?, cb)
         ▼  DEVTOOLS_EVAL (async IPC)
 main/ipc.js  ── frame-gated ──►  main/inspected-window.js
         ▼  sendCommand("Runtime.evaluate", {expression, returnByValue, awaitPromise})
-main/cdp-bridge.js  ── host-range message ids ──►  Metro /inspector/debug  ──►  app
+cdp/cdp-session.js  ── the host's own session ──►  Metro /inspector/debug  ──►  app
+                                                   ▲
+DevTools frontend  ── its own session (?ws=) ──────┘
 ```
 
 `reload()` follows the same chain over `DEVTOOLS_RELOAD` and ends in
 `sendCommand("Page.reload", …)`.
 
-The bridge multiplexes by message id, so **host commands ride the frontend's own
-debugger session** and the app never sees a second debugger (`>= HOST_ID_BASE` is
-host territory; the frontend allocates 1,2,3,…). Replies with a host id are consumed
-in main and never forwarded to the frontend.
+The host's commands ride **its own second debugger session** to the same target, next to
+the frontend's, so the frontend never sees a host command or its reply. The session is
+opened only when Metro's `/json/list` reports
+`reactNative.capabilities.supportsMultipleDebuggers: true` for the target (a second debugger
+on a target without it would evict the frontend); otherwise `eval` answers `isError` with
+that reason.
 
 Everything else is deliberately inert: `tabId` is a stable synthetic int per
 extension; `getResources` answers `[]`; `getSelectedNode` answers `null` — and it always
@@ -49,7 +53,7 @@ scriptToEvaluateOnLoad})`), so it really reloads the JS bundle. Chrome's
 `options.injectedScript` is the same idea as CDP's `scriptToEvaluateOnLoad` and is
 mapped rather than dropped. Chrome's `reload()` has no callback and no promise, so
 there is no API surface to report failure through: a rejected `Page.reload` (no
-session, external-relay mode) is logged in the extension frame's console instead of
+session, or a target without `supportsMultipleDebuggers`) is logged in the extension frame's console instead of
 being swallowed.
 
 ## RN mapping and fidelity
@@ -64,7 +68,7 @@ being swallowed.
 | `getResources` / `getResourceContent` | `Debugger.getScriptParsed` + script source | not implemented (Tier 2, **implementable** — RN DevTools has a Sources panel) |
 | `getSelectedNode` | 🚷 no anchor — the selected **DOM** node from the Elements panel; RN has no Elements panel and no `DOM` domain | none; answers `null` forever |
 
-### Result mapping (implemented in `src/main/inspected-window.js`)
+### Result mapping (implemented in `src/electron/extensions/internal/cdp/inspected-window.js`)
 
 | CDP answer | Chrome pair |
 | --- | --- |
@@ -83,8 +87,8 @@ Nothing is fabricated: when the backend cannot answer, `eval` says so in
 1. ~~Route `eval` through the host to the frontend's CDP connection~~ ✅ done — and
    the route turned out to be different: the frontend owns its socket directly
    (`?ws=` selects `WebSocketConnection`), so `sendMessageToBackend` was never
-   reachable. The host owns the socket instead
-   ([cdp-bridge.js](../../src/main/cdp-bridge.js)); see
+   reachable. The host opens its own CDP session instead
+   ([cdp-session.js](../../src/electron/extensions/internal/cdp/cdp-session.js)); see
    [DISPATCH-CHANNEL.md](DISPATCH-CHANNEL.md).
 2. ~~Map exceptionInfo into Chrome's `{value, exceptionInfo}` callback shape~~ ✅.
 3. ~~`tabId` constant~~ ✅. ~~`reload`~~ ✅ (`Page.reload`). Resources
@@ -117,8 +121,10 @@ shares the `Network` domain. The network work is not. From the sources:
   `capabilities/supportsMultipleDebuggers = true`, and Metro's proxy only disconnects
   a previous debugger when that capability is absent
   (`@react-native/dev-middleware/dist/inspector-proxy/Device.js:218`) — so a second
-  *connection* would not evict the frontend. The bridge does not need it anyway: it
-  multiplexes one session.
+  *connection* would not evict the frontend. The host's own session relies on exactly
+  this: it checks the capability on `/json/list` before every dial and does not connect
+  without it. (Upstream dev-middleware forces it to `false` unless the
+  `enableStandaloneFuseboxShell` experiment is on.)
 - `HostAgent.cpp:150` answers `Network.enable` with **an error when
   `getSystemState().registeredHostsCount > 1`** ("The Network domain is unavailable
   when multiple React Native hosts are registered"), and `emitSystemStateChanged`

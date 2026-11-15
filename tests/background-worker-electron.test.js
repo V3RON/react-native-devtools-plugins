@@ -516,7 +516,11 @@ suite(
       ].join("\n")
     );
 
-    assert.equal(windows.length, 3, "graphql, altair and showcase each get a background context");
+    assert.equal(
+      windows.length,
+      4,
+      "graphql, altair, showcase and mobx-devtools each get a background context"
+    );
     assert.ok(
       windows.every((win) => win.visible === false),
       "every worker window is hidden"
@@ -640,7 +644,7 @@ suite(
               bodyLength: t.length,
               outsideContents: /OUTSIDE-/.test(t),
               // Case-insensitive because the compiled bundle keys are LOWERCASED
-              // (compiled[name.toLowerCase()] in src/shared/i18n.js), so a leak of the
+              // (compiled[name.toLowerCase()] in src/electron/extensions/internal/registry/i18n.js), so a leak of the
               // catalog staged below arrives as "extname", never "extName". Matching
               // the capitalised name asserted what this probe cannot observe.
               outsideMessage: /extname/i.test(t),
@@ -810,7 +814,7 @@ suite(
 
     // 8. A symlinked extension ROOT is refused by the server, which is what the
     //    scanner already did — the two containment layers now agree, and the policy is
-    //    stated once in the guard's docblock (src/main/extension-server.js).
+    //    stated once in the guard's docblock (src/electron/extensions/internal/scheme/extension-server.js).
     //    Held to the same standard as `refused` above: the bytes rule always, the
     //    network-layer rejection only as an explicit fallback.
     assert.ok(
@@ -825,7 +829,7 @@ suite(
 
     // 9. The host-side i18n route, which is NOT a file the guard resolves: the bundle
     //    is assembled by MAIN from `_locales/en/messages.json` under the root, a path
-    //    src/main/i18n-host.js builds itself. One link at `_locales` therefore reached
+    //    src/electron/extensions/internal/registry/i18n-host.js builds itself. One link at `_locales` therefore reached
     //    the page through `__rozenite_i18n__` while the equivalent file request was
     //    correctly refused. The answer here is legitimately a 200 (a folder with no
     //    usable catalog still gets a bundle of predefined messages), so what is

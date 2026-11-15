@@ -12,7 +12,7 @@
 //      it does not return a plausible id, a plausible URL, or a plausible screenshot.
 //   3. NO FABRICATED CAPABILITY. A namespace never registers a UI surface it cannot show
 //      (toolbar button, browser menu, notification button, side panel) as if it had one.
-//   4. THE SHIM NEVER REACHES FOR THE HOST. src/chrome-shim has no transport, no Electron,
+//   4. THE SHIM NEVER REACHES FOR THE HOST. src/electron/extensions/internal/shim has no transport, no Electron,
 //      no browser globals — so nothing here can silently start talking to main. (Grep-
 //      verified as a layering rule in security.test.js; this file asserts the Tier-2 half:
 //      that the injectables are the ONLY way in.)
@@ -24,9 +24,9 @@ const assert = require("node:assert");
 const fs = require("node:fs");
 const path = require("node:path");
 
-const { createChromeNamespace } = require("../src/chrome-shim");
-const { createExtensionStorage, createMemoryBackend } = require("../src/chrome-shim/storage");
-const { createGrantGate } = require("../src/shared/permissions");
+const { createChromeNamespace } = require("../src/electron/extensions/internal/shim");
+const { createExtensionStorage, createMemoryBackend } = require("../src/electron/extensions/internal/shim/storage");
+const { createGrantGate } = require("../src/electron/extensions/internal/broker/permissions");
 
 const REPO = path.join(__dirname, "..");
 const readSource = (...parts) => fs.readFileSync(path.join(REPO, ...parts), "utf8");
@@ -84,16 +84,20 @@ test("every _fire call site in chrome-shim is attributed to a real producer", ()
     "network-bridge.js:_fire": 2,
     // The frontend's own tab widget reported a panel shown / hidden (wasShown / willHide)
     // and main routed it to the devtools page that created the panel
-    // (src/main/panel-host.js setPanelVisible; one `_fire` serves both events).
+    // (src/electron/extensions/internal/frontend/panel-host.js setPanelVisible; one `_fire` serves both events).
     "devtools.js:_fire": 1,
+    // CDP events the inspected app really sent on THIS extension's own debugger session,
+    // and that session really closing from the app's side (or with the window that
+    // inspected it) — src/electron/extensions/internal/cdp/debugger-service.js pushes both.
+    "debugger.js:_fire": 2,
   };
 
   const counts = {};
-  for (const file of fs.readdirSync(path.join(REPO, "src", "chrome-shim"))) {
+  for (const file of fs.readdirSync(path.join(REPO, "src", "electron", "extensions", "internal", "shim"))) {
     if (!file.endsWith(".js")) {
       continue;
     }
-    const fired = (codeOf(readSource("src", "chrome-shim", file)).match(/\._fire\(/g) || []).length;
+    const fired = (codeOf(readSource("src", "electron", "extensions", "internal", "shim", file)).match(/\._fire\(/g) || []).length;
     if (fired) {
       counts[`${file}:_fire`] = fired;
     }
@@ -239,12 +243,12 @@ test("a Tier-2 log line never claims a UI affordance this host does not have", (
     /notification (button|buttons) (are |is )?(shown|supported)/i,
   ];
   const offenders = [];
-  for (const file of fs.readdirSync(path.join(REPO, "src", "chrome-shim"))) {
+  for (const file of fs.readdirSync(path.join(REPO, "src", "electron", "extensions", "internal", "shim"))) {
     if (!file.endsWith(".js")) {
       continue;
     }
     // Strings only: a comment explaining what is missing is exactly what this shell does.
-    const strings = (readSource("src", "chrome-shim", file).match(/"(?:[^"\\]|\\.)*"/g) || []).join("\n");
+    const strings = (readSource("src", "electron", "extensions", "internal", "shim", file).match(/"(?:[^"\\]|\\.)*"/g) || []).join("\n");
     for (const pattern of claims) {
       if (pattern.test(strings)) {
         offenders.push(`${file}: ${pattern}`);
@@ -254,11 +258,11 @@ test("a Tier-2 log line never claims a UI affordance this host does not have", (
   assert.deepStrictEqual(offenders, []);
 
   // And the real wording is pinned, so a future edit cannot quietly drop the negation.
-  const shells = readSource("src", "chrome-shim", "browser-shells.js");
+  const shells = readSource("src", "electron", "extensions", "internal", "shim", "browser-shells.js");
   assert.match(shells, /no browser right-click menu/, "contextMenus names its missing surface");
   assert.match(shells, /no keyboard shortcut to an extension/, "commands names its missing routing");
   assert.match(shells, /no side-panel drawer/, "sidePanel names its missing drawer");
-  const apis = readSource("src", "chrome-shim", "browser-apis.js");
+  const apis = readSource("src", "electron", "extensions", "internal", "shim", "browser-apis.js");
   assert.match(apis, /button/i, "and a `buttons` array is reported as ignored, not accepted in silence");
 });
 
@@ -272,19 +276,21 @@ test("the namespaces that exist are exactly the ones the docs claim", () => {
     "alarms",
     "commands",
     "contextMenus",
+    "debugger",
     "devtools",
     "downloads",
     "i18n",
     "notifications",
     "permissions",
     "runtime",
+    "scripting",
     "sidePanel",
     "storage",
     "tabs",
     "webRequest",
   ]);
   // `chrome.windows` is the Tier-2 name on this list's edge: documented as NOT injected, and
-  // ungated in src/shared/permissions.js only because it would need no permission if it were.
+  // ungated in src/electron/extensions/internal/broker/permissions.js only because it would need no permission if it were.
   assert.strictEqual(chrome.windows, undefined, "no window model, so no chrome.windows");
 });
 
@@ -314,7 +320,7 @@ test("every Tier-2 host capability is an injected function, defaulting to nothin
 
   // Each injectable is a named parameter of the factory, and each has a null default that
   // means "this host cannot do that" — grep-verified rather than trusted.
-  const source = readSource("src", "chrome-shim", "index.js");
+  const source = readSource("src", "electron", "extensions", "internal", "shim", "index.js");
   for (const injectable of [
     "getTargetInfo",
     "openTabIn",
@@ -365,14 +371,14 @@ test("nothing in the suite can turn tabs.create's external open on", () => {
   // `shell.openExternal` is the one Tier-2 path that would launch the developer's real
   // browser. It is policy-gated, and the gate has two halves: the default is `none`, and no
   // test flips the switch.
-  const config = readSource("src", "main", "config.js");
+  const config = readSource("src", "electron", "shell", "config.js");
   assert.match(
     config,
     /TABS_OPEN_POLICIES\.includes\(raw\) \? raw : "none"/,
     "an unset or unrecognised DEVTOOLS_TABS_OPEN means nothing opens"
   );
   assert.match(
-    readSource("src", "main", "tab-host.js"),
+    readSource("src", "electron", "extensions", "internal", "services", "tab-host.js"),
     /policy === "external" && openExternal/,
     "and the host needs BOTH the policy and an injected opener"
   );

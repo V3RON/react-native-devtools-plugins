@@ -1,12 +1,12 @@
-// Host-owned chrome.storage (src/main/storage-service.js) with the frame-side shim
-// (src/chrome-shim/storage.js) on the other end of a simulated IPC: one store per
+// Host-owned chrome.storage (src/electron/extensions/internal/services/storage-service.js) with the frame-side shim
+// (src/electron/extensions/internal/shim/storage.js) on the other end of a simulated IPC: one store per
 // extension shared by all its contexts, change events to every context of THAT
 // extension only, persistence for local/sync and none for session.
 const test = require("node:test");
 const assert = require("node:assert");
 
-const { createStorageService } = require("../src/main/storage-service");
-const { createExtensionStorage } = require("../src/chrome-shim/storage");
+const { createStorageService } = require("../src/electron/extensions/internal/services/storage-service");
+const { createExtensionStorage } = require("../src/electron/extensions/internal/shim/storage");
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -409,7 +409,7 @@ test("the real electron-store persistence: old file, snapshot fallback, shadow s
   const fs = require("node:fs");
   const os = require("node:os");
   const path = require("node:path");
-  const { electronStorePersistence } = require("../src/main/storage-service");
+  const { electronStorePersistence } = require("../src/electron/extensions/internal/services/storage-service");
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "rozenite-storage-legacy-"));
   const worlds = [];
   const launch = (extensionId = "ext.a") => {
@@ -467,7 +467,7 @@ test("a failed meta write on first open loses nothing: data survives, meta is re
   const fs = require("node:fs");
   const os = require("node:os");
   const path = require("node:path");
-  const { electronStorePersistence } = require("../src/main/storage-service");
+  const { electronStorePersistence } = require("../src/electron/extensions/internal/services/storage-service");
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "rozenite-storage-meta-"));
   const dataFile = path.join(cwd, "extension-ext.a-local.json");
   const metaFile = path.join(cwd, "extension-ext.a-local.meta.json");

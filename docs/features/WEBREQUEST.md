@@ -20,9 +20,9 @@
 
 One capture, two APIs: this namespace and [DEVTOOLS-NETWORK.md](DEVTOOLS-NETWORK.md)
 consume the *same* main-process model
-([src/main/network-model.js](../../src/main/network-model.js) →
-[network-service.js](../../src/main/network-service.js)), and
-[src/chrome-shim/network-bridge.js](../../src/chrome-shim/network-bridge.js) decides which
+([src/electron/extensions/internal/cdp/network-model.js](../../src/electron/extensions/internal/cdp/network-model.js) →
+[network-service.js](../../src/electron/extensions/internal/cdp/network-service.js)), and
+[src/electron/extensions/internal/shim/network-bridge.js](../../src/electron/extensions/internal/shim/network-bridge.js) decides which
 Chrome event each lifecycle step becomes. The synthetic frontend postMessages and the fake
 bodies are gone.
 
@@ -55,7 +55,7 @@ Chrome's own convention rather than this shell's invention.
 
 ### Filters
 
-Matched locally in [src/chrome-shim/web-request.js](../../src/chrome-shim/web-request.js),
+Matched locally in [src/electron/extensions/internal/shim/web-request.js](../../src/electron/extensions/internal/shim/web-request.js),
 on both syntaxes Chrome documents:
 
 - **match patterns** (`https://*.example.com/*`, `<all_urls>`) split into
@@ -106,7 +106,7 @@ Covered by [tests/web-request.test.js](../../tests/web-request.test.js),
 read out of this repo's vendored RN. The delivery side is covered separately: the grant matrix
 per payload kind and a live push arriving at a real subscribed frame are asserted in
 [tests/delivery-scope.test.js](../../tests/delivery-scope.test.js), in the production shell
-with the real CDP bridge fed by a fake inspected app — that path shipped silently dead once
+with the real CDP session pointed at a fake inspected app — that path shipped silently dead once
 (issue #20), so "an event arrives" is now an assertion and not an assumption. Still not run
 against a device from this checkout — hence 🟨,
 not ✅. The device run listed in DEVTOOLS-NETWORK.md covers this namespace too: the sample

@@ -1,6 +1,6 @@
 // chrome.notifications — the real Electron-backed notifications shim, tested with the
-// notifier injected so nothing reaches the screen (src/chrome-shim/browser-apis.js +
-// src/main/notification-host.js). GitHub issue #4.
+// notifier injected so nothing reaches the screen (src/electron/extensions/internal/shim/browser-apis.js +
+// src/electron/extensions/internal/services/notification-host.js). GitHub issue #4.
 //
 // The honesty rules under test, in order:
 //   1. an id is named only for a notification that really showed;
@@ -11,12 +11,12 @@
 const test = require("node:test");
 const assert = require("node:assert");
 
-const { createNotifications } = require("../src/chrome-shim/browser-apis");
-const { createNotificationHost } = require("../src/main/notification-host");
-const { createContextRegistry } = require("../src/main/context-registry");
-const { createChromeNamespace } = require("../src/chrome-shim");
-const { createMemoryBackend, createExtensionStorage } = require("../src/chrome-shim/storage");
-const { createGrantGate } = require("../src/shared/permissions");
+const { createNotifications } = require("../src/electron/extensions/internal/shim/browser-apis");
+const { createNotificationHost } = require("../src/electron/extensions/internal/services/notification-host");
+const { createContextRegistry } = require("../src/electron/extensions/internal/contexts/context-registry");
+const { createChromeNamespace } = require("../src/electron/extensions/internal/shim");
+const { createMemoryBackend, createExtensionStorage } = require("../src/electron/extensions/internal/shim/storage");
+const { createGrantGate } = require("../src/electron/extensions/internal/broker/permissions");
 
 const tick = () => new Promise((resolve) => setTimeout(resolve, 5));
 
@@ -372,16 +372,16 @@ test("a context that goes away cannot receive a notification event", async () =>
 });
 
 test("the harness's recording notifier is what the suite runs against, not Electron's", () => {
-  // A guard on the rule, not a behavior: src/main/notification-host.js exports the
+  // A guard on the rule, not a behavior: src/electron/extensions/internal/services/notification-host.js exports the
   // real notifier, and the headless harness must not be allowed to install it.
-  const { electronNotifier } = require("../src/main/notification-host");
+  const { electronNotifier } = require("../src/electron/extensions/internal/services/notification-host");
   assert.equal(typeof electronNotifier, "function");
   const harness = require("node:fs")
     .readFileSync(require("node:path").join(__dirname, "extension-frame-harness.js"), "utf8");
   assert.match(harness, /arg\("notifier"\) \|\| "fake"/, "fake is the default");
   assert.match(
     harness,
-    /if \(notifierMode !== "real"\)[\s\S]{0,20}const deny = notifierMode === "deny";[\s\S]{0,2000}attachNotificationHost\(\{\n        notifier: fakeNotifier/,
+    /if \(notifierMode !== "real"\)[\s\S]{0,20}const deny = notifierMode === "deny";[\s\S]{0,2000}hooks\.notifications = \(\{\n        notifier: fakeNotifier/,
     "the real notifier is installed only when a run asks for it by name"
   );
 });

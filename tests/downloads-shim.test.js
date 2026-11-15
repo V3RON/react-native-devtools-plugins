@@ -1,4 +1,4 @@
-// `chrome.downloads`' Chrome-shaped surface (src/chrome-shim/downloads.js).
+// `chrome.downloads`' Chrome-shaped surface (src/electron/extensions/internal/shim/downloads.js).
 //
 // The save service decides what happens to bytes; this file decides what the
 // extension SEES, and the honesty rules that matter most are here:
@@ -13,7 +13,7 @@
 const test = require("node:test");
 const assert = require("node:assert");
 
-const { createDownloads } = require("../src/chrome-shim/downloads");
+const { createDownloads } = require("../src/electron/extensions/internal/shim/downloads");
 
 const nextTick = () => new Promise((resolve) => setTimeout(resolve, 0));
 
@@ -225,7 +225,7 @@ test("anything that is not a download delivery is left for the router", () => {
 test("the shim's host hooks stay out of the exposed namespace", () => {
   const raw = setup().downloads;
   assert.equal(typeof raw._onDelivery, "function");
-  const { gateCallbackNamespace } = require("../src/chrome-shim/permission-gate");
+  const { gateCallbackNamespace } = require("../src/electron/extensions/internal/shim/permission-gate");
   const exposed = gateCallbackNamespace(raw, {
     api: "downloads",
     check: () => ({ ok: true }),
@@ -240,7 +240,7 @@ test("the shim's host hooks stay out of the exposed namespace", () => {
 });
 
 test("a denied permission fails every method with lastError and leaves the shape", async () => {
-  const { gateCallbackNamespace } = require("../src/chrome-shim/permission-gate");
+  const { gateCallbackNamespace } = require("../src/electron/extensions/internal/shim/permission-gate");
   let lastError;
   const denied = gateCallbackNamespace(setup().downloads, {
     api: "downloads",

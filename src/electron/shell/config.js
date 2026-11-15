@@ -1,0 +1,216 @@
+// Central configuration for the Electron main process.
+// Every value is overridable via environment variables.
+const path = require("path");
+
+const repoRoot = path.join(__dirname, "..", "..", "..");
+
+const positiveNumber = (name, fallback) => {
+  const value = Number(process.env[name]);
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+};
+
+// Metro, where the frontend page is served and the app's targets are listed.
+const metroHost = process.env.DEVTOOLS_METRO_HOST || "127.0.0.1";
+const metroPort = positiveNumber("DEVTOOLS_METRO_PORT", 8081);
+
+// The frontend page. Without a `?ws=` the shell picks the target itself from Metro's
+// /json/list (./frontend-target.js) and adds it; a DEVTOOLS_FRONTEND_URL that names one
+// is loaded as it is. Either way the frontend dials Metro's inspector proxy directly,
+// and the extension host opens its own second session to the same target
+// (src/electron/extensions/internal/cdp/cdp-session.js). The origin is what both the
+// shell's and the host's frontend guards check, and it is the same with or without ws=.
+const frontendURL =
+  process.env.DEVTOOLS_FRONTEND_URL || `http://${metroHost}:${metroPort}/rozenite/rn_fusebox.html`;
+
+// What `chrome.tabs.create({url})` is allowed to do with the URL
+// (docs/features/SMALL-SHIMS.md, docs/LIMITATIONS.md).
+//
+//   none     — open nothing. The created Tab descriptor says `openedVia: null`.
+//   external — hand the URL to the OS browser (shell.openExternal), which is
+//              Chrome's closest mapping for an extension opening a "tab".
+//   window   — open it in a window of this shell instead.
+//
+// `none` is the default because both shipped extensions call `create` from an
+// AUTOMATED path, not a user gesture: graphql's `runtime.onInstalled` handler
+// opens a marketing URL, and Altair opens one from `notifications.onClicked`.
+// Launching the user's real browser because a devtools session started is a side
+// effect no extension asked this host for, and it is not reversible by them. The
+// capability is fully wired (src/electron/extensions/internal/services/tab-host.js) and injectable, so this is a
+// policy switch rather than a missing feature.
+const TABS_OPEN_POLICIES = ["none", "external", "window"];
+const tabsOpenPolicy = () => {
+  const raw = (process.env.DEVTOOLS_TABS_OPEN || "").toLowerCase();
+  return TABS_OPEN_POLICIES.includes(raw) ? raw : "none";
+};
+
+// How fast an extension's `chrome.alarms` timers run, as a multiplier on the real
+// delay (src/electron/extensions/internal/shim/alarms.js). 1 = real time, which is what a user gets.
+//
+// It exists because a headless test cannot wait 30 s for Chrome's own minimum alarm
+// delay, and faking the shim's clock inside the extension context would test nothing
+// about the path this shell actually uses. The value is decided HERE, in main, and
+// handed to each context through its RUNTIME_REGISTER reply — the frame never reads
+// the environment itself, so a page cannot notice or influence it.
+const alarmClockScale = () => {
+  const value = Number(process.env.DEVTOOLS_ALARM_CLOCK_SCALE);
+  return Number.isFinite(value) && value > 0 ? value : 1;
+};
+
+// Which extensions may inject a content script INTO THE INSPECTED APP, and by
+// default: none of them (src/electron/extensions/internal/content/content-gate.js is the full reasoning).
+//
+// The value is a comma/space-separated list of extension ids (the `extensions/<id>`
+// folder name) and/or the literal `<all_rn_targets>`:
+//
+//   DEVTOOLS_CONTENT_SCRIPTS=graphql              only that extension injects
+//   DEVTOOLS_CONTENT_SCRIPTS='<all_rn_targets>'   every extension that declares scripts
+//   (unset)                                       NOTHING is injected — the default
+//
+// `matches` URL patterns are deliberately NOT part of this decision: an RN target has
+// no page URL for a pattern to be written against, so allowing a pattern would mean
+// inventing which target it "really" meant. The gate reports what each pattern would
+// have matched, as information, and decides from this list alone.
+//
+// Chrome needs no such switch, which is the point of having one here: a content script
+// runs third-party code inside the user's running app, in the app's own JS context
+// (Hermes has no isolated worlds), and this shell has no UI to ask the user first.
+const contentScriptAllowlist = () =>
+  (process.env.DEVTOOLS_CONTENT_SCRIPTS || "").trim() || null;
+
+// Test seams for the Electron primitives a headless run cannot answer. Both are OFF
+// unless the variable is set, and neither changes what a user-facing run does.
+//
+//   DEVTOOLS_TEST_OPEN_LOG=<file>      InspectorFrontendHost.openInNewTab appends the URL
+//                                      it WOULD have handed to shell.openExternal to this
+//                                      file instead of launching a browser. The scheme
+//                                      allowlist runs first, so only allowed URLs land.
+//   DEVTOOLS_TEST_SAVE_DIALOG=<dir>    the save dialog auto-answers with <dir>/<default
+//                                      name>; the literal `cancel` answers "cancelled".
+//
+// Honoured only from an UNPACKAGED app (`app.isPackaged` false; plain Node, i.e. the unit
+// tests, counts as unpackaged): a shipped build ignores them and says so. Whenever one is
+// active the shell logs a loud warning at startup, because DEVTOOLS_TEST_SAVE_DIALOG
+// replaces EVERY save dialog, `chrome.downloads` with `saveAs` included. A relative
+// directory resolves against the process's working directory.
+const isPackaged = () => {
+  try {
+    const { app } = require("electron");
+    return Boolean(app && app.isPackaged);
+  } catch {
+    return false;
+  }
+};
+const testSeam = (name, resolve = (value) => value) => {
+  const value = (process.env[name] || "").trim();
+  if (!value) {
+    return null;
+  }
+  if (isPackaged()) {
+    console.warn(`[config] ${name} is ignored: this is a packaged build.`);
+    return null;
+  }
+  console.warn(
+    `[config] TEST SEAM ACTIVE: ${name}=${value} — do not set this in a user-facing launch ` +
+      "(docs/api/INSPECTOR-FRONTEND-HOST.md)."
+  );
+  return resolve(value);
+};
+const testOpenLog = testSeam("DEVTOOLS_TEST_OPEN_LOG", (value) => path.resolve(value));
+const testSaveDialog = testSeam("DEVTOOLS_TEST_SAVE_DIALOG", (value) =>
+  value === "cancel" ? value : path.resolve(value)
+);
+
+// JSON object merged over the frontend's host config (src/electron/shell/host-config.js), so a
+// deployment can turn a feature the shell disables back on (and a test can prove the
+// config reaches the UI). Anything that is not a JSON object is ignored.
+const hostConfigOverride = () => {
+  try {
+    const parsed = JSON.parse(process.env.DEVTOOLS_HOST_CONFIG || "null");
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * What this shell hands the extension host (src/electron/extensions/index.js), read at
+ * call time from the values below so a harness that adjusted them is honoured. The host
+ * itself reads no environment (docs/SPEC-DEBUGGER-SHELL-EXTENSIONS.md §5.9).
+ */
+const extensionHostConfig = (values = module.exports) => ({
+  extensionsDir: values.extensionsDir,
+  uiLocale: values.uiLocale,
+  tabsOpen: values.tabsOpen,
+  contentScripts: values.contentScripts,
+  showPanel: values.showPanel,
+  alarmClockScale: values.alarmClockScale,
+  testOpenLog: values.testOpenLog,
+  testSaveDialog: values.testSaveDialog,
+  cdp: values.cdp,
+});
+
+module.exports = {
+  extensionHostConfig,
+  repoRoot,
+
+  testOpenLog,
+  testSaveDialog,
+  hostConfigOverride: hostConfigOverride(),
+
+  // The RN DevTools frontend page, served by the patched fork's Metro dev server
+  // (docs/ARCHITECTURE.md: this coupling is a known limitation). main.js resolves the
+  // target into it before loading (./frontend-target.js).
+  frontendURL,
+
+  // Root folder holding the unpacked extensions ("installed extensions").
+  extensionsDir:
+    process.env.DEVTOOLS_EXTENSIONS_DIR || path.join(repoRoot, "extensions"),
+
+  // The shell's own preload: the InspectorFrontendHost replacement (./preload.js), bundled
+  // into one file (scripts/bundle-preload.js) because the window is sandboxed. The
+  // extension preload is registered on the session by the extension host.
+  preloadPath: path.join(__dirname, "dist", "preload.js"),
+
+  // Override for the UI locale chrome.i18n reports (`pt-BR`, `de`...). Unset = what
+  // Electron resolved for the app (`--lang=`, then the OS language) — see
+  // src/electron/extensions/internal/registry/i18n-host.js. A knob for tests and for previewing a translation.
+  uiLocale: (process.env.DEVTOOLS_UI_LOCALE || "").trim(),
+
+  // chrome.tabs.create policy: "none" | "external" | "window" (see
+  // TABS_OPEN_POLICIES above for why the default opens nothing).
+  tabsOpen: tabsOpenPolicy(),
+
+  // Which extensions may inject content scripts into the inspected app
+  // (src/electron/extensions/internal/content/content-gate.js). `null` means nothing is allowed — the default.
+  contentScripts: contentScriptAllowlist(),
+
+  // DEVTOOLS_SHOW_PANEL=<extensionId>[/<pagePath>]: select that extension's panel tab the
+  // first time it registers (the host-internal consumer of the `showPanel` dispatch
+  // event, src/electron/extensions/internal/frontend/panel-host.js). Unset = the frontend's own default tab.
+  showPanel: (process.env.DEVTOOLS_SHOW_PANEL || "").trim() || null,
+
+  // chrome.alarms' clock multiplier (src/electron/extensions/internal/shim/alarms.js), resolved to a NUMBER
+  // on purpose: this value travels to each extension context inside its
+  // RUNTIME_REGISTER reply, which crosses IPC through the structured-clone serializer.
+  // A function-valued property is dropped by that serializer rather than transferred,
+  // so a getter-style export would reach the frame as `undefined` and every context
+  // would silently run unscaled. Observed both ways in
+  // tests/tier2-worker-electron.test.js, which cannot observe a real alarm firing
+  // unless the scale really arrives.
+  alarmClockScale: alarmClockScale(),
+
+  // Which target ./frontend-target.js picks when the frontend URL names none: the first
+  // React Native target on Metro whose app / device contains these substrings.
+  target: {
+    metroHost,
+    metroPort,
+    app: process.env.DEVTOOLS_APP_FILTER || null,
+    device: process.env.DEVTOOLS_DEVICE_FILTER || null,
+  },
+
+  // The extension host's own CDP session (src/electron/extensions/internal/cdp/cdp-session.js).
+  cdp: {
+    // chrome.devtools.inspectedWindow.eval waits at most this long for the app.
+    requestTimeoutMs: positiveNumber("DEVTOOLS_CDP_REQUEST_TIMEOUT_MS", 10000),
+  },
+};

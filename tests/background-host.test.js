@@ -1,6 +1,6 @@
 // Background lifecycle decisions, without Electron: what the host remembers about
-// extension versions (src/main/install-state.js) and which `chrome.runtime` event
-// that implies for a background context (src/main/background-host.js).
+// extension versions (src/electron/extensions/internal/registry/install-state.js) and which `chrome.runtime` event
+// that implies for a background context (src/electron/extensions/internal/contexts/background-host.js).
 //
 // The reason these are unit-tested rather than only observed headlessly is that
 // the difference between `install`, `update` and `startup` is a pure function of
@@ -15,13 +15,13 @@ const path = require("node:path");
 const {
   createInstallState,
   installReasonFor,
-} = require("../src/main/install-state");
+} = require("../src/electron/extensions/internal/registry/install-state");
 const {
   createBackgroundHost,
   isBackgroundFrame,
   lifecycleFor,
   backgroundURL,
-} = require("../src/main/background-host");
+} = require("../src/electron/extensions/internal/contexts/background-host");
 
 // electron-store is not available outside an Electron app, so the injected
 // store-shaped object is the seam this module was written for.
@@ -196,8 +196,11 @@ test("attach() starts one hidden window per declared background", () => {
   host.attach();
   assert.strictEqual(host.windows.length, 2);
   assert.strictEqual(host.windows[0].options.show, false, "the worker window is hidden");
-  assert.ok(host.windows[0].options.webPreferences.preload, "the production preload is used");
-  assert.strictEqual(host.windows[0].options.webPreferences.sandbox, false);
+  // No webPreferences.preload: the extension host registers the extension preload on
+  // the session, so every window on it (this one included) runs it.
+  assert.strictEqual(host.windows[0].options.webPreferences.preload, undefined, "the session supplies the preload");
+  assert.strictEqual(host.windows[0].options.webPreferences.nodeIntegrationInSubFrames, true);
+  assert.strictEqual(host.windows[0].options.webPreferences.sandbox, true, "a sandboxed renderer");
   assert.match(host.windows[0].url, /^rozenite:\/\/graphql\/__rozenite_background__/);
   assert.match(host.windows[1].url, /type=module$/, "altair's worker is an ES module");
 });
@@ -382,36 +385,28 @@ test("isWorkerWindow knows its own windows — the shutdown rule depends on it",
 });
 
 // The quit rule itself cannot be driven headlessly (the harness ends its run with
-// app.exit, which skips will-quit), so the rule's SHAPE is pinned here: the two
-// decisions that matter are "hidden windows do not count" and "macOS does not quit",
-// and both were easy to get silently wrong.
-test("src/main/index.js's quit rule excludes worker windows and respects macOS", () => {
-  const source = fs.readFileSync(
-    path.join(__dirname, "..", "src", "main", "index.js"),
-    "utf8"
-  );
-  // One raw window enumeration only, inside the predicate that filters workers out —
-  // if a quit path ever enumerates windows directly, hidden workers keep the app alive.
-  assert.strictEqual(
-    (source.match(/BrowserWindow\.getAllWindows\(\)/g) || []).length,
-    1,
-    "getAllWindows is used in exactly one place: the worker-filtered predicate"
-  );
-  assert.match(source, /host\.isWorkerWindow\(win\.id\)/);
+// app.exit, which skips will-quit), so the rule's SHAPE is pinned here. Worker windows
+// belong to the window attachment: the extension host closes them when the frontend
+// window closes, which is what lets the shell's plain `window-all-closed` quit the app
+// (docs/SPEC-DEBUGGER-SHELL-EXTENSIONS.md §5.3). Both halves were easy to get silently
+// wrong: a hidden worker left open keeps the app alive with no window to close.
+test("worker windows close with their frontend window, so the shell's quit rule holds", () => {
+  const read = (...parts) => fs.readFileSync(path.join(__dirname, "..", ...parts), "utf8");
+  const host = read("src", "electron", "extensions", "internal", "ExtensionHost.js");
+  // attachWindow ties the attachment to the window's `closed`, and detach closes the workers.
+  assert.match(host, /win\.once\("closed", \(\) => \{\s*void detach\(\);/);
+  const detach = host.slice(host.indexOf("const detach = async"));
+  assert.match(detach.slice(0, 500), /backgroundHost\.closeAll\(\)/);
 
-  // `activate` recreates the DevTools window when none is left — counting hidden
-  // workers there would mean a dock click doing nothing.
-  const activate = source.slice(source.indexOf('app.on("activate"'));
-  assert.match(activate.slice(0, 300), /userWindows\(\)\.length === 0/);
-
-  // Closing the DevTools window must quit on non-mac even though worker windows are
-  // still open (window-all-closed never fires there), and must NOT quit on mac.
-  const created = source.slice(source.indexOf('app.on("browser-window-created"'));
-  assert.match(created, /userWindows\(\)\.length === 0/);
-  assert.match(created.slice(0, 600), /process\.platform !== "darwin"/);
-
-  // Worker windows are destroyed on the way out rather than left as the last thing
-  // standing between the app and exit.
-  const willQuit = source.slice(source.indexOf('app.on("will-quit"'));
-  assert.match(willQuit, /closeAll\(\)/);
+  const main = read("src", "electron", "shell", "main.js");
+  // Closing the last window quits on non-mac and does NOT quit on mac.
+  const allClosed = main.slice(main.indexOf('app.on("window-all-closed"'));
+  assert.match(allClosed.slice(0, 200), /process\.platform !== "darwin"/);
+  // `activate` recreates the DevTools window when none is left; no hidden window can be
+  // left to fool it, because they all closed with the frontend window.
+  const activate = main.slice(main.indexOf('app.on("activate"'));
+  assert.match(activate.slice(0, 300), /BrowserWindow\.getAllWindows\(\)\.length === 0/);
+  // The host is disposed on the way out (storage flushed, workers closed).
+  const willQuit = main.slice(main.indexOf('app.on("will-quit"'));
+  assert.match(willQuit, /extensionHost\.dispose\(\)/);
 });

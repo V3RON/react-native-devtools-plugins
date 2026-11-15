@@ -1,6 +1,6 @@
 // Panel.onShown / onHidden (docs/features/DEVTOOLS-PANELS.md): the shim half
-// (src/chrome-shim/devtools.js handlePanelEvent) and the host half
-// (src/main/panel-host.js setPanelVisible) — who hears a panel's
+// (src/electron/extensions/internal/shim/devtools.js handlePanelEvent) and the host half
+// (src/electron/extensions/internal/frontend/panel-host.js setPanelVisible) — who hears a panel's
 // visibility, who may report it, and that a reload or a repeat report cannot
 // produce a phantom event. The live end-to-end run is documented in
 // docs/evidence/panel-events/.
@@ -8,9 +8,12 @@
 const test = require("node:test");
 const assert = require("node:assert");
 
-const { createDevtools } = require("../src/chrome-shim/devtools");
-const panelHost = require("../src/main/panel-host");
-const { panelIdFor } = require("../src/shared/protocol");
+const { createDevtools } = require("../src/electron/extensions/internal/shim/devtools");
+const { createPanelHost } = require("../src/electron/extensions/internal/frontend/panel-host");
+
+// One host, as one window attachment has (ExtensionHost.js); no extensions folder scan.
+const panelHost = createPanelHost({ scan: () => [] });
+const { panelIdFor } = require("../src/electron/extensions/internal/scheme/protocol");
 
 const tick = () => new Promise((resolve) => setTimeout(resolve, 5));
 
@@ -140,25 +143,35 @@ test("a re-created panel (reloaded devtools page) moves the seat; the old frame 
 });
 
 // ── showPanel (host -> frontend) ─────────────────────────────────────────────
+// Selecting the tab goes through the panel bridge (`__SHELL_EXT_PANELS__.showPanel`),
+// not the shell's InspectorFrontendAPI dispatch channel: the extension host has no
+// dependency on the embedder's frontend host.
 test("showPanel only asks the frontend to show a panel this host registered", async () => {
-  const { setFrontendWebContents } = require("../src/main/dispatch");
-  const { HOST_EVENT } = require("../src/shared/ipc");
-  const sent = [];
-  setFrontendWebContents({ isDestroyed: () => false, send: (channel, payload) => sent.push([channel, payload]) });
-
-  register("ext-show", "/p.html");
+  const scripts = [];
+  const fakeContents = {
+    isDestroyed: () => false,
+    on: () => {},
+    executeJavaScript: async (code) => {
+      scripts.push(code);
+      return true;
+    },
+  };
+  const host = createPanelHost({ scan: () => [] });
+  host.attach(fakeContents);
+  host.addPanel({ extensionId: "ext-show", title: "T", pagePath: "/p.html" });
   const id = panelIdFor("ext-show", "/p.html");
-  assert.strictEqual(await panelHost.showPanel(id), true);
-  assert.deepStrictEqual(sent, [[HOST_EVENT, { name: "showPanel", args: [id] }]]);
+  assert.strictEqual(await host.showPanel(id), true);
+  const shows = () => scripts.filter((code) => code.includes(".showPanel("));
+  assert.deepStrictEqual(shows(), [`window.__SHELL_EXT_PANELS__?.showPanel(${JSON.stringify(id)}) === true`]);
 
-  assert.strictEqual(await panelHost.showPanel("ext.9.nobody.x.html"), false, "unregistered id");
-  assert.strictEqual(await panelHost.showPanel("network"), false, "a built-in tab is not ours to show");
-  assert.strictEqual(await panelHost.showPanel(undefined), false);
-  assert.strictEqual(sent.length, 1, "nothing else was dispatched");
+  assert.strictEqual(await host.showPanel("ext.9.nobody.x.html"), false, "unregistered id");
+  assert.strictEqual(await host.showPanel("network"), false, "a built-in tab is not ours to show");
+  assert.strictEqual(await host.showPanel(undefined), false);
+  assert.strictEqual(shows().length, 1, "nothing else was asked for");
 });
 
 test("the frontend window denies every window.open", () => {
-  const { windowOpenHandler } = require("../src/main/window-open-policy");
+  const { windowOpenHandler } = require("../src/electron/shell/window-open-policy");
   for (const url of ["", "about:blank", "about:blank#x", "about:srcdoc", "https://example.com", "rozenite://exta/panel.html"]) {
     assert.deepStrictEqual(windowOpenHandler({ url }), { action: "deny" }, url);
   }

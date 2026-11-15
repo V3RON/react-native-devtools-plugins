@@ -75,5 +75,5 @@ drawer in the screenshots is the Rozenite panel failing to find an RN device in 
 - A real `shell.openExternal` launch (no browser is started in the container); the refusal and the
   call are proven, the OS hand-off is Electron's.
 - The native save dialog itself (answered by the seam); the dialog code path is the pre-existing
-  `dialog.showSaveDialog` in `src/main/save-service.js`.
+  `dialog.showSaveDialog` in `src/electron/extensions/internal/services/save-service.js`.
 - An AI conversation: only the gate (tab present/absent) is shown.

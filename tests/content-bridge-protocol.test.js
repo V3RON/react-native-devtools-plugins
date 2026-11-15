@@ -1,5 +1,5 @@
-// The HOST half of the content bridge (src/main/content-bridge.js), driven against a
-// scripted CDP backend and the REAL message router (src/main/message-router.js).
+// The HOST half of the content bridge (src/electron/extensions/internal/content/content-bridge.js), driven against a
+// scripted CDP backend and the REAL message router (src/electron/extensions/internal/contexts/message-router.js).
 //
 // What this proves and what it does not: it proves host-side behaviour — what the shell
 // asks the app to evaluate, in what order, under which gate verdicts, how it correlates
@@ -16,15 +16,15 @@ const {
   BINDING_NAME,
   DISPATCH_GLOBAL,
   createContentBridge,
-} = require("../src/main/content-bridge");
-const { parseContentScripts } = require("../src/main/content-scripts");
-const { createMessageRouter } = require("../src/main/message-router");
-const { tabIdFor } = require("../src/chrome-shim/devtools");
-const { ALL_RN_TARGETS } = require("../src/main/content-gate");
+} = require("../src/electron/extensions/internal/content/content-bridge");
+const { parseContentScripts } = require("../src/electron/extensions/internal/content/content-scripts");
+const { createMessageRouter } = require("../src/electron/extensions/internal/contexts/message-router");
+const { tabIdFor } = require("../src/electron/extensions/internal/shim/devtools");
+const { ALL_RN_TARGETS } = require("../src/electron/extensions/internal/content/content-gate");
 
 /**
  * A scripted CDP backend: it answers the Runtime methods this layer uses with the
- * shapes RN's backend really answers (the same shapes tests/cdp-bridge.test.js pins)
+ * shapes RN's backend really answers (the same shapes tests/cdp-session.test.js round-trips)
  * and records everything it was asked to evaluate.
  */
 function makeBackend({
@@ -75,7 +75,7 @@ function makeBackend({
       }
       if (answer === null) {
         // A tooling-side refusal: `text` only, no `exception` object — which is how
-        // src/main/inspected-window.js maps it to `isError` rather than `isException`.
+        // src/electron/extensions/internal/cdp/inspected-window.js maps it to `isError` rather than `isException`.
         return { exceptionDetails: { text: "EvalError: the app refused the expression" } };
       }
       if (answer !== undefined) {
@@ -92,7 +92,7 @@ function makeBackend({
     sendCommand,
     evaluates: () => commands.filter((c) => c.method === "Runtime.evaluate"),
     addBindings: () => commands.filter((c) => c.method === "Runtime.addBinding"),
-    // Faithful to src/main/cdp-bridge.js: a handler sees an event only if it subscribed to
+    // Faithful to src/electron/extensions/internal/cdp/cdp-session.js: a handler sees an event only if it subscribed to
     // that exact method name or to "*". Fanning everything to every handler — which this
     // fake used to do — lets a bridge that never subscribed to `Runtime.bindingCalled` pass
     // every test here, because the tests drove the app→host leg through the seam instead.

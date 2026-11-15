@@ -1,4 +1,4 @@
-// The CDP -> network-model mapping (src/main/network-model.js): CDP event
+// The CDP -> network-model mapping (src/electron/extensions/internal/cdp/network-model.js): CDP event
 // sequences become request records, records become HAR 1.2 entries, the buffer
 // stays bounded, bodies are fetched lazily with the backend's own base64 flag, and
 // every failure path reports "no data" instead of inventing one.
@@ -16,7 +16,7 @@ const {
   queryStringFrom,
   contentTypeOf,
   byteLength,
-} = require("../src/main/network-model");
+} = require("../src/electron/extensions/internal/cdp/network-model");
 
 /** A model with a scripted command sender. */
 const makeModel = ({ commands = {}, ...rest } = {}) => {

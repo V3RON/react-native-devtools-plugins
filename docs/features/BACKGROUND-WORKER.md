@@ -23,7 +23,7 @@ Two properties of Chrome's model matter for a DevTools host:
 ## Design here
 
 The worker runs as an **always-on hidden context**: one `BrowserWindow` with
-`show: false` per extension that declares a background (`src/main/background-host.js`),
+`show: false` per extension that declares a background (`src/electron/extensions/internal/contexts/background-host.js`),
 loading a synthesized bootstrap document from the extension's own origin:
 
 ```
@@ -35,7 +35,7 @@ The document's only body content is one same-origin `<script src=…>` (with
 the extension folder is a **read-only install** — dropping the folder in `extensions/` is
 the install step — so the document cannot be written there, and the extension's own CSP
 (`script-src 'self'`) refuses an inline `<script>` this host might want to generate. So
-`src/main/extension-server.js` synthesizes it in the protocol handler and serves it as a
+`src/electron/extensions/internal/scheme/extension-server.js` synthesizes it in the protocol handler and serves it as a
 `Response`. The `?script=` path is resolved through the same containment rules as a real
 file request; it is never trusted from the query string.
 
@@ -47,7 +47,7 @@ it uses `extensionFramePreferences()` and the production preload, so the worker 
 ### Route considered and rejected
 
 The other route was another hidden `<iframe>` inside the frontend — exactly the pattern
-`src/frontend/panel-bridge.js` already uses for devtools pages. **Not taken**, for the
+`src/electron/extensions/internal/frontend/panel-bridge.js` already uses for devtools pages. **Not taken**, for the
 first Chrome property above: a background worker is not part of DevTools' UI lifecycle, so
 hosting it in the frontend's frame tree would **kill every extension's worker on every
 frontend reload or restart** (and any state it holds with it). A `show: false`
@@ -60,7 +60,7 @@ caveat is not a detail, it is the difference between a background context and a 
 ## Lifecycle
 
 `chrome.runtime.onInstalled` / `onStartup` have producers now. What the host remembers is
-`{version, installedAt}` per extension id in `electron-store` (`src/main/install-state.js`,
+`{version, installedAt}` per extension id in `electron-store` (`src/electron/extensions/internal/registry/install-state.js`,
 under `userData`), and the manifest on disk is compared against it at registration:
 
 | Situation | Event delivered |
@@ -86,40 +86,38 @@ own extension id), so a page cannot claim to be a worker.
 ### App shutdown
 
 Hidden windows are not windows a user can close, so they must not be the reason the shell
-stays alive. `src/main/index.js` owns that rule in one place:
+stays alive. Since the host/shell split, background contexts belong to the **window
+attachment** (src/electron/extensions/internal/ExtensionHost.js,
+[SPEC-DEBUGGER-SHELL-EXTENSIONS.md](../SPEC-DEBUGGER-SHELL-EXTENSIONS.md) §5.3):
 
-- "application windows" = `BrowserWindow.getAllWindows()` minus the host's own worker
-  windows (`host.isWorkerWindow(id)`), which is what `activate` and quit-on-last-window
-  check;
-- because `window-all-closed` **never fires while a hidden worker window is open**, the same
-  decision is also made on the last *user* window's `closed` event — otherwise non-mac
-  shutdown would hang with the app lingering invisibly;
-- `will-quit` closes the worker windows.
-
-What that means per platform, stated rather than smoothed over, because the existing
-platform rule survives and it changes the answer:
+- `attachWindow` starts them, and the frontend window's `closed` detaches the attachment,
+  which closes every worker window (`backgroundHost.closeAll()`);
+- so when the last DevTools window closes, no hidden window is left, `window-all-closed`
+  fires, and the shell's plain rule applies (`src/electron/shell/main.js`): quit on non-mac;
+- `will-quit` disposes the host (storage flushed, handlers and the session preload removed).
 
 | | Closing the DevTools window |
 | --- | --- |
-| **non-mac** | the app quits and the workers go with it |
-| **macOS** | the app stays alive in the dock **with the workers still running**; a dock click creates a fresh DevTools window (`activate` counts application windows, not all windows) and the surviving workers are simply still there |
+| **non-mac** | the workers close and the app quits |
+| **macOS** | the workers close; the app stays in the dock, and a dock click creates a fresh DevTools window, which starts the workers again (lifecycle: `onStartup`) |
 
-The macOS half is the closer match to Chrome — an extension's background outlives a closed
-DevTools window — and it falls out of the platform convention this shell already followed,
-rather than being a separate decision about workers. Chrome keeps a worker alive on
-Windows/Linux too, so the non-mac row is a genuine divergence; it follows from "the DevTools
-window *is* the app here", which is the premise the whole shell rests on.
+This is a change from before the split, when on macOS the workers outlived a closed window
+(closer to Chrome, where an extension's background outlives DevTools). The trade is the
+spec's: no "internal window" notion in the public API, and upstream's
+`window-all-closed → app.quit()` keeps working unchanged. Chrome keeps a worker alive on
+every platform, so both rows now diverge from Chrome; the premise is still "the DevTools
+window *is* the app here".
 
-Only the predicate behind this is asserted (`host.isWorkerWindow`, plus a source-shape check
-that the quit rule uses it and does not quit on macOS). The full quit sequence is **not**
-covered headlessly: the harness ends its run with `app.exit(0)`, which bypasses `will-quit`
-entirely.
+Only the shape is asserted (a source check that `attachWindow` ties `detach` to the window's
+`closed`, that `detach` closes the workers, and that the shell quits on
+`window-all-closed` except on macOS). The full quit sequence is **not** covered headlessly:
+the harness ends its run with `app.exit(0)`, which bypasses `will-quit` entirely.
 
 ## Verified
 
 `tests/background-worker-electron.test.js` boots the production shell headless (production
 scheme privileges, file server, IPC, `webPreferences`, preload + the production background
-host; `show: false`, `DEVTOOLS_CDP_BRIDGE=off`, no Metro, no device, no frontend fork) and
+host; `show: false`, no Metro, so no CDP session, no device, no frontend fork) and
 observes, against a fixture extension in a temp extensions dir with a temp
 `--user-data-dir`:
 
@@ -143,7 +141,7 @@ bookkeeping, failure reporting).
 
 Two of the above could not have worked until the verification found them:
 
-- `src/preload/index.js` dispatched on `process.isMainFrame` **first**, so a worker window's
+- `src/electron/extensions/internal/preload/index.js` dispatched on `process.isMainFrame` **first**, so a worker window's
   main frame received the frontend's `InspectorFrontendHost` stub and no `chrome.*`. The
   protocol check comes first now.
 - The host pushes `lifecycle` the instant a frame registers — during preload evaluation,
@@ -178,8 +176,9 @@ Two of the above could not have worked until the verification found them:
   no `window` object to hand out. The host could not fabricate an honest one either — the
   worker's `WebContents` belongs to a window the host does not expose to other frames. `null`
   or a fake window object would both be worse than `undefined`.
-- **No sandboxing beyond what panels have.** `sandbox: false` still, so the worker context is
-  a separate renderer process, not a sandboxed one ([../LIMITATIONS.md](../LIMITATIONS.md)).
+- **No sandboxing beyond what panels have.** The worker context is a separate renderer
+  process under the same policy as a panel, `sandbox: true` included: sandboxed, but no more
+  contained than a panel ([../LIMITATIONS.md](../LIMITATIONS.md)).
 
 ## Why `sample-extension` still has no background
 

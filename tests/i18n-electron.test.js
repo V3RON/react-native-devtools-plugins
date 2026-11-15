@@ -5,7 +5,7 @@
 //   1. getMessage is usable on the FIRST statement of the first script, in a devtools
 //      page/panel iframe and in the background context alike. That depends on the
 //      preload's synchronous read of the bundle over the extension protocol
-//      (src/preload/extension-frame.js, src/main/i18n-host.js) actually completing
+//      (src/electron/extensions/internal/preload/extension-frame.js, src/electron/extensions/internal/registry/i18n-host.js) actually completing
 //      before page scripts run, with no IPC.
 //   2. The UI locale is the host's: DEVTOOLS_UI_LOCALE reaches the bundle, and the same
 //      extension answers in pt-BR, in an RTL locale, and in a locale it has no folder for.

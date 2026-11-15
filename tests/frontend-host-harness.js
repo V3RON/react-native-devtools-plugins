@@ -9,7 +9,9 @@
 // The caller sets DEVTOOLS_TEST_OPEN_LOG / DEVTOOLS_TEST_SAVE_DIALOG, so nothing opens a
 // browser or raises a dialog.
 const { app, BrowserWindow } = require("electron");
-const { default: Store } = require("electron-store");
+// The production preloads are bundles (sandboxed renderers); build them from the
+// current sources before anything loads one.
+require("../scripts/bundle-preload").buildPreloads();
 const fs = require("fs");
 const http = require("http");
 
@@ -20,7 +22,6 @@ const arg = (name) => {
 const outFile = arg("out");
 const userDataDir = arg("user-data-dir");
 if (userDataDir) app.setPath("userData", userDataDir);
-process.env.DEVTOOLS_CDP_BRIDGE = "off";
 
 // A page that records every InspectorFrontendAPI event it is sent, with a child iframe.
 const page = (child) =>
@@ -48,17 +49,20 @@ app.whenReady().then(async () => {
     process.env.DEVTOOLS_FRONTEND_URL = `${a.origin}/frontend.html`;
 
     // Required AFTER the env is set: config captures it at load.
-    const { registerIpcHandlers } = require("../src/main/ipc");
-    const { frontendPreferences } = require("../src/main/frame-security");
-    const config = require("../src/main/config");
-    const { setFrontendWebContents, dispatchToFrontend } = require("../src/main/dispatch");
-    const frame = require("../src/main/frontend-frame");
-    const { attachTabHost } = require("../src/main/tab-host");
-    Store.initRenderer();
-    registerIpcHandlers();
+    // The development shell's own half: its IPC, its preload, its frontend guard. The
+    // extension host is not involved — these channels are the shell's InspectorFrontendHost.
+    const { registerShellIpcHandlers } = require("../src/electron/shell/ipc");
+    const { frontendPreferences } = require("../src/electron/extensions/internal/contexts/frame-security");
+    const config = require("../src/electron/shell/config");
+    const { shellPreferences } = require("../src/electron/shell/window");
+    const { setFrontendWebContents, dispatchToFrontend } = require("../src/electron/shell/dispatch");
+    const frame = require("../src/electron/shell/frontend-frame");
+    const { attachTabHost } = require("../src/electron/extensions/internal/services/tab-host");
+    const { electronExternalOpener } = require("../src/electron/extensions/internal/services/external-open");
+    registerShellIpcHandlers();
 
     const open = () =>
-      new BrowserWindow({ show: false, webPreferences: frontendPreferences({ preloadPath: config.preloadPath }) });
+      new BrowserWindow({ show: false, webPreferences: frontendPreferences(shellPreferences()) });
     const winA = open();
     const contents = winA.webContents;
     frame.setFrontendContents(contents);
@@ -82,6 +86,22 @@ app.whenReady().then(async () => {
     result.afterSave = await got();
     result.hostConfigA = await call(`new Promise((r) => InspectorFrontendHost.getHostConfig(r))`);
 
+    // 2b. preferences live in the page's own localStorage — the stock
+    //     InspectorFrontendHostStub's store, so the upstream shell reads the same one
+    const getPref = (run, name) =>
+      run(`new Promise((r) => InspectorFrontendHost.getPreference(${JSON.stringify(name)}, (v) => r(v ?? null)))`);
+    await call(`InspectorFrontendHost.setPreference("probe-pref", "v1")`);
+    result.prefGet = await getPref(call, "probe-pref");
+    result.prefInLocalStorage = await call(`localStorage.getItem("probe-pref")`);
+    // Only the probe's entry is read back: the stub's `for…in` over localStorage also
+    // enumerates Storage's own methods, which cannot cross executeJavaScript's clone.
+    result.prefAll = await call(
+      `new Promise((r) => InspectorFrontendHost.getPreferences((all) => r(all["probe-pref"] ?? null)))`
+    );
+    await call(`InspectorFrontendHost.setPreference("probe-removed", "x")`);
+    await call(`InspectorFrontendHost.removePreference("probe-removed")`);
+    result.prefRemoved = await call(`localStorage.getItem("probe-removed")`);
+
     // 3. a child iframe of the frontend: real frame object, same WebContents
     const child = contents.mainFrame.frames[0];
     result.childFrameFound = Boolean(child);
@@ -97,6 +117,8 @@ app.whenReady().then(async () => {
     await winB.webContents.executeJavaScript(`InspectorFrontendHost.openInNewTab("https://example.com/from-other-origin")`);
     await winB.webContents.executeJavaScript(`InspectorFrontendHost.save("evil.txt", "x", true, false)`);
     result.hostConfigB = await winB.webContents.executeJavaScript(`new Promise((r) => InspectorFrontendHost.getHostConfig(r))`);
+    // localStorage is per origin: another origin does not see the frontend's settings
+    result.prefOtherOrigin = await getPref((code) => winB.webContents.executeJavaScript(code), "probe-pref");
     await sleep(500);
     winB.destroy();
 
@@ -104,6 +126,9 @@ app.whenReady().then(async () => {
     await call(`location.reload()`);
     await sleep(800);
     result.reloaded = contents.getURL() === `${a.origin}/frontend.html` && (await got()).length === 0;
+    result.prefAfterReload = await getPref(call, "probe-pref");
+    await call(`InspectorFrontendHost.clearPreferences()`);
+    result.storageAfterClear = await call(`localStorage.length`);
 
     // 5. the frontend window top-navigates away: the guard denies it...
     await call(`location.href = ${JSON.stringify(`${b.origin}/other.html`)}`);
@@ -121,7 +146,9 @@ app.whenReady().then(async () => {
 
     // 6. chrome.tabs.create's policies through the real attachTabHost wiring: both
     //    agree about what is openable, and both refuse the same way (F6).
-    const tabs = attachTabHost({ policy: "external", bridgeStatus: () => ({ attached: false }) });
+    const noSession = { status: () => ({ attached: false }), sendCommand: async () => ({}) };
+    const externalOpener = electronExternalOpener({ testOpenLog: config.testOpenLog });
+    const tabs = attachTabHost({ policy: "external", cdp: noSession, externalOpener });
     result.tabsHttps = await tabs.open({ url: "https://example.com/from-tabs" });
     try {
       await tabs.open({ url: "file:///etc/passwd" });
@@ -134,19 +161,13 @@ app.whenReady().then(async () => {
     // recorder rather than a real BrowserWindow — the same `record` seam this repo's
     // options-window harness uses, so a headless run pops nothing. What is production is
     // attachTabHost's own composition and the filter inside open(): a filter that did not
-    // run would hand the recorder the file: URL and land in the catch below.
-    //
-    // This is the SECOND attachTabHost call, so it replaces the module singleton the first one
-    // installed: from here to the end of the process, getTabHost() answers with the
-    // recorder-backed host. That is deliberate and safe only because nothing runs after this
-    // block — the two `open` pairs below are the harness's last act, and no channel handler
-    // asks for the tab host again afterwards. A future case that needs the production wiring
-    // has to go above this point, or restore the singleton (there is no setter to restore it
-    // with, which is why the comment is cheaper than the capture).
+    // run would hand the recorder the file: URL and land in the catch below. Each
+    // attachTabHost call builds its own host, so this one replaces nothing.
     const loaded = [];
     const win = attachTabHost({
       policy: "window",
-      bridgeStatus: () => ({ attached: false }),
+      cdp: noSession,
+      externalOpener,
       openWindow: (url) => {
         loaded.push(url);
         return loaded.length;
@@ -155,7 +176,7 @@ app.whenReady().then(async () => {
     result.windowHttps = await win.open({ url: "https://example.com/from-tabs" });
     // This shell's own scheme is allowed by this branch, which is what lets a create of a
     // relative path — the form Altair uses — still open. The id is not scoped to the caller
-    // (see src/main/tab-host.js's note on that).
+    // (see src/electron/extensions/internal/services/tab-host.js's note on that).
     result.windowRozenite = await win.open({ url: "rozenite://probe.local/index.html" });
     try {
       await win.open({ url: "file:///etc/passwd" });
