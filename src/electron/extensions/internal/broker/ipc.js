@@ -70,6 +70,10 @@ const {
   DOWNLOAD_ERASE,
   DOWNLOAD_SEARCH,
   DOWNLOAD_SUGGEST_REPLY,
+  DEBUGGER_ATTACH,
+  DEBUGGER_DETACH,
+  DEBUGGER_SEND,
+  DEBUGGER_GET_TARGETS,
 } = require("./channels");
 
 
@@ -90,6 +94,7 @@ const {
  * @param {object} deps.saveService ../services/save-service.js
  * @param {object} deps.optionsHost ../contexts/options-host.js
  * @param {() => object|null} deps.getContentBridge the attached window's content bridge
+ * @param {object} [deps.debuggerService] chrome.debugger (../cdp/debugger-service.js)
  * @param {(channel: string, handler: function) => function} [deps.wrapHandler] test-only:
  *        decorates each handler before it is installed (tests/extension-frame-harness.js)
  */
@@ -109,6 +114,7 @@ const createBroker = ({
   saveService,
   optionsHost,
   getContentBridge,
+  debuggerService = null,
   wrapHandler = (_channel, handler) => handler,
 }) => {
   // frameKey -> WebFrameMain that registered it: every later call claiming a
@@ -783,6 +789,48 @@ const createBroker = ({
         return { ok: false, error: "openOptionsPage: unknown extension." };
       }
       return optionsHost.openOptionsPage(extensionId);
+    });
+
+    // ── chrome.debugger (docs/features/DEBUGGER.md) ─────────────────────────────
+    // Gated on the `debugger` grant here, from host state, like every other permission:
+    // a frame that ignores its RUNTIME_REGISTER reply still cannot reach the app. The
+    // attachment's owner is the extension the host reads off the frame's URL, so one
+    // extension can never send on, detach, or hear another's session.
+    const debuggerCaller = (event) => {
+      if (!gatedFrameKey(event, "debugger")) {
+        return null;
+      }
+      return extensionIdOfFrame(event);
+    };
+    const DEBUGGER_DENIED = { ok: false, error: "debugger: permission 'debugger' is not declared" };
+    const NO_DEBUGGER = { ok: false, error: "debugger: this host has no debugger service" };
+
+    handle(DEBUGGER_ATTACH, (event, { target, requiredVersion } = {}) => {
+      const extensionId = debuggerCaller(event);
+      if (!extensionId) return DEBUGGER_DENIED;
+      if (!debuggerService) return NO_DEBUGGER;
+      return debuggerService.attach(extensionId, target, requiredVersion);
+    });
+
+    handle(DEBUGGER_DETACH, (event, { target } = {}) => {
+      const extensionId = debuggerCaller(event);
+      if (!extensionId) return DEBUGGER_DENIED;
+      if (!debuggerService) return NO_DEBUGGER;
+      return debuggerService.detach(extensionId, target);
+    });
+
+    handle(DEBUGGER_SEND, (event, { target, method, params } = {}) => {
+      const extensionId = debuggerCaller(event);
+      if (!extensionId) return DEBUGGER_DENIED;
+      if (!debuggerService) return NO_DEBUGGER;
+      return debuggerService.sendCommand(extensionId, target, method, params);
+    });
+
+    handle(DEBUGGER_GET_TARGETS, (event) => {
+      const extensionId = debuggerCaller(event);
+      if (!extensionId) return DEBUGGER_DENIED;
+      if (!debuggerService) return NO_DEBUGGER;
+      return debuggerService.getTargets(extensionId);
     });
 
   };

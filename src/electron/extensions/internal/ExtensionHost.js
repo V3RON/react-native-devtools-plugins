@@ -9,8 +9,9 @@
 //                                               registry settings, storage, install
 //                                               state, router, context registry, request
 //                                               queue, notifications, save, options,
-//                                               theme, the CDP session object and the
-//                                               broker's handler table
+//                                               theme, the CDP session object, the
+//                                               chrome.debugger service and the broker's
+//                                               handler table
 //   attachment  attachWindow() (one in v1)      frontend guard, the broker's channels on
 //                                               the window's WebContents, panel host, the
 //                                               CDP session to the frontend URL's ws=,
@@ -41,6 +42,8 @@ const {
 const { createCdpSession } = require("./cdp/cdp-session");
 const { createEvalInPage, createReloadInPage } = require("./cdp/inspected-window");
 const { createNetworkService } = require("./cdp/network-service");
+const { createDebuggerService } = require("./cdp/debugger-service");
+const { tabIdFor } = require("./shim/devtools");
 const { attachContentBridge } = require("./content/content-bridge");
 const { createStorageService, electronStorePersistence } = require("./services/storage-service");
 const { attachNotificationHost } = require("./services/notification-host");
@@ -141,8 +144,40 @@ const createExtensionHost = (config = {}, options = {}, hooks = {}) => {
   });
   const tabHost = attachTabHost({ cdp, externalOpener, policy: settings.tabsOpen, ...(hooks.tabs || {}) });
 
+  // chrome.debugger (cdp/debugger-service.js): each attached extension gets a debugger
+  // session of its own to the same app, which ends with its socket and has no command
+  // timeout. Its events go to every context of that extension.
+  const debuggerService = createDebuggerService({
+    createSession: (extensionId) =>
+      createCdpSession({
+        ...(config.cdp || {}),
+        reconnect: false,
+        requestTimeoutMs: 0,
+        prime: [],
+        log: prefixed(`debugger ${extensionId}`),
+      }),
+    getFrontendUrl: () => (attachment ? hooks.cdpFrontendUrl || attachment.frontendUrl : null),
+    describeTarget: async () => {
+      const status = cdp.status();
+      if (!status.attached) {
+        return { attached: false };
+      }
+      const info = await tabHost.targetInfo();
+      return { attached: true, id: status.target && status.target.id, url: info.url, title: info.title };
+    },
+    tabIdFor,
+    deliver: (extensionId, delivery) => {
+      for (const context of contextRegistry.list()) {
+        if (context.extensionId === extensionId) {
+          contextRegistry.deliver(context.frameKey, delivery);
+        }
+      }
+    },
+    log: prefixed("debugger"),
+  });
+
   const frontendGuard = createFrontendGuard();
-  let attachment = null; // {win, panelHost, detachIpc, backgroundHost, cdpStarted}
+  let attachment = null; // {win, frontendUrl, panelHost, detachIpc, backgroundHost, cdpStarted}
   let contentBridge = null;
 
   /**
@@ -183,6 +218,7 @@ const createExtensionHost = (config = {}, options = {}, hooks = {}) => {
     saveService,
     optionsHost,
     getContentBridge: ensureContentBridge,
+    debuggerService,
     wrapHandler: hooks.wrapIpcHandler,
   });
   broker.register();
@@ -194,6 +230,8 @@ const createExtensionHost = (config = {}, options = {}, hooks = {}) => {
     const { backgroundHost, detachIpc } = attachment;
     attachment = null;
     frontendGuard.detach();
+    // The inspected app goes with the window: every extension's attachment ends.
+    debuggerService.detachAll("target_closed");
     detachIpc();
     if (backgroundHost) {
       backgroundHost.closeAll();
@@ -212,7 +250,7 @@ const createExtensionHost = (config = {}, options = {}, hooks = {}) => {
     const detachIpc = broker.attachContents(contents);
     const panelHost = createPanelHost({ showPanel: settings.showPanel });
     panelHost.attach(contents);
-    attachment = { win, panelHost, detachIpc, backgroundHost: null, cdpStarted: null };
+    attachment = { win, frontendUrl, panelHost, detachIpc, backgroundHost: null, cdpStarted: null };
 
     // The host's own session to the target in the frontend URL's ws=. It never blocks
     // the window: until (or unless) it attaches, CDP-backed APIs fail with the reason
@@ -265,6 +303,7 @@ const createExtensionHost = (config = {}, options = {}, hooks = {}) => {
       cdp,
       cdpStarted: attachment ? attachment.cdpStarted : Promise.resolve(),
       broker,
+      debuggerService,
       optionsHost,
       policyFor,
       backgroundHost: attachment ? attachment.backgroundHost : null,

@@ -102,6 +102,12 @@ expression `executeJavaScript`-ed into the frontend's main world, never `require
 - `inspected-window.js` — `chrome.devtools.inspectedWindow.eval` / `.reload` as
   `Runtime.evaluate` / `Page.reload` on that session, with the pure CDP → Chrome
   `[value, exceptionInfo]` mapping (`mapEvaluation`).
+- `debugger-service.js` — `chrome.debugger`: one more `CdpSession` per attached extension, to
+  the same target, with `reconnect: false`, no prime and no command timeout. Commands are
+  forwarded unchanged and answered by the app; the session's events and its close
+  (`onDetach("target_closed")`) go to every context of that extension. The service owns
+  only the API contract: one attachment per extension, which debuggee names the app, and
+  Chrome's error texts. [features/DEBUGGER.md](features/DEBUGGER.md).
 - `network-model.js` + `network-service.js` — the shell's own network model, built from the
   host session's `Network.*` notifications (`requestWillBeSent` → `loadingFinished`/`loadingFailed`)
   with lazy single-flight `Network.enable`, a bounded record buffer, HAR 1.2 output and lazy

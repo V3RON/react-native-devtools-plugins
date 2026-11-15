@@ -39,6 +39,9 @@
 //   getAlarmClockScale — optional () => number: the host's clock multiplier for
 //                    chrome.alarms (src/electron/shell/config.js explains why main decides it
 //                    and the frame is handed it). 1 = real time.
+//   debuggerHost   — optional {attach, detach, sendCommand, getTargets} behind
+//                    chrome.debugger (docs/features/DEBUGGER.md); absent = every call
+//                    fails with "no host".
 //   showNotification / hideNotification / getNotificationPermissionLevel —
 //                    optional host capability behind chrome.notifications (issue #4).
 //                    Absent = no backend, so create() names no id at all.
@@ -55,6 +58,7 @@ const { createPermissionsApi } = require("./permissions-api");
 const { createAlarms } = require("./alarms");
 const { createI18n } = require("./i18n");
 const { createDownloads } = require("./downloads");
+const { createDebugger } = require("./debugger");
 const { createCommands, createContextMenus, createSidePanel } = require("./browser-shells");
 const { declaredPermissions } = require("../broker/permissions");
 const { buildExtensionURL } = require("../scheme/protocol");
@@ -89,6 +93,7 @@ const createChromeNamespace = ({
   searchDownloads = null,
   respondSuggestion = null,
   openOptionsPage = null,
+  debuggerHost = {},
   logger = console,
 }) => {
   // Shared mutable lastError holder — runtime exposes it as a live getter;
@@ -175,6 +180,12 @@ const createChromeNamespace = ({
     respondSuggestion,
     onUnsupported: (message) => logger.warn(`[chrome.downloads] ${message}`),
   });
+
+  // [REAL] `chrome.debugger` over the extension's own debugger session to the inspected
+  // app (src/electron/extensions/internal/cdp/debugger-service.js). Commands are forwarded as they
+  // are, and the app answers them. Built before the namespace because host deliveries
+  // (onEvent, onDetach) are routed into it.
+  const debuggerShim = createDebugger({ ...debuggerHost, lastError: lastErrorScope });
 
   let handleDelivery = () => {};
   if (transport) {
@@ -384,6 +395,19 @@ const createChromeNamespace = ({
       onUnsupported: (message) => logger.warn(`[chrome.sidePanel] ${message}`),
       lastError,
     }),
+
+    // [REAL] `chrome.debugger` — the extension's own CDP session to the inspected React
+    // Native app, gated on the declared `debugger` permission like Chrome's. Every
+    // command goes to the app unchanged and its answer comes back unchanged: the app
+    // decides what it supports (React Native answers -32601 for what it does not), so
+    // this host keeps no list of domains. One attachment per extension, shared by its
+    // contexts; onEvent/onDetach fire in each of them. docs/features/DEBUGGER.md.
+    debugger: gateCallbackNamespace(debuggerShim, {
+      api: "debugger",
+      check: (api) => gate.check(api),
+      setLastError,
+      onDenied: (method, error) => reportDenied(`${method}: ${error.message}`, "debugger"),
+    }),
   };
 
   // Host -> frame delivery entry point (non-enumerable: not part of the exposed
@@ -405,6 +429,11 @@ const createChromeNamespace = ({
         if (downloads._onDelivery(delivery)) {
           return;
         }
+      }
+      // `debugger` pushes are chrome.debugger's own (onEvent / onDetach).
+      if (delivery && delivery.kind === "debugger") {
+        debuggerShim._onDelivery(delivery);
+        return;
       }
       // `theme` pushes are chrome.devtools.panels' own (themeName / setThemeChangeHandler).
       if (delivery && delivery.kind === "theme") {

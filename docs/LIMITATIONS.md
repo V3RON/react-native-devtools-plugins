@@ -309,6 +309,14 @@
   (`src/electron/extensions/internal/cdp/cdp-session.js`), and the backend delivers
   `Runtime.bindingCalled` only to sessions that added that binding, so the host's binding
   stays in the host's session.
+- **`chrome.debugger` forwards every command, including the ones that act on the whole app.**
+  Each attached extension has a session of its own, so what it enables and hears stays its
+  own. But `Debugger.pause` stops the app under the frontend too, and Hermes has one sampling
+  profiler, so an extension's `Profiler.start`/`stop` can collide with a profile the
+  Performance panel is recording. Nothing marks an attached extension the way Chrome's
+  infobar does. React Native's backend decides what it supports. 0.88 sends no
+  `Network.webSocket*` events unless `fuseboxWebSocketEventsEnabled` is on, and ignores
+  `awaitPromise` ([features/DEBUGGER.md](features/DEBUGGER.md)).
 - **A `.crx` is verified for integrity, not for origin.** The CRX3 signatures are checked
   as Chromium's verifier checks them (every proof verifies, one key matches the signed id),
   so a changed file is refused. The Web Store's own signature is not checked, so a `.crx`

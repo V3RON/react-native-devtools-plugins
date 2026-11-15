@@ -3,8 +3,7 @@
 // keeps the real proxy's two rules: an allowed Origin, and /json/list capabilities.
 const test = require("node:test");
 const assert = require("node:assert");
-const http = require("node:http");
-const WebSocket = require("ws");
+const { startProxy } = require("./fake-inspector-proxy");
 const {
   createCdpSession,
   cdpTargetOf,
@@ -19,93 +18,6 @@ const waitFor = async (predicate, { timeoutMs = 3000, intervalMs = 5 } = {}) => 
     if (Date.now() > deadline) throw new Error("timed out waiting for condition");
     await new Promise((resolve) => setTimeout(resolve, intervalMs));
   }
-};
-
-/** A dev server: /json/list plus /inspector/debug, with InspectorProxy's Origin rule. */
-const startProxy = async ({ multipleDebuggers = true } = {}) => {
-  const sockets = new Set();
-  const commands = [];
-  const origins = [];
-  const refusals = new Map();
-  let connections = 0;
-  let silent = false;
-  const state = { multipleDebuggers };
-  const server = http.createServer((request, response) => {
-    if (!request.url.startsWith("/json/list")) {
-      response.writeHead(404);
-      response.end();
-      return;
-    }
-    response.writeHead(200, { "content-type": "application/json" });
-    response.end(
-      JSON.stringify([
-        {
-          id: "dev-1",
-          type: "node",
-          title: "fake-app",
-          webSocketDebuggerUrl: `ws://localhost:${server.address().port}/inspector/debug?device=dev&page=1`,
-          reactNative: { capabilities: { supportsMultipleDebuggers: state.multipleDebuggers } },
-        },
-      ])
-    );
-  });
-  const wss = new WebSocket.Server({
-    server,
-    path: "/inspector/debug",
-    verifyClient: ({ origin }) => {
-      origins.push(origin || null);
-      try {
-        return ["localhost", "127.0.0.1"].includes(new URL(origin).hostname);
-      } catch {
-        return false;
-      }
-    },
-  });
-  wss.on("connection", (socket) => {
-    connections += 1;
-    sockets.add(socket);
-    socket.on("message", (raw) => {
-      const message = JSON.parse(String(raw));
-      commands.push(message);
-      if (silent) return;
-      const refusal = refusals.get(message.method);
-      socket.send(
-        JSON.stringify(
-          refusal
-            ? { id: message.id, error: { code: -32601, message: refusal } }
-            : { id: message.id, result: { echo: message.method } }
-        )
-      );
-    });
-    socket.on("close", () => sockets.delete(socket));
-  });
-  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const port = server.address().port;
-  const frontendUrl = new URL(`http://127.0.0.1:${port}/rozenite/rn_fusebox.html`);
-  frontendUrl.searchParams.set("ws", `127.0.0.1:${port}/inspector/debug?device=dev&page=1`);
-  return {
-    port,
-    frontendUrl: frontendUrl.href,
-    state,
-    commands: (method) => commands.filter((entry) => !method || entry.method === method),
-    origins,
-    connections: () => connections,
-    refuse: (method, message) => refusals.set(method, message),
-    silence: () => {
-      silent = true;
-    },
-    push: (message) => {
-      for (const socket of sockets) socket.send(JSON.stringify(message));
-    },
-    dropAll: () => {
-      for (const socket of sockets) socket.terminate();
-    },
-    close: () =>
-      new Promise((resolve) => {
-        for (const socket of sockets) socket.terminate();
-        wss.close(() => server.close(resolve));
-      }),
-  };
 };
 
 const sessionFor = (t, options = {}) => {
@@ -289,4 +201,100 @@ test("close stops re-dialling and rejects pending commands", async (t) => {
   await new Promise((resolve) => setTimeout(resolve, 80));
   assert.equal(proxy.connections(), 1, "no re-dial after close");
   assert.equal(session.status().attached, false);
+});
+
+// ── what chrome.debugger needs from a session (cdp/debugger-service.js) ─────
+test("reconnect: false is one attempt: a session the app closes stays closed and says so once", async (t) => {
+  const proxy = await startProxy();
+  t.after(() => proxy.close());
+  const { session } = sessionFor(t, { reconnect: false, prime: [] });
+  const detaches = [];
+  session.onDetach((reason) => detaches.push(reason));
+
+  assert.equal(await session.open(proxy.frontendUrl), true);
+  assert.deepStrictEqual(proxy.commands(), [], "no prime: an extension's session starts with nothing enabled");
+  proxy.dropAll();
+  await waitFor(() => detaches.length === 1);
+  await new Promise((resolve) => setTimeout(resolve, 80)); // longer than the back-off
+  assert.equal(proxy.connections(), 1, "not dialled again");
+  assert.match(detaches[0], /closed/);
+  assert.equal(session.status().attached, false);
+  await assert.rejects(session.sendCommand("Runtime.evaluate"), (error) => error.code === "DETACHED");
+});
+
+test("reconnect: false that cannot attach answers false once and stops", async (t) => {
+  const proxy = await startProxy({ multipleDebuggers: false });
+  t.after(() => proxy.close());
+  const { session } = sessionFor(t, { reconnect: false });
+  assert.equal(await session.open(proxy.frontendUrl), false);
+  assert.match(session.status().reason, /multiple debuggers/);
+  proxy.state.multipleDebuggers = true;
+  await new Promise((resolve) => setTimeout(resolve, 80));
+  assert.equal(proxy.connections(), 0, "no second check, no dial");
+});
+
+test("closing the session never reports a detach; closing it mid-open settles the open", async (t) => {
+  const proxy = await startProxy();
+  t.after(() => proxy.close());
+  const { session } = sessionFor(t, { reconnect: false });
+  let detaches = 0;
+  session.onDetach(() => {
+    detaches += 1;
+  });
+  await session.open(proxy.frontendUrl);
+  await session.close();
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(detaches, 0, "the host's own close is not the app going away");
+
+  // The prime never answers, so open() is still waiting when close() comes.
+  proxy.silence();
+  const { session: slow } = sessionFor(t, { prime: ["Runtime.enable"], requestTimeoutMs: 0 });
+  const opening = slow.open(proxy.frontendUrl);
+  await waitFor(() => proxy.commands("Runtime.enable").length === 1);
+  await slow.close();
+  assert.equal(await opening, false);
+});
+
+test("requestTimeoutMs: 0 waits for the answer however long it takes", async (t) => {
+  const proxy = await startProxy();
+  t.after(() => proxy.close());
+  const { session } = sessionFor(t, { reconnect: false, prime: [], requestTimeoutMs: 0 });
+  await session.open(proxy.frontendUrl);
+  proxy.silence("HeapProfiler.takeHeapSnapshot");
+  let settled = false;
+  const pending = session.sendCommand("HeapProfiler.takeHeapSnapshot").finally(() => {
+    settled = true;
+  });
+  await new Promise((resolve) => setTimeout(resolve, 600)); // past sessionFor's 500 ms default
+  assert.equal(settled, false, "no budget, no timeout");
+  proxy.dropAll();
+  await assert.rejects(pending, (error) => error.code === "DETACHED");
+});
+
+test("a backend error keeps its own object; sessionId goes out and comes back as given", async (t) => {
+  const proxy = await startProxy();
+  t.after(() => proxy.close());
+  const { session } = sessionFor(t, { prime: [] });
+  await session.open(proxy.frontendUrl);
+
+  const backendError = { code: -32601, message: "Unsupported method 'DOM.getDocument'", data: "x" };
+  proxy.refuse("DOM.getDocument", backendError);
+  await assert.rejects(session.sendCommand("DOM.getDocument"), (error) => {
+    assert.deepStrictEqual(error.cdpError, backendError);
+    return true;
+  });
+
+  await session.sendCommand("Runtime.evaluate", { expression: "1" }, { sessionId: "child-1" });
+  assert.equal(proxy.commands("Runtime.evaluate")[0].sessionId, "child-1");
+  assert.equal(proxy.commands("DOM.getDocument")[0].sessionId, undefined, "absent unless asked for");
+
+  const seen = [];
+  session.onEvent("*", (params, method, sessionId) => seen.push([method, sessionId]));
+  proxy.push({ method: "Runtime.consoleAPICalled", params: {}, sessionId: "child-1" });
+  proxy.push({ method: "Runtime.consoleAPICalled", params: {} });
+  await waitFor(() => seen.length === 2);
+  assert.deepStrictEqual(seen, [
+    ["Runtime.consoleAPICalled", "child-1"],
+    ["Runtime.consoleAPICalled", undefined],
+  ]);
 });

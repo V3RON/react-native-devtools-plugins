@@ -30,18 +30,29 @@
 // `onAttach` fires, which is where consumers re-arm what a session owns (`Network.enable`,
 // `Runtime.addBinding`).
 //
+// The same object also backs `chrome.debugger` (./debugger-service.js), one per attached
+// extension, with two options changed: `reconnect: false`, because an extension's
+// attachment ends when its socket does (Chrome's onDetach "target_closed") rather than
+// silently coming back without the domains it had enabled; and no request timeout,
+// because Chrome puts none on `sendCommand` and a heap snapshot or a profile can take
+// longer than any budget chosen here.
+//
 // No Electron here: transports and logging are injectable, so tests/cdp-session.test.js
 // runs it against a fake inspector proxy in the same process.
 const WebSocket = require("ws");
 
 const DEFAULTS = Object.freeze({
   // How long a command waits for its reply (chrome.devtools.inspectedWindow.eval's budget).
+  // 0 means no limit: the command waits until it is answered or the session ends.
   requestTimeoutMs: 10000,
   // How long the capability lookup may take before the attempt counts as failed.
   capabilityTimeoutMs: 3000,
   // Re-dial back-off, doubling from min to max; reset after a session that attached.
   reconnectMinMs: 250,
   reconnectMaxMs: 5000,
+  // Whether a lost or refused session is dialled again. False: one attempt, and an
+  // attached session that closes stays closed (onDetach fires).
+  reconnect: true,
   // Sent on every new session before it reports attached. `Runtime.enable` is what makes
   // the backend report execution contexts (created / cleared), which the network model and
   // the content bridge re-arm on.
@@ -129,6 +140,7 @@ const capabilityOf = (entries, wsUrl) => {
  * @param {number} [options.capabilityTimeoutMs]
  * @param {number} [options.reconnectMinMs]
  * @param {number} [options.reconnectMaxMs]
+ * @param {boolean} [options.reconnect] dial again after a loss (default true)
  * @param {string[]} [options.prime] commands every new session sends before attaching
  * @param {Function} [options.WebSocket] ws-compatible client (tests)
  * @param {Function} [options.fetch] fetch-compatible implementation (tests)
@@ -140,6 +152,7 @@ const createCdpSession = (options = {}) => {
     capabilityTimeoutMs,
     reconnectMinMs,
     reconnectMaxMs,
+    reconnect,
     prime,
     WebSocket: WS = WebSocket,
     fetch = globalThis.fetch,
@@ -149,6 +162,7 @@ const createCdpSession = (options = {}) => {
   /** CDP method | "*" -> handlers */
   const handlers = new Map();
   const attachHandlers = new Set();
+  const detachHandlers = new Set();
   /** id -> {method, resolve, reject, timer} */
   const pending = new Map();
   let nextId = 0;
@@ -162,6 +176,7 @@ const createCdpSession = (options = {}) => {
   let reason = "the debugger session is not open";
   let lastLoggedReason = null;
   let wake = null; // resolves the current back-off sleep early (close)
+  let settleOpen = null; // resolves the promise the current open() returned
 
   const setReason = (next) => {
     reason = next;
@@ -187,14 +202,26 @@ const createCdpSession = (options = {}) => {
     });
 
   // ── events ───────────────────────────────────────────────────────────────
-  const emit = (method, params) => {
+  const emit = (method, params, sessionId) => {
     for (const key of [method, "*"]) {
       for (const handler of [...(handlers.get(key) || [])]) {
         try {
-          handler(params || {}, method);
+          handler(params || {}, method, sessionId);
         } catch (error) {
           log("error", `CDP event handler for ${method} threw: ${error.message}`);
         }
+      }
+    }
+  };
+
+  // Only for a session that WAS attached and closed from the other side: close() takes the
+  // socket first, so a session the host closed itself never reports a detach.
+  const emitDetach = () => {
+    for (const handler of [...detachHandlers]) {
+      try {
+        handler(reason);
+      } catch (error) {
+        log("error", `CDP detach handler threw: ${error.message}`);
       }
     }
   };
@@ -220,21 +247,27 @@ const createCdpSession = (options = {}) => {
     }
   };
 
-  const send = (via, method, params, timeoutMs) => {
+  const send = (via, method, params, timeoutMs, sessionId) => {
     const id = ++nextId;
     const message = { id, method };
     if (params !== undefined) {
       message.params = params;
     }
+    if (sessionId !== undefined) {
+      message.sessionId = sessionId;
+    }
     const budget = timeoutMs || requestTimeoutMs;
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        if (pending.delete(id)) {
-          const error = new Error(`${method}: timed out after ${budget}ms without a reply`);
-          error.code = "TIMEOUT";
-          reject(error);
-        }
-      }, budget);
+      const timer =
+        budget > 0 && Number.isFinite(budget)
+          ? setTimeout(() => {
+              if (pending.delete(id)) {
+                const error = new Error(`${method}: timed out after ${budget}ms without a reply`);
+                error.code = "TIMEOUT";
+                reject(error);
+              }
+            }, budget)
+          : null;
       pending.set(id, { method, resolve, reject, timer });
       try {
         via.send(JSON.stringify(message));
@@ -249,13 +282,19 @@ const createCdpSession = (options = {}) => {
   /**
    * Send a CDP command on the host's session and wait for its reply. Rejects when no
    * session is attached (with the reason), when the backend answers with an error, or
-   * after the timeout. It never resolves with invented data.
+   * after the timeout. It never resolves with invented data. A backend error keeps the
+   * backend's own object as `error.cdpError` ({code, message, data?}).
+   *
+   * @param {{timeoutMs?: number, sessionId?: string}} [options] `sessionId` addresses a
+   *        child session, and is sent as given
    */
-  const sendCommand = (method, params, { timeoutMs } = {}) => {
+  const sendCommand = (method, params, { timeoutMs, sessionId } = {}) => {
     if (!attached || !isOpen(socket)) {
-      return Promise.reject(new Error(`${method}: no CDP session is attached (${reason})`));
+      const error = new Error(`${method}: no CDP session is attached (${reason})`);
+      error.code = "DETACHED";
+      return Promise.reject(error);
     }
-    return send(socket, method, params, timeoutMs);
+    return send(socket, method, params, timeoutMs, sessionId);
   };
 
   const onMessage = (raw) => {
@@ -279,6 +318,7 @@ const createCdpSession = (options = {}) => {
         const error = new Error(`${entry.method}: ${message.error.message || "CDP error"}`);
         error.code = message.error.code;
         error.method = entry.method;
+        error.cdpError = message.error;
         entry.reject(error);
       } else {
         entry.resolve(message.result);
@@ -286,7 +326,7 @@ const createCdpSession = (options = {}) => {
       return;
     }
     if (typeof message.method === "string") {
-      emit(message.method, message.params);
+      emit(message.method, message.params, message.sessionId);
     }
   };
 
@@ -351,7 +391,8 @@ const createCdpSession = (options = {}) => {
           setReason(`the debugger session closed (${code} ${String(why) || "no reason"})`);
           rejectPending("the debugger session closed");
           if (wasAttached) {
-            log("info", "detached; re-dialling the same target");
+            log("info", reconnect ? "detached; re-dialling the same target" : "detached");
+            emitDetach();
           }
         }
         resolve();
@@ -395,6 +436,10 @@ const createCdpSession = (options = {}) => {
       if (mine !== run) {
         return;
       }
+      if (!reconnect) {
+        onFirst(false);
+        return;
+      }
       if (wasAttached) {
         delay = reconnectMinMs;
       }
@@ -422,9 +467,15 @@ const createCdpSession = (options = {}) => {
       const onFirst = (value) => {
         if (first) {
           first = false;
+          if (settleOpen === onFirst) {
+            settleOpen = null;
+          }
           resolve(value);
         }
       };
+      // close() before the first attempt finished settles this as "did not attach",
+      // rather than leaving the caller waiting on a run that has stopped.
+      settleOpen = onFirst;
       loop(mine, where.wsUrl, where.devServer, onFirst).catch((error) => {
         log("error", `session loop: ${error.message}`);
         onFirst(false);
@@ -437,6 +488,11 @@ const createCdpSession = (options = {}) => {
     run += 1;
     if (wake) {
       wake();
+    }
+    if (settleOpen) {
+      const settle = settleOpen;
+      settleOpen = null;
+      settle(false);
     }
     const current = socket;
     socket = null;
@@ -456,6 +512,7 @@ const createCdpSession = (options = {}) => {
 
   /**
    * Subscribe to CDP notifications: `method` exact ("Network.requestWillBeSent") or "*".
+   * Handlers get (params, method, sessionId) — sessionId only for a child session's event.
    * @returns {() => void} unsubscribe
    */
   const onEvent = (method, handler) => {
@@ -485,12 +542,28 @@ const createCdpSession = (options = {}) => {
     };
   };
 
+  /**
+   * Called when an ATTACHED session's socket closed from the other side (the app went
+   * away, the proxy dropped it), with the reason. Not called for close().
+   * @returns {() => void} unsubscribe
+   */
+  const onDetach = (handler) => {
+    if (typeof handler !== "function") {
+      throw new TypeError("onDetach(handler: function)");
+    }
+    detachHandlers.add(handler);
+    return () => {
+      detachHandlers.delete(handler);
+    };
+  };
+
   return {
     open,
     close,
     sendCommand,
     onEvent,
     onAttach,
+    onDetach,
     isAttached: () => attached && isOpen(socket),
     /** @returns {{attached: boolean, target: object|null, reason: string|null}} */
     status: () => ({ attached: attached && isOpen(socket), target, reason: attached ? null : reason }),

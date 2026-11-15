@@ -61,6 +61,10 @@ const {
   DOWNLOAD_ERASE,
   DOWNLOAD_SEARCH,
   DOWNLOAD_SUGGEST_REPLY,
+  DEBUGGER_ATTACH,
+  DEBUGGER_DETACH,
+  DEBUGGER_SEND,
+  DEBUGGER_GET_TARGETS,
 } = require("../broker/channels");
 
 const extensionId = window.location.hostname; // id == hostname: load-bearing
@@ -316,6 +320,17 @@ const chrome = createChromeNamespace({
     asRegisteredCaller(() => ipcRenderer.invoke(OPTIONS_OPEN)).then(
       (reply) => reply || { ok: false, error: "openOptionsPage: no answer from the host." }
     ),
+  // chrome.debugger -> this extension's own debugger session in main
+  // (src/electron/extensions/internal/cdp/debugger-service.js). Main gates every call on the
+  // `debugger` grant and reads the owning extension off this frame's URL.
+  debuggerHost: {
+    attach: ({ target, requiredVersion }) =>
+      asRegisteredCaller(() => ipcRenderer.invoke(DEBUGGER_ATTACH, { target, requiredVersion })),
+    detach: ({ target }) => asRegisteredCaller(() => ipcRenderer.invoke(DEBUGGER_DETACH, { target })),
+    sendCommand: ({ target, method, params }) =>
+      asRegisteredCaller(() => ipcRenderer.invoke(DEBUGGER_SEND, { target, method, params })),
+    getTargets: () => asRegisteredCaller(() => ipcRenderer.invoke(DEBUGGER_GET_TARGETS)),
+  },
   // Declared permissions gate capability (docs/features/EXTENSION-MANAGEMENT.md).
   // The verdict this frame is gated on is the host's — RUNTIME_REGISTER read the
   // manifest from disk — so a page-world script cannot widen it by replacing

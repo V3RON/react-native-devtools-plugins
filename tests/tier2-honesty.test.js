@@ -86,6 +86,10 @@ test("every _fire call site in chrome-shim is attributed to a real producer", ()
     // and main routed it to the devtools page that created the panel
     // (src/electron/extensions/internal/frontend/panel-host.js setPanelVisible; one `_fire` serves both events).
     "devtools.js:_fire": 1,
+    // CDP events the inspected app really sent on THIS extension's own debugger session,
+    // and that session really closing from the app's side (or with the window that
+    // inspected it) — src/electron/extensions/internal/cdp/debugger-service.js pushes both.
+    "debugger.js:_fire": 2,
   };
 
   const counts = {};
@@ -272,6 +276,7 @@ test("the namespaces that exist are exactly the ones the docs claim", () => {
     "alarms",
     "commands",
     "contextMenus",
+    "debugger",
     "devtools",
     "downloads",
     "i18n",

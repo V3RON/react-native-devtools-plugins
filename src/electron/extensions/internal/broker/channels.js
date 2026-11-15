@@ -100,6 +100,22 @@ module.exports = {
    *  app context, so a payload can never name another extension's script. */
   TABS_SEND_TO_APP: "tabs-send-to-app",
 
+  // ── chrome.debugger (docs/features/DEBUGGER.md) ─────────────────────────────
+  // All four are gated on the frame's `debugger` grant in main. The attachment belongs to
+  // the calling frame's EXTENSION (from the frame's URL), and its events and its
+  // onDetach come back to every context of that extension as RUNTIME_DELIVER
+  // {kind: "debugger"}.
+  /** ({target, requiredVersion}) -> {ok} | {ok: false, error}: open the extension's own
+   *  debugger session to the inspected app. */
+  DEBUGGER_ATTACH: "debugger-attach",
+  /** ({target}) -> {ok} | {ok: false, error}: close it (no onDetach, as in Chrome). */
+  DEBUGGER_DETACH: "debugger-detach",
+  /** ({target, method, params}) -> {ok, result} | {ok: false, error}: forwarded as is;
+   *  a backend error comes back as its JSON, Chrome's lastError text. */
+  DEBUGGER_SEND: "debugger-send",
+  /** () -> {ok, result: TargetInfo[]}: the inspected app, when there is one. */
+  DEBUGGER_GET_TARGETS: "debugger-get-targets",
+
   // ── chrome.notifications (docs/features/SMALL-SHIMS.md) ──────────────────────
   /** ({id, title, message, silent}) -> show one system notification for the calling
    *  context. Main records the caller's OWN frame key as the owner, so a later click
