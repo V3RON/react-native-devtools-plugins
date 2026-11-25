@@ -19,6 +19,7 @@ const path = require("node:path");
 const { settings: config } = require("../src/electron/extensions/internal/settings");
 config.extensionsDir = require("../src/electron/shell/config").extensionsDir;
 const { scanExtensions, scanBackgroundExtensions } = require("../src/electron/extensions/internal/registry/extensions");
+const { packageFor } = require("../src/electron/extensions/internal/registry/packages");
 
 const REPO = path.join(__dirname, "..");
 const REAL_EXTENSIONS_DIR = config.extensionsDir;
@@ -194,10 +195,24 @@ test("the shipped extensions resolve the way the manifests say", () => {
     "sample-extension is still a devtools page"
   );
 
-  // Every discovered script actually exists on disk — a worker that cannot be
-  // served is a worker that silently never runs.
+  // The signed .crx files (read in place, never unpacked) are found under the id
+  // Chrome derives from their key, each with its service worker.
+  for (const [extensionId, script] of [
+    ["lmhkpmbekcpmknklioeibfkpmmfibljd", "background.bundle.js"], // Redux DevTools
+    ["jdkknkkbebbapilgoeccciglkfbmbnfm", "service_worker.js"], // Apollo Client Devtools
+    ["annajfchloimdhceglpgglpeepfghfai", "background.js"], // TanStack Query DevTools
+    ["ncedobpgnmkhcmnnkcimnobpfepidadl", "build/background.js"], // Relay Developer Tools
+    ["oddhnidmicpefilikhgeagedibnefkcf", "background.js"], // React Context DevTool
+  ]) {
+    assert.ok(backgrounds[extensionId], `${extensionId} has a background worker`);
+    assert.strictEqual(backgrounds[extensionId].script, script);
+  }
+
+  // Every discovered script actually exists in its package (a folder or a .crx) — a
+  // worker that cannot be served is a worker that silently never runs.
   for (const entry of Object.values(backgrounds)) {
-    const file = path.join(REAL_EXTENSIONS_DIR, entry.extensionId, entry.script);
-    assert.ok(fs.existsSync(file), `${entry.extensionId}: ${entry.script} exists`);
+    const pkg = packageFor(entry.extensionId);
+    assert.ok(pkg, `${entry.extensionId} has a package`);
+    assert.strictEqual(pkg.entry(entry.script).kind, "file", `${entry.extensionId}: ${entry.script} exists`);
   }
 });

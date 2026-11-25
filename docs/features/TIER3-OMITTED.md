@@ -54,7 +54,7 @@ its events therefore has no producer.
 ## Browser data & state
 
 `bookmarks`, `history`, `cookies`, `sessions`, `topSites`, `readingList`, `search`,
-`browsingData`, `webNavigation`, downloads DB, `proxy`, `privacy`, `contentSettings`,
+`browsingData`, downloads DB, `proxy`, `privacy`, `contentSettings`,
 `fontSettings`, `accessibilityFeatures`.
 
 ## Browser network control

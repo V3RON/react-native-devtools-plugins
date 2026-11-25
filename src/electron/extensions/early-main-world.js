@@ -1,0 +1,106 @@
+// Dev-only: an extension's MAIN-world hook, run before the app's first module.
+//
+// The second public entry of the extension host, next to ./index.js, and the only one a
+// bundler may load: no Electron, no settings, nothing but files in, source text out.
+//
+// Why it exists (docs/features/CONTENT-SCRIPTS.md, "Known hard limits"): the content
+// bridge injects when a debugger attaches, and some libraries look for their DevTools
+// hook only once, at load time. Redux's `configureStore` reads
+// `window.__REDUX_DEVTOOLS_EXTENSION_COMPOSE__` when the store is created, and
+// relay-runtime calls `__RELAY_DEVTOOLS_HOOK__.registerEnvironment` from the Environment
+// constructor. In a browser a `document_start` content script runs first; in React Native
+// the bundler is the only thing that runs before the app's code, so it runs the hook.
+//
+// What is produced is the host's OWN MAIN-world expression (./internal/content/scope.js),
+// so the hook lands in the same per-extension scope, on the same private bus, that the
+// content bridge injects into later. Each file is marked as run, and the bridge does not
+// evaluate it again. Messages the hook posts before the extension's ISOLATED world exists
+// are kept by the bus and handed to it when it is injected.
+//
+// Usage (app/metro.config.js): write `earlyMainWorldSource(...)` to a file and add it to
+// Metro's `serializer.getPolyfills`.
+const fs = require("fs");
+const path = require("path");
+const { createCrxPackage } = require("./internal/registry/packages/crx-package");
+const { createDirectoryPackage } = require("./internal/registry/packages/directory-package");
+const { mainWorldExpression, markRanEarlyExpression } = require("./internal/content/scope");
+
+/** The package for `extensionId` in `extensionsDir`: its folder, else a .crx with that id. */
+const openPackage = (extensionsDir, extensionId) => {
+  const folder = path.join(extensionsDir, extensionId);
+  if (fs.existsSync(path.join(folder, "manifest.json"))) {
+    return createDirectoryPackage({ id: extensionId, root: folder });
+  }
+  for (const name of fs.readdirSync(extensionsDir).sort()) {
+    if (!name.endsWith(".crx")) continue;
+    try {
+      const pkg = createCrxPackage({ file: path.join(extensionsDir, name) });
+      if (pkg.id === extensionId) return pkg;
+    } catch {
+      // not a loadable .crx: the host says so when it scans; nothing to run from it here
+    }
+  }
+  return null;
+};
+
+/** A manifest's MAIN-world `document_start` content-script files, in manifest order. */
+const declaredHooks = (manifest) =>
+  (Array.isArray(manifest.content_scripts) ? manifest.content_scripts : [])
+    .filter((entry) => entry && entry.world === "MAIN" && entry.run_at === "document_start")
+    .flatMap((entry) => (Array.isArray(entry.js) ? entry.js : []));
+
+/**
+ * @param {object} options
+ * @param {string} options.extensionsDir the host's extensions folder
+ * @param {Array<string|{id: string, files?: string[]}>} options.extensions which extensions
+ *        to run early. A bare id runs its manifest's MAIN-world `document_start` content
+ *        scripts. `files` names the hook files explicitly, for an extension whose hook
+ *        reaches the MAIN world through `<script src>` from its content script instead
+ *        (Relay DevTools' build/injectedRelayDevToolsDetector.js).
+ * @returns {{source: string, ran: Array<{id: string, file: string}>, problems: string[]}}
+ */
+const earlyMainWorldSource = ({ extensionsDir, extensions }) => {
+  const parts = [];
+  const ran = [];
+  const problems = [];
+  for (const spec of extensions || []) {
+    const id = typeof spec === "string" ? spec : spec && spec.id;
+    if (!id) continue;
+    const pkg = openPackage(extensionsDir, id);
+    if (!pkg) {
+      problems.push(`${id}: not installed in ${extensionsDir}`);
+      continue;
+    }
+    let manifest;
+    try {
+      manifest = JSON.parse(pkg.readText("manifest.json"));
+    } catch (error) {
+      problems.push(`${id}: manifest.json is unreadable (${error.message})`);
+      continue;
+    }
+    const files = typeof spec === "object" && Array.isArray(spec.files) ? spec.files : declaredHooks(manifest);
+    if (files.length === 0) {
+      problems.push(`${id}: declares no MAIN-world document_start content script; name its hook in "files"`);
+    }
+    for (const file of files) {
+      const innerPath = String(file).replace(/^\/+/, "");
+      const source = pkg.readText(innerPath);
+      if (source === null) {
+        problems.push(`${id}: ${innerPath} is not in the package`);
+        continue;
+      }
+      parts.push(
+        `// ${manifest.name || id} (${id}): ${innerPath}\n` +
+          `try {\n${mainWorldExpression({ extensionId: id, source })}\n${markRanEarlyExpression({ extensionId: id, innerPath })}\n` +
+          `} catch (error) { console.warn(${JSON.stringify(`[devtools] early hook ${id}/${innerPath} failed:`)}, error); }\n`
+      );
+      ran.push({ id, file: innerPath });
+    }
+  }
+  const header =
+    "// Generated by src/electron/extensions/early-main-world.js. Dev-only: DevTools\n" +
+    "// extension hooks, each in its extension's own scope, before any app module.\n";
+  return { source: header + parts.join("\n"), ran, problems };
+};
+
+module.exports = { earlyMainWorldSource };

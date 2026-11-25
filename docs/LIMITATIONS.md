@@ -26,7 +26,14 @@
   arrived since (issue #5, [features/CONTENT-SCRIPTS.md](features/CONTENT-SCRIPTS.md)), but only
   for an extension a developer names in `DEVTOOLS_CONTENT_SCRIPTS`, and only into the app's own
   JS context — Hermes has no isolated worlds, so a script there can read and overwrite app
-  globals. Observed on a real device; the message-loss gap that run found is fixed and
+  globals. A library that looks for its DevTools hook once, at load (mobx, Redux's
+  `configureStore`, relay-runtime's `Environment`), needs the hook installed before its
+  module runs, which only the bundler can do: dev-only, through
+  `src/electron/extensions/early-main-world.js` as a Metro polyfill (`app/metro.config.js`).
+  The browser surface content scripts assume (`document`, `location`, `navigator`, events,
+  `MessageChannel`) is answered per extension from its scope, never on the app's global, and
+  is a thin stand-in: no layout, no real DOM, `location` is `about:blank`
+  ([features/CONTENT-SCRIPTS.md](features/CONTENT-SCRIPTS.md)). Observed on a real device; the message-loss gap that run found is fixed and
   re-observed there, so a send nobody could receive now fails with Chrome's own connection
   error instead of looking answered. What HAS arrived since (issue #4,
   [features/SMALL-SHIMS.md](features/SMALL-SHIMS.md)): `notifications` raises real system
@@ -178,6 +185,12 @@
   and `InspectorFrontendHost.sendMessageToBackend` is never called — that Chrome escape
   hatch is structurally unavailable here, and the host reaches the backend over its own
   session instead ([features/DISPATCH-CHANNEL.md](features/DISPATCH-CHANNEL.md)).
+
+- **Extensions see Chrome's user agent.** The host removes the `Electron/x` token from its
+  session's agent and from Electron's app-wide fallback (extension frames are out-of-process
+  iframes, which report the fallback). Redux DevTools otherwise takes its "Electron port" path
+  and replaces real `chrome.*` namespaces with stubs. The fallback is process-wide, so the
+  embedder's other sessions lose the token too.
 
 **Security & robustness**
 

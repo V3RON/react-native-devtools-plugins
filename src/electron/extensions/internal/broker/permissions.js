@@ -40,7 +40,8 @@ const API_PERMISSIONS = {
 // `permissions` is here because it is self-referential in Chrome too: an extension
 // may always ask what it holds (src/electron/extensions/internal/shim/permissions-api.js). So may
 // `alarms`-adjacent shells that invent nothing: `sidePanel` needs no permission in
-// Chrome and this shell renders no panel drawer, so there is nothing to gate.
+// Chrome and this shell renders no panel drawer, so there is nothing to gate; nor is there
+// in `webNavigation`, whose events never fire and whose queries answer null here.
 const UNGATED_APIS = [
   "runtime",
   "i18n",
@@ -50,6 +51,7 @@ const UNGATED_APIS = [
   "extension",
   "permissions",
   "sidePanel",
+  "webNavigation",
   "windows",
 ];
 

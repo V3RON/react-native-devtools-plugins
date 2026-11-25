@@ -60,7 +60,7 @@ const { createAlarms } = require("./alarms");
 const { createI18n } = require("./i18n");
 const { createDownloads } = require("./downloads");
 const { createDebugger } = require("./debugger");
-const { createCommands, createContextMenus, createSidePanel } = require("./browser-shells");
+const { createCommands, createContextMenus, createSidePanel, createWebNavigation } = require("./browser-shells");
 const { declaredPermissions } = require("../broker/permissions");
 const { buildExtensionURL } = require("../scheme/protocol");
 const {
@@ -408,6 +408,13 @@ const createChromeNamespace = ({
 
     sidePanel: createSidePanel({
       onUnsupported: (message) => logger.warn(`[chrome.sidePanel] ${message}`),
+      lastError,
+    }),
+
+    // `chrome.webNavigation`: registrable events that never fire and frame queries that
+    // answer null — this host has no frame model (browser-shells.js).
+    webNavigation: createWebNavigation({
+      onUnsupported: (message) => logger.warn(`[chrome.webNavigation] ${message}`),
       lastError,
     }),
 

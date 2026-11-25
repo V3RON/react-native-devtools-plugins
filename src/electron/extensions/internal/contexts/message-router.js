@@ -44,13 +44,23 @@ const createMessageRouter = () => {
       ? { id: frame.extensionId, url: frame.url, tab: frame.tab, frameId: 0 }
       : { id: frame.extensionId, url: frame.url };
 
+  /**
+   * Who hears a `runtime.sendMessage` / `runtime.connect`: the sender's own extension's
+   * EXTENSION contexts (worker, devtools page, panels, options), never a content script.
+   * That is Chrome's rule from either side: a page reaches the content scripts of a tab
+   * only through `tabs.sendMessage` / `tabs.connect` (`sendTo`), and a content script's
+   * runtime messages go to the extension, not to other content scripts. The app's seat
+   * (src/electron/extensions/internal/content/content-bridge.js) is a content-script
+   * context (`frame.contentScript`). Fanning a page's port out to it as well made Relay
+   * DevTools' panel traffic arrive in the app as if the app had connected.
+   */
   const peersOf = (fromKey) => {
     const from = frames.get(fromKey);
     if (!from) {
       return [];
     }
     return [...frames.entries()].filter(
-      ([key, f]) => f.extensionId === from.extensionId && key !== fromKey
+      ([key, f]) => f.extensionId === from.extensionId && key !== fromKey && !f.contentScript
     );
   };
 

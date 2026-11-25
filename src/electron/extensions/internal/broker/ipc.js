@@ -366,7 +366,8 @@ const createBroker = ({
       // every change to its storage. `allowed` is read at delivery time from the host's
       // own grants, so an extension without `storage` is neither served nor told.
       // Every frame this host registers is an extension page (a trusted context); the
-      // untrusted kind Chrome has is a content script, which has no chrome.storage here.
+      // untrusted kind Chrome has is a content script, which the content bridge attaches
+      // itself (content/content-bridge.js, `trusted: false`).
       const sendStorage = makeFrameSender(key, event.sender, frame, STORAGE_DELIVER);
       storageService.attach({
         frameKey: key,
@@ -488,7 +489,9 @@ const createBroker = ({
       if (!resolveFrameKey(event) || typeof expression !== "string") {
         return { ok: false, error: "inspectedWindow.eval: unauthorized call" };
       }
-      return evalInPage(expression, options || {}).then(({ value, exceptionInfo }) => ({
+      // In the calling extension's MAIN world (../cdp/inspected-window.js inWorldOf).
+      const extensionId = event.senderFrame ? extensionIdOfFrame(event) : null;
+      return evalInPage(expression, options || {}, { extensionId }).then(({ value, exceptionInfo }) => ({
         ok: true,
         value,
         exceptionInfo,

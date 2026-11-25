@@ -287,6 +287,7 @@ test("the namespaces that exist are exactly the ones the docs claim", () => {
     "sidePanel",
     "storage",
     "tabs",
+    "webNavigation",
     "webRequest",
   ]);
   // `chrome.windows` is the Tier-2 name on this list's edge: documented as NOT injected, and

@@ -96,6 +96,16 @@ Remaining:
 5. ~~Cross-frame `storage.onChanged`~~ ✅ done, with an extension-wide `storage.session`: the host
    owns the store and fans changes out over their own channel ([STORAGE-AND-I18N.md](STORAGE-AND-I18N.md)).
 
+### Content scripts are not runtime peers
+
+`runtime.sendMessage` / `runtime.connect` reach the sender's own extension contexts (worker,
+devtools page, panels, options), never a content script, from either side. That is Chrome's
+rule: a page addresses a tab's content scripts only through `tabs.sendMessage`. The app's seat
+in the mesh is marked `contentScript` and `peersOf` skips it
+(`src/electron/extensions/internal/contexts/message-router.js`). Before this, a devtools page's
+`runtime.connect({name: tabId})` also opened in the app, so Relay DevTools' worker relayed the
+panel's own traffic into the app (`tests/content-bridge-protocol.test.js` pins the rule).
+
 ## Plan (original, with progress)
 
 1. Host-side message router in the Electron main process: every extension frame

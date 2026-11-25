@@ -68,6 +68,18 @@ being swallowed.
 | `getResources` / `getResourceContent` | `Debugger.getScriptParsed` + script source | not implemented (Tier 2, **implementable** — RN DevTools has a Sources panel) |
 | `getSelectedNode` | 🚷 no anchor — the selected **DOM** node from the Elements panel; RN has no Elements panel and no `DOM` domain | none; answers `null` forever |
 
+### Characters outside the BMP
+
+React Native's Hermes backend (observed on RN 0.88, iOS) refuses to compile a
+`Runtime.evaluate` whose source contains a character outside the Basic Multilingual Plane:
+`Compiling JS failed: Invalid UTF-8 code point 0xd83c`, whether the CDP frame carries the
+character as UTF-8 or as a JSON escape. `toEvaluateParams` therefore writes every such
+character as its JS escape pair (`"\uD83C\uDDF5"`), which is the same string in a string,
+template or regex literal; BMP text ("zażółć") is left as written. Every evaluate the host
+makes goes through it — inspectedWindow.eval, content-script injection and every content-bridge
+delivery — and before it, one emoji in a message (a Relay record's `emoji` field) dropped that
+message.
+
 ### Result mapping (implemented in `src/electron/extensions/internal/cdp/inspected-window.js`)
 
 | CDP answer | Chrome pair |

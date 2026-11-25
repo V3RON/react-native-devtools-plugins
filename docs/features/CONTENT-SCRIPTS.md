@@ -219,17 +219,39 @@ pings, and `backend.js` (MAIN, sees the mobx hook) answers and then relays every
 Hermes has neither API, and putting them on the real global would leak one extension's
 traffic to others and to the app. It would also make the app's own libraries (React's
 scheduler, `setImmediate` shims) feature-detect a browser. Instead, every script and
-`func` an extension injects, including manifest content scripts, runs as
-`(function (window, self, globalThis) { … }).call(scope, scope, scope, scope)`.
+`func` an extension injects, including manifest content scripts, runs as a function of
+`(window, self, globalThis, document, location, navigator, Event, CustomEvent,
+MessageEvent, EventTarget, MessageChannel, MessagePort)`, called with the extension's
+scope and its shims ([content/scope.js](../../src/electron/extensions/internal/content/scope.js)).
 `scope` is a `Proxy` over the real global that belongs to that extension:
 
 - `postMessage`, `addEventListener`/`removeEventListener("message")` and `onmessage` go to
   a bus private to the extension. It is shared by all of that extension's injections,
   in both worlds and across evaluates (a non-enumerable
   `Symbol.for("rozenite.content-bridge.scopes")` registry on the global).
-- Delivery is asynchronous (`setTimeout(0)`), as in the browser, and the event is
-  `{ type, data, origin: "", source: scope, ports: [] }`. `data` is passed by reference,
-  not structured-cloned.
+- Delivery is asynchronous (`setTimeout(0)`), as in the browser. The event is a
+  `MessageEvent` with `isTrusted: true` (it is the browser's dispatch, not one a script
+  made), `source: scope`, `origin: ""`, and `ports` = the `MessagePort`s in the `transfer`
+  list. `data` is passed by reference, not structured-cloned.
+- The browser surface content scripts assume and Hermes lacks is answered **from the
+  scope only**, never installed on the app's global, and only where the runtime has no
+  real one: `document` (an event target with `title: ""`, nodes, and `<script src>` that
+  runs one of the extension's own files in this scope), `location` (`about:blank`: an RN
+  target has no URL), `navigator` (the app's, plus a `userAgent` when the app has none),
+  `Event`/`CustomEvent`/`MessageEvent`/`EventTarget` (with prototype accessors, as some
+  scripts take `MessageEvent.prototype`'s `data` getter up front) and
+  `MessageChannel`/`MessagePort`. Non-message `window` events go to the scope's own target.
+- `globalThis.chrome` (and `window.chrome`) is the extension's own API once its loader
+  exists, the same object the lexical `chrome` is; the app's one global `chrome` belongs to
+  whichever extension's loader came first.
+- Messages posted before the extension's ISOLATED world exists are kept (bounded) and
+  handed once to the ISOLATED world's listeners when it is injected (the claim at the
+  end of every ISOLATED injection). In Chrome a `document_start` content script always
+  precedes the page; here a hook run before the app's first module (below) does not.
+- On that claim, if React DevTools' hook (`__REACT_DEVTOOLS_GLOBAL_HOOK__`, which RN
+  installs for the React DevTools RN DevTools ships) has a renderer, the scope also hears
+  what React DevTools' own hook posts to a browser page:
+  `{source: "react-devtools-hook", payload: {type: "react-renderer-attached", reactBuildType}}`.
 - Everything else, including writes, `defineProperty` and `in`, reaches the real global.
 
 **`sender.tab`.** What the app sends (`runtime.sendMessage`, `runtime.connect`) carries
@@ -241,9 +263,50 @@ Reading them is a CDP round-trip that can take the bridge's whole 10 s request t
 and while it was awaited, the port opened after the panel's one-shot ping.
 
 This is stricter than Chrome on purpose: there, the page and other extensions can see and
-spoof MAIN-world messages. Only `window.`-qualified access is scoped. A bare
-`postMessage(…)` resolves against the real global, which has none. A top-level `var` in a
-MAIN-world file is function-scoped now, so it no longer becomes a global.
+spoof MAIN-world messages. Bare `window`, `document`, `navigator` … resolve to the scope's
+(they are the wrapper's parameters); a bare `postMessage(…)` still resolves against the real
+global, which has none. A top-level `var` in a MAIN-world file is function-scoped now, so it
+no longer becomes a global.
+
+**`chrome.storage` in a content script.** Chrome gives content scripts `storage.local`/`sync`
+(and `session` once the extension opens it to untrusted contexts). The loader provides them,
+and every call goes to the host's one storage (`services/storage-service.js`) as an untrusted
+context of that extension: it reads what the extension's pages wrote, and `onChanged` reaches
+it. Redux DevTools' content script reads its options this way before it relays anything.
+
+**`<script src>`.** A content script's `document.createElement("script")` with
+`src = chrome.runtime.getURL(file)`, appended anywhere, asks the host (envelope `load-script`)
+to run that file of the SAME extension in its MAIN world, through the same reader and gate as
+`executeScript({files, world: "MAIN"})`; `onload`/`onerror` fire with the answer. Any other
+src (another extension, a web URL, a climb out of the root) is refused. Relay DevTools reaches
+its MAIN world only this way.
+
+**`inspectedWindow.eval` runs in the calling extension's MAIN world.** In Chrome it runs in the
+page, where `window.postMessage` reaches content scripts; here an expression from extension X
+reads `window`/`self`/`globalThis` as X's scope. Only a source that parses as one expression is
+wrapped (its value is then exactly the completion value Chrome reports); statements run as
+written, against the app's global. Relay's panel starts its backend with
+`inspectedWindow.eval("window.postMessage({source: 'relay-devtools-inject-backend'}, …)")`.
+
+### Hooks a library looks for once, at load: the early installer
+
+Some libraries look for their DevTools hook exactly once, when they load, long before any
+debugger can attach: mobx calls `__MOBX_DEVTOOLS_GLOBAL_HOOK__.injectMobx` on import, Redux's
+`configureStore` reads `__REDUX_DEVTOOLS_EXTENSION_COMPOSE__` when the store is created, and
+relay-runtime registers each `Environment` with `__RELAY_DEVTOOLS_HOOK__` from its
+constructor. A content script injected on attach is always too late for them.
+
+[early-main-world.js](../../src/electron/extensions/early-main-world.js) is a second public,
+Electron-free entry of the host, for a bundler: it reads an extension's MAIN-world
+`document_start` content scripts (or files named explicitly) out of its folder or `.crx`, and
+returns the host's own MAIN-world expression for each, so the hook lands in the same scope and
+on the same bus the bridge injects into later. Each file is marked as run, and the bridge skips
+it (a Relay hook installs a non-configurable global and must not run twice; a second Redux
+`__REDUX_DEVTOOLS_EXTENSION__` would not know the stores the first one serves). What the hook
+posts before the ISOLATED world exists waits for it (the claim above). `app/metro.config.js`
+writes the result to `app/.devtools/early-hooks.js` and adds it to Metro's polyfills, dev only.
+It runs before React Native's InitializeCore, so the scope resolves timers and `navigator`
+per use, not at creation.
 
 Gates, both host-side: the manifest's `scripting` permission (checked in main from the
 manifest on disk, and in the frame's shim for `lastError`), **and** the same
@@ -254,8 +317,9 @@ frame's own; the payload carries code, never an id. `insertCSS`/`removeCSS` and
 
 Code: [shim/scripting.js](../../src/electron/extensions/internal/shim/scripting.js) (frame half),
 `executeScript` in [content/content-bridge.js](../../src/electron/extensions/internal/content/content-bridge.js) (host
-half, with `scopeExpression`), `SCRIPTING_EXECUTE` in [broker/ipc.js](../../src/electron/extensions/internal/broker/ipc.js). Not yet covered
-by tests.
+half), `SCRIPTING_EXECUTE` in [broker/ipc.js](../../src/electron/extensions/internal/broker/ipc.js), the scope in
+[content/scope.js](../../src/electron/extensions/internal/content/scope.js). The scope's behaviours are covered by
+`tests/content-scope.test.js`, each case named after the extension that needs it.
 
 ### What is *not* claimed
 
