@@ -5,8 +5,10 @@ hosting the Fusebox frontend in Electron and shimming Chrome's extension-host AP
 
 ## Quick start (full E2E: Expo app + shell)
 
-The repo ships a test app in `app/` — a fresh Expo SDK 57 app with two buttons (REST +
-GraphQL) that generate traffic for the extension panels to catch. To run the whole thing:
+The repo ships a test app in `app/` — an Expo SDK 58 app with two buttons (REST + GraphQL)
+that generate traffic for the extension panels to catch, and one demo per state/data
+library whose DevTools extension ships in `extensions/` (MobX, Redux, Apollo, TanStack Query,
+Relay, React Context). To run the whole thing:
 
 ```sh
 # 0. one-time installs
@@ -18,6 +20,9 @@ npm run app:start           # = WITH_ROZENITE=true expo start (port 8081)
 
 # 2. npm start — the shell picks the app from Metro's /json/list itself
 npm start                   # opens the DevTools window
+# …or with the extensions' content scripts allowed into the app (Redux, Apollo, TanStack
+# Query, Relay, React Context and MobX DevTools need them; off by default):
+DEVTOOLS_CONTENT_SCRIPTS='<all_rn_targets>' npm start
 ```
 
 Then in the app (Expo Go / dev build / simulator): press a button — the request should
@@ -66,9 +71,13 @@ Notes:
 
 ## What's in the box
 
-- `app/` — Expo test app (SDK 57, blank TS template + Rozenite wiring + REST/GraphQL
-  buttons). Its Metro server also serves the patched RN DevTools frontend ("rozenite")
-  the Electron shell loads; the frontend itself is not part of this repo.
+- `app/` — Expo test app (SDK 58, blank TS template + Rozenite wiring + REST/GraphQL
+  buttons, and `app/demos/`: one box per extension-backed library). Its Metro server also
+  serves the patched RN DevTools frontend ("rozenite") the Electron shell loads; the frontend
+  itself is not part of this repo. In dev, `app/metro.config.js` runs the MobX, Redux and
+  Relay DevTools hooks before any module (`src/electron/extensions/early-main-world.js`),
+  because those libraries look for their hook once, at load. Relay's operation is compiled
+  with `npm --prefix app run relay` (output committed in `app/relay/__generated__`).
 - "Installed" extensions are unpacked extension folders in `extensions/`, or signed `.crx`
   files dropped there (read in place, never unpacked; the id is Chrome's, from the signing
   key), served under the custom `rozenite://<extension-id>/...` protocol. The shell scans the folder itself —
@@ -85,6 +94,12 @@ Notes:
   - `extensions/graphql/` — GraphQL Network Inspector (unpacked Chrome Web Store build)
   - `extensions/altair/` — Altair GraphQL Client (unpacked Chrome Web Store build; its
     background is an ES module)
+  - five signed Chrome Web Store `.crx` files, unmodified — the most-installed React
+    DevTools extensions after React DevTools itself: `redux-devtools.crx`,
+    `apollo-client-devtools.crx`, `tanstack-query-devtools.crx`, `relay-devtools.crx`,
+    `react-context-devtool.crx`. Verified against the app in
+    [docs/evidence/react-ecosystem-extensions/](docs/evidence/react-ecosystem-extensions/README.md);
+    their content scripts need `DEVTOOLS_CONTENT_SCRIPTS` (e.g. `'<all_rn_targets>'`)
   - `extensions/showcase/` — "kitchen sink" reference + live smoke test: one status card per
     supported `chrome.*` capability (devtools panels/network/inspectedWindow, messaging, storage,
     i18n, alarms, notifications, downloads, permissions, tabs, webRequest, options page,

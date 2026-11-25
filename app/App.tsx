@@ -1,5 +1,10 @@
 import { useNetworkActivityDevTools } from '@rozenite/network-activity-plugin';
-import { MobxDemo } from './MobxDemo';
+import { ApolloDemo } from './demos/ApolloDemo';
+import { ContextDemo } from './demos/ContextDemo';
+import { MobxDemo } from './demos/MobxDemo';
+import { QueryDemo } from './demos/QueryDemo';
+import { RelayDemo } from './demos/RelayDemo';
+import { ReduxDemo } from './demos/ReduxDemo';
 import { useState } from 'react';
 import {
   ActivityIndicator,
@@ -97,12 +102,15 @@ export default function App() {
   };
 
   return (
-    <View style={[styles.container, isDark && styles.containerDark]}>
+    <ScrollView
+      style={[styles.container, isDark && styles.containerDark]}
+      contentContainerStyle={styles.containerContent}
+    >
       <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} />
       <Text style={styles.title}>DevTools PoC test app</Text>
       <Text style={styles.subtitle}>
-        Fire a request below, then check the Rozenite network panel and the GraphQL extension
-        panels in the DevTools shell.
+        Fire a request below, then check the Rozenite network panel and the extension panels
+        (GraphQL, MobX, Redux, Apollo, TanStack Query, Relay, React Context) in the DevTools shell.
       </Text>
 
       <View style={styles.buttons}>
@@ -118,9 +126,15 @@ export default function App() {
         />
       </View>
 
+      {/* One box per DevTools extension under test (extensions/). */}
       <MobxDemo />
+      <ReduxDemo />
+      <ApolloDemo />
+      <QueryDemo />
+      <RelayDemo />
+      <ContextDemo />
 
-      <ScrollView style={styles.results} contentContainerStyle={styles.resultsContent}>
+      <View style={styles.results}>
         {result.kind === 'idle' && <Text style={styles.hint}>No requests yet.</Text>}
         {result.kind !== 'idle' && (
           <>
@@ -134,8 +148,8 @@ export default function App() {
             ) : null}
           </>
         )}
-      </ScrollView>
-    </View>
+      </View>
+    </ScrollView>
   );
 }
 
@@ -143,9 +157,11 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#fff',
-    alignItems: 'stretch',
+  },
+  containerContent: {
     paddingTop: 80,
     paddingHorizontal: 24,
+    paddingBottom: 40,
   },
   containerDark: {
     backgroundColor: '#0d1117',
@@ -179,11 +195,7 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   results: {
-    flex: 1,
     marginTop: 24,
-  },
-  resultsContent: {
-    paddingBottom: 40,
   },
   hint: {
     opacity: 0.5,

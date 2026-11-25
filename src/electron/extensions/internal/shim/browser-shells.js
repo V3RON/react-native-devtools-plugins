@@ -97,8 +97,8 @@ const lastErrorOf = (lastError) =>
  *
  * `getAll` is the part that CAN be real: the manifest's `commands` block is a fact both
  * Chrome and this shell read the same way. It hands back the declared name, description,
- * suggested key and `global` flag. It registers nothing, and says so. An extension with no
- * commands gets `undefined`, which is Chrome's answer too.
+ * suggested key. It registers nothing, and says so. An extension with no commands gets
+ * `[]`, which is Chrome's answer too.
  *
  * @param {object} deps
  * @param {() => object} [deps.getManifest] live manifest ({} until it loads)
@@ -117,41 +117,37 @@ const createCommands = ({
     {
       onCommand: createEvent(),
 
+      // Chrome's contract: an ARRAY of Command objects, `{name, description, shortcut}`,
+      // `shortcut` being one string ("" when none is set), and [] when nothing is declared.
+      // Redux DevTools' worker iterates it (`for (const {name, shortcut} of commands)`).
       getAll: (callback) =>
         chromeCall(deps, () => {
           const declared = (getManifest() || {}).commands;
           if (!declared || typeof declared !== "object" || !Object.keys(declared).length) {
-            // Chrome's answer for an extension that declares no commands.
-            return undefined;
+            return [];
           }
-          const commands = Object.fromEntries(
-            Object.entries(declared).map(([name, entry]) => {
-              const spec = entry && typeof entry === "object" ? entry : {};
-              // Chrome's `shortcuts` is the platform-resolved list. This shell reports the
-              // declared default, because that is what the manifest actually says; resolving
-              // it per-platform and registering the result are the two things it cannot do.
-              const suggested = spec.suggested_key;
-              const shortcut =
-                typeof suggested === "string"
-                  ? suggested
-                  : suggested && typeof suggested === "object"
-                    ? suggested.default
-                    : undefined;
-              return [
-                name,
-                {
-                  name,
-                  description: typeof spec.description === "string" ? spec.description : "",
-                  shortcuts: shortcut ? [String(shortcut)] : [],
-                  global: Boolean(spec.global),
-                },
-              ];
-            })
-          );
+          const commands = Object.entries(declared).map(([name, entry]) => {
+            const spec = entry && typeof entry === "object" ? entry : {};
+            // Chrome's `shortcut` is the platform-resolved, user-adjustable key. This shell
+            // reports the declared default, because that is what the manifest actually says;
+            // resolving it per-platform and registering it are the two things it cannot do.
+            const suggested = spec.suggested_key;
+            const shortcut =
+              typeof suggested === "string"
+                ? suggested
+                : suggested && typeof suggested === "object"
+                  ? suggested.default
+                  : undefined;
+            return {
+              name,
+              description: typeof spec.description === "string" ? spec.description : "",
+              shortcut: shortcut ? String(shortcut) : "",
+            };
+          });
           report(
             "no-shortcut-routing",
             "chrome.commands: this host routes no keyboard shortcut to an extension, so the " +
-              `${Object.keys(commands).length} declared command(s) are reported by getAll but ` +
+              `${commands.length} declared command(s) are reported by getAll but ` +
               "commands.onCommand will never fire for them."
           );
           return commands;
@@ -434,8 +430,47 @@ const createSidePanel = ({ onUnsupported = () => {}, lastError = null } = {}) =>
   );
 };
 
+/**
+ * `chrome.webNavigation`: every event Chrome has, registrable, none fired; and the two
+ * frame queries, answered `null` (Chrome's "no such frame") because this host keeps no
+ * frame model of the inspected app. Relay DevTools' devtools page registers
+ * `onBeforeNavigate` while it sets the panel up, and without the namespace that setup
+ * threw before the panel's bridge was finished. Mapping an RN reload (a new execution
+ * context) onto onBeforeNavigate/onCommitted is possible and not done.
+ */
+const WEB_NAVIGATION_EVENTS = [
+  "onBeforeNavigate",
+  "onCommitted",
+  "onDOMContentLoaded",
+  "onCompleted",
+  "onErrorOccurred",
+  "onCreatedNavigationTarget",
+  "onReferenceFragmentUpdated",
+  "onTabReplaced",
+  "onHistoryStateUpdated",
+];
+const createWebNavigation = ({ onUnsupported = () => {}, lastError = null } = {}) => {
+  const deps = { lastError: lastErrorOf(lastError) };
+  const report = reporter(onUnsupported);
+  const noFrames = (method) => {
+    report(
+      `no-frames:${method}`,
+      `chrome.webNavigation.${method}: this host keeps no frame model of the inspected app, ` +
+        "so it answers null, and no webNavigation event ever fires."
+    );
+    return null;
+  };
+  return {
+    ...Object.fromEntries(WEB_NAVIGATION_EVENTS.map((name) => [name, createEvent()])),
+    getFrame: (details, callback) => chromeCall(deps, () => noFrames("getFrame"), callback),
+    getAllFrames: (details, callback) => chromeCall(deps, () => noFrames("getAllFrames"), callback),
+  };
+};
+
 module.exports = {
   CONTEXT_TYPES,
+  WEB_NAVIGATION_EVENTS,
+  createWebNavigation,
   ITEM_TYPES,
   createCommands,
   createContextMenus,

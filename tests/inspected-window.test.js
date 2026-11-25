@@ -229,3 +229,17 @@ test("createReloadInPage reports failure instead of rejecting", async () => {
     error: "Page.reload: no CDP session is attached",
   });
 });
+
+// Hermes (RN 0.88, iOS) refuses to compile an evaluate whose SOURCE contains a character
+// outside the BMP — "Invalid UTF-8 code point 0xd83c" — however the CDP frame encodes it.
+// One emoji in a content-bridge delivery (a Relay record's `emoji`) dropped the message.
+test("an emoji in an evaluated expression is sent as a JS escape pair, meaning the same string", () => {
+  const source = 'window.x = "🇵🇱 zażółć";';
+  const { expression } = toEvaluateParams(source);
+  assert.ok(!/[\ud800-\udfff]/.test(expression), "no astral character reaches the backend");
+  assert.ok(expression.includes("zażółć"), "BMP text is left exactly as written");
+  const window = {};
+  new Function("window", expression)(window);
+  assert.strictEqual(window.x, "🇵🇱 zażółć", "and the app gets the same string");
+  assert.strictEqual(toEvaluateParams("1 + 1").expression, "1 + 1", "ASCII is untouched");
+});

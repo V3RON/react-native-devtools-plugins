@@ -668,34 +668,30 @@ test("an app with no listener FAILS a targeted send instead of answering undefin
   world.bridge.dispose();
 });
 
-test("a silent leg settles itself without becoming the fan-out's answer", async () => {
+test("a page's runtime.sendMessage reaches the extension's pages, never the app's content scripts (Chrome)", async () => {
   const world = makeWorld({ allowlist: ALL_RN_TARGETS });
   await world.bridge.attach();
   const sender = world.makePanel("ext-a", "sender");
-  // A second real frame that answers LATE, so the app's silent verdict is the only thing
-  // in flight when the mesh decides what the sender will resolve with.
-  const slow = world.makePanel("ext-a", "worker");
-  slow.setResponder((message) => {
-    setTimeout(
-      () => world.router.resolveDelivery({ fromKey: slow.key, requestId: message.requestId, response: "late" }),
-      10
-    );
-    return "late";
-  });
+  const worker = world.makePanel("ext-a", "worker");
+  worker.setResponder(({ requestId }) =>
+    world.router.resolveDelivery({ fromKey: worker.key, requestId, response: "from the worker" })
+  );
 
   const fromPanel = world.router.sendMessage({ fromKey: sender.key, message: { ask: true } });
   await settleApp();
-  const delivery = dispatched(world).find((e) => e.k === "message");
-  assert.ok(delivery, "the app context was asked like any other peer");
-
-  // The app reports "nothing is listening in here" FIRST.
-  await world.bridge.onBindingCalled(
-    binding({ t: "respond", x: "ext-a", s: delivery.s, nr: true, e: "Receiving end does not exist." })
+  assert.strictEqual(await fromPanel, "from the worker");
+  assert.strictEqual(
+    dispatched(world).filter((e) => e.k === "message").length,
+    0,
+    "the app's seat is a content script: only tabs.sendMessage addresses it"
   );
-  // ...and the mesh still waits for the frame that is actually thinking, then answers
-  // with ITS value. A silent leg that resolved the sender would report success from an
-  // empty page; one that became the response would replace a real answer with a shrug.
-  assert.strictEqual(await fromPanel, "late");
+
+  // Same for a port: Relay DevTools' devtools page connects to its worker by name, and
+  // that port must not also open in the app.
+  const port = world.router.connect({ fromKey: sender.key, name: "12345" });
+  assert.strictEqual(port.ok, true);
+  await settleApp();
+  assert.strictEqual(dispatched(world).filter((e) => e.k === "port-connect").length, 0);
   world.bridge.dispose();
 });
 

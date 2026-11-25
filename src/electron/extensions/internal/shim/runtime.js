@@ -37,6 +37,12 @@ const createRuntime = ({
     onStartup: createEvent(),
     onSuspend: createEvent(),
     onUpdateAvailable: createEvent(),
+    // Chrome always has these; they fire for messages from OTHER extensions and from
+    // web pages (externally_connectable). This shell has no cross-extension messaging
+    // (docs/LIMITATIONS.md), so nothing ever fires them, but registering must work:
+    // Redux DevTools' worker registers both at load and dies on a missing one.
+    onConnectExternal: createEvent(),
+    onMessageExternal: createEvent(),
   };
 
   const namespace = {

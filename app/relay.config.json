@@ -1,0 +1,7 @@
+{
+  "src": "./relay",
+  "schema": "./relay/countries.graphql",
+  "language": "typescript",
+  "artifactDirectory": "./relay/__generated__",
+  "eagerEsModules": true
+}

@@ -24,6 +24,8 @@ const {
   createCommands,
   createContextMenus,
   createSidePanel,
+  createWebNavigation,
+  WEB_NAVIGATION_EVENTS,
 } = require("../src/electron/extensions/internal/shim/browser-shells");
 const { createChromeNamespace } = require("../src/electron/extensions/internal/shim");
 const { createExtensionStorage, createMemoryBackend } = require("../src/electron/extensions/internal/shim/storage");
@@ -166,21 +168,25 @@ test("getAll answers from the manifest, which is a fact both Chrome and this she
     }),
   });
   const all = await s.commands.getAll();
-  assert.deepEqual(Object.keys(all), ["openDevTools", "no-keys"]);
-  assert.equal(all.openDevTools.name, "openDevTools", "Chrome's Command fields");
-  assert.equal(all.openDevTools.description, "Open Altair's DevTools panel");
-  assert.equal(all.openDevTools.global, true);
+  assert.ok(Array.isArray(all), "Chrome answers an array of Command objects");
   assert.deepEqual(
-    all.openDevTools.shortcuts,
-    ["Alt+Shift+A"],
-    "the DECLARED default: per-platform resolution is one of the things this shell cannot do"
+    all,
+    [
+      // the DECLARED default: per-platform resolution is one of the things this shell cannot do
+      { name: "openDevTools", description: "Open Altair's DevTools panel", shortcut: "Alt+Shift+A" },
+      { name: "no-keys", description: "no shortcut declared", shortcut: "" },
+    ],
+    "Chrome's Command fields, no shortcut invented"
   );
-  assert.deepEqual(all["no-keys"].shortcuts, [], "no shortcut declared, none invented");
+  // Redux DevTools' worker does exactly this at load.
+  const shortcuts = {};
+  for (const { name, shortcut } of all) shortcuts[name] = shortcut;
+  assert.equal(shortcuts.openDevTools, "Alt+Shift+A");
 });
 
-test("getAll answers undefined for an extension with no commands, like Chrome", async () => {
+test("getAll answers [] for an extension with no commands, like Chrome", async () => {
   const s = setup();
-  assert.strictEqual(await s.commands.getAll(), undefined);
+  assert.deepStrictEqual(await s.commands.getAll(), []);
   assert.deepEqual(s.reports, [], "and nothing is claimed, so nothing has to be reported");
 });
 
@@ -197,7 +203,7 @@ test("getAll reports the missing shortcut routing once, however often it is call
 test("getAll works in callback style too, and hands back the same value", async () => {
   const s = setup({ manifest: () => ({ commands: { go: { description: "go" } } }) });
   const seen = await new Promise((resolve) => s.commands.getAll(resolve));
-  assert.deepEqual(Object.keys(seen), ["go"]);
+  assert.deepEqual(seen.map((command) => command.name), ["go"]);
 });
 
 // ── chrome.contextMenus ─────────────────────────────────────────────────────
@@ -380,4 +386,30 @@ test("the shells' diagnostics are non-enumerable, so contextBridge cannot hand t
     );
     assert.equal(JSON.stringify(namespace).includes(name), false, "and not through JSON either");
   }
+});
+
+// ── chrome.webNavigation ────────────────────────────────────────────────────
+test("webNavigation: every event registers (Relay DevTools' devtools page) and none fires", () => {
+  const reports = [];
+  const nav = createWebNavigation({ onUnsupported: (message) => reports.push(message) });
+  for (const name of WEB_NAVIGATION_EVENTS) {
+    const listener = () => {};
+    nav[name].addListener(listener);
+    assert.ok(nav[name].hasListener(listener), `${name} registers`);
+  }
+  assert.deepEqual(reports, [], "registering is not a claim, so nothing is reported");
+});
+
+test("webNavigation: frame queries answer null, Chrome's 'no such frame', and say why once", async () => {
+  const reports = [];
+  const nav = createWebNavigation({ onUnsupported: (message) => reports.push(message) });
+  assert.strictEqual(await nav.getFrame({ tabId: 1, frameId: 0 }), null);
+  assert.strictEqual(await new Promise((resolve) => nav.getAllFrames({ tabId: 1 }, resolve)), null);
+  await nav.getFrame({ tabId: 1, frameId: 0 });
+  assert.equal(reports.length, 2, "one line per method, not per call");
+  assert.match(reports[0], /no frame model/);
+});
+
+test("webNavigation needs no permission here, like sidePanel: there is nothing to gate", () => {
+  assert.strictEqual(requiredPermission("webNavigation"), null);
 });

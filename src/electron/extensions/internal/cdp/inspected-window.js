@@ -22,6 +22,8 @@
 // answer is not cut off.
 const TIMEOUT_SLACK_MS = 1000;
 
+const { scopedExpression } = require("../content/scope");
+
 /** A failure on our side of the wire: Chrome's DevTools-side error shape. */
 const FAILURE = (value) => ({
   isError: true,
@@ -90,6 +92,22 @@ const mapEvaluation = (reply) => {
 };
 
 /**
+ * Every character outside the Basic Multilingual Plane (emoji, 🇵🇱), written as the JS
+ * escape pair `\uD83C\uDDF5` instead of the character itself.
+ *
+ * React Native's Hermes backend (observed on RN 0.88, iOS) refuses to compile a
+ * `Runtime.evaluate` whose source contains one: `Compiling JS failed: Invalid UTF-8 code
+ * point 0xd83c`, however the CDP frame encodes it (raw UTF-8 or a JSON escape). Every
+ * delivery the content bridge makes is an evaluate, so one emoji in a message (a Relay
+ * record's `emoji` field) dropped that message. The JS escape is ASCII and means the same
+ * string in a string, template or regex literal; only a raw template string
+ * (`String.raw`) would see the escape text instead. BMP characters ("zażółć") compile
+ * fine and are left alone.
+ */
+const escapeAstral = (source) =>
+  source.replace(/[\ud800-\udfff]/g, (unit) => `\\u${unit.charCodeAt(0).toString(16).toUpperCase()}`);
+
+/**
  * Runtime.evaluate params from Chrome's eval options.
  * `frameURL`, `scriptExecutionContext` and `useContentScriptContext` are accepted
  * and ignored: RN has no frames and no
@@ -102,7 +120,7 @@ const mapEvaluation = (reply) => {
  */
 const toEvaluateParams = (expression, options = {}) => {
   const params = {
-    expression: String(expression ?? ""),
+    expression: escapeAstral(String(expression ?? "")),
     returnByValue: true,
     awaitPromise: true,
   };
@@ -115,17 +133,43 @@ const toEvaluateParams = (expression, options = {}) => {
 };
 
 /**
+ * Chrome runs `inspectedWindow.eval` in the page's MAIN world, where `window.postMessage`
+ * reaches the extension's content scripts (Relay DevTools' panel starts its backend
+ * that way). Here an extension's MAIN world is its scope (../content/scope.js), so an
+ * expression from extension `extensionId` reads `window`/`self`/`globalThis` as that
+ * scope; every other global still resolves to the app's.
+ *
+ * Only a source that parses as ONE expression is wrapped: its value is then the wrapper's
+ * return value, exactly the completion value Chrome reports. Statements (`var x = 1; x`)
+ * have a completion value no function wrapper can return, so they run as written,
+ * against the app's global, as before. The parse check compiles and never runs it.
+ */
+const inWorldOf = (extensionId, expression) => {
+  const source = String(expression ?? "");
+  if (!extensionId) return source;
+  const body = source.trim().replace(/;+\s*$/, "");
+  if (!body) return source;
+  try {
+    // eslint-disable-next-line no-new-func
+    new Function(`return (${body}\n);`);
+  } catch {
+    return source;
+  }
+  return scopedExpression({ extensionId, body: `return (${body}\n);` });
+};
+
+/**
  * `evalInPage` bound to a specific command sender, so the whole path except the
  * socket is testable.
  * @param {(method: string, params: object, opts?: object) => Promise<object>} sendCommand
  */
 const createEvalInPage =
   (sendCommand) =>
-  async (expression, options = {}) => {
+  async (expression, options = {}, { extensionId = null } = {}) => {
     try {
       const reply = await sendCommand(
         "Runtime.evaluate",
-        toEvaluateParams(expression, options),
+        toEvaluateParams(inWorldOf(extensionId, expression), options),
         options.timeout > 0
           ? { timeoutMs: options.timeout + TIMEOUT_SLACK_MS }
           : undefined
@@ -170,6 +214,8 @@ const createReloadInPage =
 module.exports = {
   mapEvaluation,
   toEvaluateParams,
+  escapeAstral,
+  inWorldOf,
   createEvalInPage,
   createReloadInPage,
   FAILURE,

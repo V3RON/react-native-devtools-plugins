@@ -141,7 +141,7 @@ try {
   // the registration reply has had time to land.
   setTimeout(() => {
     chrome.commands.getAll((all) =>
-      report("shells-commands:" + JSON.stringify(all && all.openShell ? all.openShell : all))
+      report("shells-commands:" + JSON.stringify(all))
     );
     chrome.sidePanel.getOptions({ path: "panel.html" }, (opts) => report("shells-options:" + JSON.stringify(opts)));
     chrome.sidePanel.getPanelBehavior((b) => report("shells-behavior:" + JSON.stringify(b)));
@@ -418,7 +418,7 @@ suite("tier-2 shims inside a real background worker", { timeout: 240000 }, async
   const commandsLine = find(TIER2_ID, "shells-commands:");
   assert.match(
     String(commandsLine),
-    /"name":"openShell","description":"Open the shell","shortcuts":\["Alt\+Shift\+S"\],"global":true/,
+    /shells-commands:\[\{"name":"openShell","description":"Open the shell","shortcut":"Alt\+Shift\+S"\}\]/,
     `commands.getAll answered from the manifest on disk: ${commandsLine}`
   );
   const shellsLine = find(TIER2_ID, "shells-options:");

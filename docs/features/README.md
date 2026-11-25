@@ -60,7 +60,7 @@ They keep their inert shapes (the stubbing rule); they cannot become real in thi
 | `tabs` events (`onUpdated`/`onActivated`/…), `captureVisibleTab`, window/tab `query` filters | no tab strip, no window model — one synthetic tab stands for the app | [SMALL-SHIMS.md](SMALL-SHIMS.md) |
 | `webRequest` **blocking**, `onHeadersReceived`, `onAuthRequired` | no CDP `Fetch` domain; the backend emits nothing for those two | [WEBREQUEST.md](WEBREQUEST.md) |
 | DOM `content_scripts` (`css`, `document_start`, isolated worlds, URL `matches`) | no document, no isolated worlds, no page URLs | [CONTENT-SCRIPTS.md](CONTENT-SCRIPTS.md) |
-| `webNavigation`, `devtools.recorder`, `offscreen`, `chrome.windows` | no navigations, no Recorder panel, no hidden DOM document, no window model | [TIER3-OMITTED.md](TIER3-OMITTED.md) |
+| `webNavigation` events, `devtools.recorder`, `offscreen`, `chrome.windows` | no navigations (the namespace exists, inert: [SMALL-SHIMS.md](SMALL-SHIMS.md)), no Recorder panel, no hidden DOM document, no window model | [TIER3-OMITTED.md](TIER3-OMITTED.md) |
 
 Note: two things look like they belong in this table but do not. `commands.onCommand` has a
 producer this shell can write (the Electron app menu / `before-input-event`), and `chrome.windows`

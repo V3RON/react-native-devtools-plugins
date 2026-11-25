@@ -516,11 +516,31 @@ suite(
       ].join("\n")
     );
 
-    assert.equal(
-      windows.length,
-      4,
-      "graphql, altair, showcase and mobx-devtools each get a background context"
+    // The four folders, and the five Chrome Web Store .crx files (Redux, Apollo, TanStack
+    // Query, Relay, React Context DevTool).
+    const CRX_WORKERS = [
+      "lmhkpmbekcpmknklioeibfkpmmfibljd",
+      "jdkknkkbebbapilgoeccciglkfbmbnfm",
+      "annajfchloimdhceglpgglpeepfghfai",
+      "ncedobpgnmkhcmnnkcimnobpfepidadl",
+      "oddhnidmicpefilikhgeagedibnefkcf",
+    ];
+    assert.deepStrictEqual(
+      windows.map((win) => win.extensionId).sort(),
+      ["altair", "graphql", "mobx-devtools", "showcase", ...CRX_WORKERS].sort(),
+      "every shipped extension with a worker gets a background context"
     );
+    // Redux DevTools' worker registers runtime.onConnectExternal/onMessageExternal at
+    // load; a missing event there was an uncaught error that killed the whole worker.
+    for (const extensionId of CRX_WORKERS) {
+      assert.equal(
+        errors.filter((l) => l.extensionId === extensionId).length,
+        0,
+        `${extensionId}'s worker loaded cleanly: ${JSON.stringify(
+          errors.filter((l) => l.extensionId === extensionId).map((l) => l.message)
+        )}`
+      );
+    }
     assert.ok(
       windows.every((win) => win.visible === false),
       "every worker window is hidden"

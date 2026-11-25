@@ -20,7 +20,7 @@
 // Background contexts belong to the attachment: `detach()` (the window's `closed`)
 // closes their hidden windows, so the embedder's `window-all-closed` still fires.
 const fs = require("fs");
-const { session: electronSession } = require("electron");
+const { app, session: electronSession } = require("electron");
 const { configure, reset, settings } = require("./settings");
 const { EXTENSION_SCHEME } = require("./scheme/protocol");
 const { registerExtensionProtocol } = require("./scheme/extension-server");
@@ -93,6 +93,22 @@ const createExtensionHost = (config = {}, options = {}, hooks = {}) => {
     throw new Error(
       `the extension preload is not built (${EXTENSION_PRELOAD_PATH}): run npm run build:preload`
     );
+  }
+  // Extensions see Chrome's user agent, not Electron's. Some branch on the `Electron/x`
+  // token: Redux DevTools then assumes its own Electron port and replaces
+  // chrome.notifications / contextMenus / commands with stubs and assigns
+  // chrome.storage.sync (read-only here), which kills its background worker. This host
+  // implements those APIs, so the honest answer is the Chrome it emulates. The token is
+  // removed for the host's session, and from the app-wide fallback, because extension
+  // frames are out-of-process iframes and an OOPIF's renderer reports the fallback, not
+  // its embedder's session agent (observed: the panel frame kept `Electron/38.8.6` while
+  // its frontend did not).
+  const withoutElectron = (agent) => String(agent || "").replace(/\s+Electron\/\S+/g, "");
+  if (withoutElectron(ses.getUserAgent()) !== ses.getUserAgent()) {
+    ses.setUserAgent(withoutElectron(ses.getUserAgent()));
+  }
+  if (app.userAgentFallback && withoutElectron(app.userAgentFallback) !== app.userAgentFallback) {
+    app.userAgentFallback = withoutElectron(app.userAgentFallback);
   }
   const policyFor = registerExtensionProtocol({ protocol: ses.protocol });
   ses.registerPreloadScript({ type: "frame", id: PRELOAD_ID, filePath: EXTENSION_PRELOAD_PATH });
@@ -190,6 +206,7 @@ const createExtensionHost = (config = {}, options = {}, hooks = {}) => {
       try {
         contentBridge = attachContentBridge({
           router,
+          storageService,
           cdp,
           targetInfo: () => tabHost.targetInfo(),
           allowlist: settings.contentScripts,
